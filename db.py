@@ -70,3 +70,54 @@ def latest_nws_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
         LIMIT 1
         """
     ).fetchone()
+
+
+def open_output_db(path: str) -> sqlite3.Connection:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(p), isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
+    # bootstrap metadata table before checking schema_version
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)"
+    )
+    row = conn.execute(
+        "SELECT value FROM metadata WHERE key = 'schema_version'"
+    ).fetchone()
+    current = int(row[0]) if row else 0
+
+    for f in sorted(migrations_dir.glob("[0-9][0-9][0-9]_*.sql")):
+        version = int(f.name[:3])
+        if version <= current:
+            continue
+        # executescript issues an implicit commit before running; DDL migrations
+        # are idempotent via IF NOT EXISTS so re-running on partial failure is safe
+        conn.executescript(f.read_text())
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)",
+            (str(version),),
+        )
+
+
+def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    conn.execute("BEGIN")
+    try:
+        conn.executemany(
+            """
+            INSERT INTO forecasts
+                (model_id, model, issued_at, valid_at, lead_hours, variable, value)
+            VALUES
+                (:model_id, :model, :issued_at, :valid_at, :lead_hours, :variable, :value)
+            """,
+            rows,
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise

@@ -4,12 +4,14 @@
 
 import argparse
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import config as cfg
 import db
+import models.persistence as persistence
 
 CENTRAL = ZoneInfo("America/Chicago")
 
@@ -89,6 +91,36 @@ def cmd_conditions(args, conf):
         print("no NWS observations found")
 
 
+def cmd_forecast(args, conf):
+    issued_at = int(time.time())
+    migrations_dir = Path(__file__).parent / "migrations"
+
+    try:
+        conn_in = db.open_input_db(conf.input_db)
+    except FileNotFoundError as e:
+        sys.exit(f"error: {e}")
+    try:
+        db.validate_schema(conn_in)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+
+    conn_out = db.open_output_db(conf.output_db)
+    db.run_migrations(conn_out, migrations_dir)
+
+    obs = db.latest_tempest_obs(conn_in)
+    if obs is None:
+        sys.exit("error: no Tempest observations in input database")
+
+    rows = persistence.run(obs, issued_at)
+    db.insert_forecasts(conn_out, rows)
+
+    valid_start = _ts(obs["timestamp"] + 6 * 3600)
+    valid_end = _ts(obs["timestamp"] + 24 * 3600)
+    print(f"persistence: {len(rows)} forecasts issued at {_ts(issued_at)}")
+    print(f"  obs:   {_ts(obs['timestamp'])}")
+    print(f"  valid: {valid_start} — {valid_end}")
+
+
 def main():
     script_dir = Path(__file__).parent
     default_config = script_dir / "barogram.toml"
@@ -105,6 +137,9 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", metavar="command")
     subparsers.add_parser("conditions", help="show latest observed conditions")
+    subparsers.add_parser(
+        "forecast", help="run forecast models and write to output database"
+    )
 
     args = parser.parse_args()
 
@@ -116,6 +151,8 @@ def main():
 
     if args.command == "conditions":
         cmd_conditions(args, conf)
+    elif args.command == "forecast":
+        cmd_forecast(args, conf)
 
 
 if __name__ == "__main__":
