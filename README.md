@@ -1,10 +1,9 @@
 # barogram
 
 A personal weather forecasting and ensemble verification system. Reads
-observation data from [wxlog](https://github.com/thornjad/thornlog) and
-produces short-range forecasts using a ladder of increasingly sophisticated
-methods, combining them into a weighted ensemble scored against real
-observations.
+observation data collected by a personal weather station and produces
+short-range forecasts using a ladder of increasingly sophisticated methods,
+combining them into a weighted ensemble scored against real observations.
 
 ## Requirements
 
