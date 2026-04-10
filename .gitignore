@@ -1,4 +1,6 @@
 barogram.toml
 barogram.db
+barogram.db-shm
+barogram.db-wal
 __pycache__/
 *.pyc

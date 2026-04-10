@@ -2,16 +2,11 @@
 
 ## Overview
 
-## How It Works
-
-The persistence model assumes conditions do not change: the forecast value
-for any future time equals the most recently observed value.
+The persistence model is the ultimate naive forecast. It rejects the idea that the climate changes, that weather is transient, and confidently asserts that whatever the conditions are now, they will continue to be the conditions forever. Specifically, it checks the latest observed conditions and forecasts that the same conditions will be present at all future times.
 
 ## Brief History
 
-## Strengths
-
-## Known Failure Modes
+https://journals.ametsoc.org/view/journals/wefo/23/5/2008waf2007037_1.xml
 
 ## Variables Forecast
 
