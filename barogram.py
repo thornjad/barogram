@@ -5,42 +5,13 @@
 import argparse
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import config as cfg
+import dashboard as dash
 import db
+import fmt
 import models.persistence as persistence
-
-CENTRAL = ZoneInfo("America/Chicago")
-
-_COMPASS = [
-    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
-]
-
-
-def _wind_dir(degrees: int | None) -> str:
-    if degrees is None:
-        return "—"
-    return _COMPASS[round(degrees / 22.5) % 16]
-
-
-def _temp(c: float | None) -> str:
-    if c is None:
-        return "—"
-    return f"{c:.1f}°C ({c * 9/5 + 32:.1f}°F)"
-
-
-def _val(v, spec=".1f", unit="") -> str:
-    if v is None:
-        return "—"
-    return f"{v:{spec}}{unit}"
-
-
-def _ts(epoch: int) -> str:
-    return datetime.fromtimestamp(epoch, tz=CENTRAL).strftime("%Y-%m-%d %H:%M %Z")
 
 
 def cmd_conditions(args, conf):
@@ -58,17 +29,17 @@ def cmd_conditions(args, conf):
 
     if tempest:
         name = tempest["name"] or tempest["station_id"]
-        print(f"{name} ({tempest['station_id']}) — {_ts(tempest['timestamp'])}")
-        print(f"  Temperature:   {_temp(tempest['air_temp'])}")
-        print(f"  Humidity:      {_val(tempest['relative_humidity'], '.0f', '%')}")
-        print(f"  Pressure:      {_val(tempest['station_pressure'], '.1f', ' mb')} (station)")
+        print(f"{name} ({tempest['station_id']}) \u2014 {fmt.ts(tempest['timestamp'])}")
+        print(f"  Temperature:   {fmt.temp(tempest['air_temp'])}")
+        print(f"  Humidity:      {fmt.val(tempest['relative_humidity'], '.0f', '%')}")
+        print(f"  Pressure:      {fmt.val(tempest['station_pressure'], '.1f', ' mb')} (station)")
         gust = tempest["wind_gust"]
-        gust_str = f", gusts to {_val(gust, '.1f', ' m/s')}" if gust is not None else ""
-        print(f"  Wind:          {_wind_dir(tempest['wind_direction'])} "
-              f"{_val(tempest['wind_avg'], '.1f', ' m/s')}{gust_str}")
-        print(f"  Precipitation: {_val(tempest['precip_accum_day'], '.1f', ' mm')} today")
-        print(f"  UV Index:      {_val(tempest['uv_index'], '.1f')}")
-        print(f"  Solar:         {_val(tempest['solar_radiation'], '.0f', ' W/m²')}")
+        gust_str = f", gusts to {fmt.val(gust, '.1f', ' m/s')}" if gust is not None else ""
+        print(f"  Wind:          {fmt.wind_dir(tempest['wind_direction'])} "
+              f"{fmt.val(tempest['wind_avg'], '.1f', ' m/s')}{gust_str}")
+        print(f"  Precipitation: {fmt.val(tempest['precip_accum_day'], '.1f', ' mm')} today")
+        print(f"  UV Index:      {fmt.val(tempest['uv_index'], '.1f')}")
+        print(f"  Solar:         {fmt.val(tempest['solar_radiation'], '.0f', ' W/m\u00b2')}")
         lc = tempest["lightning_count"]
         print(f"  Lightning:     {lc if lc is not None else 0} strikes")
     else:
@@ -78,15 +49,15 @@ def cmd_conditions(args, conf):
 
     if nws:
         name = nws["name"] or nws["station_id"]
-        print(f"NWS {nws['station_id']} ({name}) — {_ts(nws['timestamp'])}")
-        print(f"  Temperature:   {_temp(nws['air_temp'])}")
-        print(f"  Dewpoint:      {_temp(nws['dew_point'])}")
-        print(f"  Humidity:      {_val(nws['relative_humidity'], '.0f', '%')}")
-        print(f"  Wind:          {_wind_dir(nws['wind_direction'])} "
-              f"{_val(nws['wind_speed'], '.1f', ' m/s')}")
-        print(f"  Pressure:      {_val(nws['sea_level_pressure'], '.1f', ' mb')}")
-        print(f"  Sky:           {nws['sky_cover'] or '—'}")
-        print(f"  METAR:         {nws['raw_metar'] or '—'}")
+        print(f"NWS {nws['station_id']} ({name}) \u2014 {fmt.ts(nws['timestamp'])}")
+        print(f"  Temperature:   {fmt.temp(nws['air_temp'])}")
+        print(f"  Dewpoint:      {fmt.temp(nws['dew_point'])}")
+        print(f"  Humidity:      {fmt.val(nws['relative_humidity'], '.0f', '%')}")
+        print(f"  Wind:          {fmt.wind_dir(nws['wind_direction'])} "
+              f"{fmt.val(nws['wind_speed'], '.1f', ' m/s')}")
+        print(f"  Pressure:      {fmt.val(nws['sea_level_pressure'], '.1f', ' mb')}")
+        print(f"  Sky:           {nws['sky_cover'] or '\u2014'}")
+        print(f"  METAR:         {nws['raw_metar'] or '\u2014'}")
     else:
         print("no NWS observations found")
 
@@ -114,11 +85,35 @@ def cmd_forecast(args, conf):
     rows = persistence.run(obs, issued_at)
     db.insert_forecasts(conn_out, rows)
 
-    valid_start = _ts(obs["timestamp"] + 6 * 3600)
-    valid_end = _ts(obs["timestamp"] + 24 * 3600)
-    print(f"persistence: {len(rows)} forecasts issued at {_ts(issued_at)}")
-    print(f"  obs:   {_ts(obs['timestamp'])}")
-    print(f"  valid: {valid_start} — {valid_end}")
+    valid_start = fmt.ts(obs["timestamp"] + 6 * 3600)
+    valid_end = fmt.ts(obs["timestamp"] + 24 * 3600)
+    print(f"persistence: {len(rows)} forecasts issued at {fmt.ts(issued_at)}")
+    print(f"  obs:   {fmt.ts(obs['timestamp'])}")
+    print(f"  valid: {valid_start} \u2014 {valid_end}")
+
+
+def cmd_dashboard(args, conf):
+    output = Path(__file__).parent / "dashboard.html"
+    migrations_dir = Path(__file__).parent / "migrations"
+
+    try:
+        conn_in = db.open_input_db(conf.input_db)
+    except FileNotFoundError as e:
+        sys.exit(f"error: {e}")
+    try:
+        db.validate_schema(conn_in)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+
+    conn_out = db.open_output_db(conf.output_db)
+    db.run_migrations(conn_out, migrations_dir)
+
+    try:
+        dash.generate(conn_in, conn_out, output)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+
+    print(f"dashboard written to {output}")
 
 
 def main():
@@ -140,6 +135,9 @@ def main():
     subparsers.add_parser(
         "forecast", help="run forecast models and write to output database"
     )
+    subparsers.add_parser(
+        "dashboard", help="generate dashboard.html from latest forecast run"
+    )
 
     args = parser.parse_args()
 
@@ -153,6 +151,8 @@ def main():
         cmd_conditions(args, conf)
     elif args.command == "forecast":
         cmd_forecast(args, conf)
+    elif args.command == "dashboard":
+        cmd_dashboard(args, conf)
 
 
 if __name__ == "__main__":

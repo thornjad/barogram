@@ -7,7 +7,7 @@ combining them into a weighted ensemble scored against real observations.
 
 ## Requirements
 
-Python 3.11+. No third-party packages.
+Python 3.11+, managed with [uv](https://github.com/astral-sh/uv).
 
 ## Setup
 
@@ -16,6 +16,7 @@ Copy the example config and fill in your paths:
 ```bash
 cp barogram.example.toml barogram.toml
 # edit barogram.toml
+uv sync
 ```
 
 ```toml
@@ -31,21 +32,27 @@ output_db = "/path/to/barogram.db"
 ## Usage
 
 ```
-python3 barogram.py [--config PATH] <command>
+uv run barogram [--config PATH] <command>
 ```
 
 ### Commands
 
 ```
 conditions    show latest observed conditions from the input database
+forecast      run forecast models and write to output database
+dashboard     generate dashboard.html from latest forecast run
 ```
+
+The dashboard requires internet connectivity to load Plotly from CDN.
 
 ### Examples
 
 ```bash
-python3 barogram.py conditions
-python3 barogram.py --config /path/to/barogram.toml conditions
-python3 barogram.py --help
+uv run barogram conditions
+uv run barogram forecast
+uv run barogram dashboard
+uv run barogram --config /path/to/barogram.toml conditions
+uv run barogram --help
 ```
 
 ## License

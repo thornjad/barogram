@@ -2,5 +2,7 @@ barogram.toml
 barogram.db
 barogram.db-shm
 barogram.db-wal
+dashboard.html
+.venv/
 __pycache__/
 *.pyc
