@@ -1,0 +1,3 @@
+[barogram]
+input_db = "/path/to/wxlog-read-only.db"
+output_db = "/path/to/barogram.db"
