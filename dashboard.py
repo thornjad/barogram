@@ -100,6 +100,36 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     overflow: hidden;
 }
 .muted { color: #888; font-style: italic; font-size: 13px; }
+.obs-subhead { margin-top: 20px; margin-bottom: 6px; }
+.obs-history-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+}
+.obs-history-table th,
+.obs-history-table td {
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+    white-space: nowrap;
+}
+.obs-history-table thead th { background: #f9f9f9; font-weight: 600; color: #1a1a1a; }
+.obs-history-table tbody tr:last-child td { border-bottom: none; }
+.table-scroll { overflow-x: auto; margin-bottom: 8px; }
+.more-btn {
+    padding: 5px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    cursor: pointer;
+    color: #333;
+}
+.more-btn:hover { background: #f0f0f0; }
 @media (max-width: 600px) {
     .conditions-grid, .charts-grid { grid-template-columns: 1fr; }
 }
@@ -226,6 +256,110 @@ def _forecast_table_html(table: dict, lead_times: list) -> str:
     )
 
 
+def _tempest_obs_row(row) -> str:
+    gust = row["wind_gust"]
+    wind = fmt.wind_dir(row["wind_direction"]) + " " + fmt.val(row["wind_avg"], ".1f", " m/s")
+    if gust is not None:
+        wind += f" g{fmt.val(gust, '.1f')}"
+    lc = row["lightning_count"]
+    return (
+        "<tr>"
+        f"<td>{fmt.ts(row['timestamp'])}</td>"
+        f"<td>{fmt.temp(row['air_temp'])}</td>"
+        f"<td>{fmt.val(row['relative_humidity'], '.0f', '%')}</td>"
+        f"<td>{fmt.val(row['station_pressure'], '.1f', ' mb')}</td>"
+        f"<td>{wind}</td>"
+        f"<td>{fmt.val(row['precip_accum_day'], '.1f', ' mm')}</td>"
+        f"<td>{lc if lc is not None else 0}</td>"
+        "</tr>"
+    )
+
+
+def _nws_obs_row(row) -> str:
+    return (
+        "<tr>"
+        f"<td>{fmt.ts(row['timestamp'])}</td>"
+        f"<td>{fmt.temp(row['air_temp'])}</td>"
+        f"<td>{fmt.temp(row['dew_point'])}</td>"
+        f"<td>{fmt.val(row['relative_humidity'], '.0f', '%')}</td>"
+        f"<td>{fmt.wind_dir(row['wind_direction'])} {fmt.val(row['wind_speed'], '.1f', ' m/s')}</td>"
+        f"<td>{fmt.val(row['sea_level_pressure'], '.1f', ' mb')}</td>"
+        f"<td>{row['sky_cover'] or '\u2014'}</td>"
+        "</tr>"
+    )
+
+
+def _obs_history_section(tempest_obs: list, nws_obs: list) -> str:
+    def station_heading(label: str, obs_list: list) -> str:
+        if not obs_list:
+            return label
+        r = obs_list[0]
+        name = r["name"] or r["station_id"]
+        return f'{label}: {name} <span class="station-id">({r["station_id"]})</span>'
+
+    def table_block(label: str, obs_list: list, tbody_id: str, btn_id: str, headers: list) -> str:
+        heading = station_heading(label, obs_list)
+        header_html = "".join(f"<th>{h}</th>" for h in headers)
+        empty = (
+            f'<tr><td colspan="{len(headers)}" class="muted">no data</td></tr>'
+            if not obs_list else ""
+        )
+        return (
+            f'<h3 class="obs-subhead">{heading}</h3>'
+            f'<div class="table-scroll">'
+            f'<table class="obs-history-table">'
+            f'<thead><tr>{header_html}</tr></thead>'
+            f'<tbody id="{tbody_id}">{empty}</tbody>'
+            f'</table>'
+            f'</div>'
+            f'<button class="more-btn" id="{btn_id}">Load more</button>'
+        )
+
+    tempest_block = table_block(
+        "Tempest", tempest_obs, "tempest-obs-tbody", "tempest-more-btn",
+        ["Time", "Temperature", "Humidity", "Pressure", "Wind", "Precip (day)", "Lightning"],
+    )
+    nws_block = table_block(
+        "NWS", nws_obs, "nws-obs-tbody", "nws-more-btn",
+        ["Time", "Temperature", "Dewpoint", "Humidity", "Wind", "Pressure", "Sky"],
+    )
+
+    return (
+        '<section class="section">'
+        '<h2>Observation History</h2>'
+        + tempest_block
+        + nws_block
+        + '</section>'
+    )
+
+
+def _obs_history_js(tempest_rows: list, nws_rows: list) -> str:
+    t_json = json.dumps(tempest_rows)
+    n_json = json.dumps(nws_rows)
+    return f"""\
+const tempestHistory = {t_json};
+const nwsHistory = {n_json};
+
+function makeLoader(rows, tbodyId, btnId) {{
+    let n = 10;
+    const tbody = document.getElementById(tbodyId);
+    const btn = document.getElementById(btnId);
+    function render() {{
+        tbody.innerHTML = rows.slice(0, n).join('');
+        if (n >= rows.length) btn.style.display = 'none';
+    }}
+    render();
+    btn.addEventListener('click', function() {{
+        n = Math.min(n + 10, rows.length);
+        render();
+    }});
+}}
+
+makeLoader(tempestHistory, 'tempest-obs-tbody', 'tempest-more-btn');
+makeLoader(nwsHistory, 'nws-obs-tbody', 'nws-more-btn');
+"""
+
+
 def _chart_js(chart_data_dict: dict) -> str:
     data_json = json.dumps(chart_data_dict)
     var_labels_json = json.dumps({
@@ -282,6 +416,8 @@ def generate(
     model_name = _model_name(conn_out, issued_at)
     tempest = db.latest_tempest_obs(conn_in)
     nws = db.latest_nws_obs(conn_in)
+    tempest_history = db.recent_tempest_obs(conn_in)
+    nws_history = db.recent_nws_obs(conn_in)
 
     lead_times = sorted({row["lead_hours"] for row in rows})
     table = _table_data(rows)
@@ -291,6 +427,9 @@ def generate(
     tempest_card = _conditions_card("Tempest", tempest)
     nws_card = _conditions_card("NWS", nws)
     forecast_table = _forecast_table_html(table, lead_times)
+    obs_section = _obs_history_section(tempest_history, nws_history)
+    tempest_rows = [_tempest_obs_row(r) for r in tempest_history]
+    nws_rows = [_nws_obs_row(r) for r in nws_history]
 
     chart_divs = "".join(
         f'<div class="chart-container"><div id="chart-{v}"></div></div>'
@@ -324,6 +463,8 @@ def generate(
   </div>
 </section>
 
+{obs_section}
+
 <section class="section">
   <h2>Latest Forecast Run</h2>
   <div class="run-meta">
@@ -348,6 +489,7 @@ def generate(
 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 <script>
 {_chart_js(charts)}
+{_obs_history_js(tempest_rows, nws_rows)}
 </script>
 </body>
 </html>

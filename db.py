@@ -72,6 +72,34 @@ def latest_nws_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def recent_tempest_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
+    return conn.execute(
+        """
+        SELECT t.*, s.name
+        FROM tempest_obs t
+        JOIN stations s ON s.station_id = t.station_id
+        WHERE s.source = 'tempest'
+        ORDER BY t.timestamp DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def recent_nws_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
+    return conn.execute(
+        """
+        SELECT n.*, s.name
+        FROM nws_obs n
+        JOIN stations s ON s.station_id = n.station_id
+        WHERE s.source = 'nws'
+        ORDER BY n.timestamp DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
 def open_output_db(path: str) -> sqlite3.Connection:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
