@@ -12,6 +12,7 @@ import dashboard as dash
 import db
 import fmt
 import models.persistence as persistence
+import score as scorer
 
 
 def cmd_conditions(args, conf):
@@ -116,6 +117,69 @@ def cmd_dashboard(args, conf):
     print(f"dashboard written to {output}")
 
 
+_SCORE_UNIT = {
+    "temperature": "\u00b0C",
+    "humidity": "%",
+    "pressure": "mb",
+    "wind_speed": "m/s",
+}
+_SCORE_VAR_ORDER = ["temperature", "humidity", "pressure", "wind_speed"]
+
+
+def cmd_score(args, conf):
+    migrations_dir = Path(__file__).parent / "migrations"
+
+    try:
+        conn_in = db.open_input_db(conf.input_db)
+    except FileNotFoundError as e:
+        sys.exit(f"error: {e}")
+    try:
+        db.validate_schema(conn_in)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+
+    conn_out = db.open_output_db(conf.output_db)
+    db.run_migrations(conn_out, migrations_dir)
+
+    result = scorer.run(conn_in, conn_out)
+    print(
+        f"scored {result['scored']} forecasts, "
+        f"skipped {result['skipped']} (no obs within window)"
+    )
+
+    summary = db.score_summary(conn_out)
+    if not summary:
+        return
+
+    # group: model -> variable -> lead_hours -> (n, avg_mae, avg_bias)
+    by_model: dict = {}
+    for row in summary:
+        m, v, l = row["model"], row["variable"], row["lead_hours"]
+        by_model.setdefault(m, {}).setdefault(v, {})[l] = (
+            row["n"], row["avg_mae"], row["avg_bias"]
+        )
+
+    for model, var_data in by_model.items():
+        leads = sorted({l for vd in var_data.values() for l in vd})
+        total_n = sum(r["n"] for r in summary if r["model"] == model)
+        lead_header = "  ".join(f"+{l}h".ljust(14) for l in leads)
+        print(f"\n{model} \u2014 MAE / bias ({total_n} scored):")
+        print(f"  {'variable':<12}  {lead_header}")
+        for var in _SCORE_VAR_ORDER:
+            if var not in var_data:
+                continue
+            unit = _SCORE_UNIT.get(var, "")
+            cells = []
+            for l in leads:
+                if l in var_data[var]:
+                    _, mae, bias = var_data[var][l]
+                    sign = "+" if bias >= 0 else ""
+                    cells.append(f"{mae:.2f} / {sign}{bias:.2f}".ljust(14))
+                else:
+                    cells.append("\u2014".ljust(14))
+            print(f"  {var:<12}  {'  '.join(cells)}  ({unit})")
+
+
 def main():
     script_dir = Path(__file__).parent
     default_config = script_dir / "barogram.toml"
@@ -138,6 +202,9 @@ def main():
     subparsers.add_parser(
         "dashboard", help="generate dashboard.html from latest forecast run"
     )
+    subparsers.add_parser(
+        "score", help="score past forecasts against observations"
+    )
 
     args = parser.parse_args()
 
@@ -153,6 +220,8 @@ def main():
         cmd_forecast(args, conf)
     elif args.command == "dashboard":
         cmd_dashboard(args, conf)
+    elif args.command == "score":
+        cmd_score(args, conf)
 
 
 if __name__ == "__main__":

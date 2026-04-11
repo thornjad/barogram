@@ -100,6 +100,53 @@ def recent_nws_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
     ).fetchall()
 
 
+def nearest_tempest_obs(
+    conn: sqlite3.Connection, timestamp: int, window_sec: int = 1800
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT t.air_temp, t.relative_humidity, t.station_pressure, t.wind_avg
+        FROM tempest_obs t
+        JOIN stations s ON s.station_id = t.station_id
+        WHERE s.source = 'tempest'
+          AND t.timestamp BETWEEN ? AND ?
+        ORDER BY ABS(t.timestamp - ?) ASC
+        LIMIT 1
+        """,
+        (timestamp - window_sec, timestamp + window_sec, timestamp),
+    ).fetchone()
+
+
+def update_scored_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    conn.execute("BEGIN")
+    try:
+        conn.executemany(
+            """
+            UPDATE forecasts
+            SET observed = :observed, error = :error, mae = :mae, scored_at = :scored_at
+            WHERE id = :id
+            """,
+            rows,
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def score_summary(conn: sqlite3.Connection) -> list:
+    return conn.execute(
+        """
+        SELECT model, variable, lead_hours,
+               COUNT(*) AS n, AVG(mae) AS avg_mae, AVG(error) AS avg_bias
+        FROM forecasts
+        WHERE scored_at IS NOT NULL
+        GROUP BY model, variable, lead_hours
+        ORDER BY model, variable, lead_hours
+        """
+    ).fetchall()
+
+
 def open_output_db(path: str) -> sqlite3.Connection:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
