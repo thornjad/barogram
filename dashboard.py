@@ -130,8 +130,34 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     color: #333;
 }
 .more-btn:hover { background: #f0f0f0; }
+.verification-windows {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+.score-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+}
+.score-table th,
+.score-table td {
+    padding: 6px 10px;
+    text-align: right;
+    border-bottom: 1px solid #eee;
+}
+.score-table th { text-align: left; font-weight: 500; color: #555; }
+.score-table thead th { background: #f9f9f9; font-weight: 600; color: #1a1a1a; }
+.score-table tbody tr:last-child td,
+.score-table tbody tr:last-child th { border-bottom: none; }
+.score-table td small { color: #888; display: block; font-size: 11px; }
+.window-label { font-size: 12px; color: #666; margin-bottom: 6px; }
 @media (max-width: 600px) {
-    .conditions-grid, .charts-grid { grid-template-columns: 1fr; }
+    .conditions-grid, .charts-grid, .verification-windows { grid-template-columns: 1fr; }
 }
 """
 
@@ -360,6 +386,103 @@ makeLoader(nwsHistory, 'nws-obs-tbody', 'nws-more-btn');
 """
 
 
+def _score_window_table(summary_rows: list, label: str) -> str:
+    if not summary_rows:
+        return f'<div><p class="window-label">{label}</p><p class="muted">no scored forecasts</p></div>'
+
+    data: dict = {}
+    for row in summary_rows:
+        data.setdefault(row["variable"], {})[row["lead_hours"]] = (
+            row["avg_mae"], row["avg_bias"]
+        )
+    leads = sorted({row["lead_hours"] for row in summary_rows})
+    total = sum(row["n"] for row in summary_rows)
+
+    header_cells = "".join(f"<th>+{h}h</th>" for h in leads)
+    rows_html = []
+    for var in VARIABLES:
+        if var not in data:
+            continue
+        label_str = _VARIABLE_LABEL.get(var, var)
+        unit = _UNIT.get(var, "")
+        cells = []
+        for l in leads:
+            if l in data[var]:
+                mae, bias = data[var][l]
+                sign = "+" if bias >= 0 else ""
+                cells.append(
+                    f"<td>{mae:.2f}<small>{sign}{bias:.2f}</small></td>"
+                )
+            else:
+                cells.append("<td>\u2014</td>")
+        rows_html.append(
+            f'<tr><th>{label_str} ({unit})</th>{"".join(cells)}</tr>'
+        )
+
+    return (
+        f'<div>'
+        f'<p class="window-label">{label} \u2014 {total} scored</p>'
+        f'<table class="score-table">'
+        f'<thead><tr><th>MAE / bias</th>{header_cells}</tr></thead>'
+        f'<tbody>{"".join(rows_html)}</tbody>'
+        f'</table>'
+        f'</div>'
+    )
+
+
+def _mae_timeseries_data(timeseries_rows: list) -> dict:
+    """variable -> '+Nh' -> {x: [timestamps], y: [avg_mae]}"""
+    data: dict = {}
+    for row in timeseries_rows:
+        var = row["variable"]
+        lead = f"+{row['lead_hours']}h"
+        data.setdefault(var, {}).setdefault(lead, {"x": [], "y": []})
+        data[var][lead]["x"].append(fmt.ts(row["issued_at"]))
+        data[var][lead]["y"].append(row["avg_mae"])
+    return data
+
+
+def _mae_timeseries_js(timeseries_data: dict) -> str:
+    data_json = json.dumps(timeseries_data)
+    var_labels_json = json.dumps({
+        "temperature": "Temperature MAE (\u00b0C)",
+        "humidity": "Humidity MAE (%)",
+        "pressure": "Pressure MAE (mb)",
+        "wind_speed": "Wind Speed MAE (m/s)",
+    })
+    vars_json = json.dumps(VARIABLES)
+    return f"""\
+const maeData = {data_json};
+const maeVarLabels = {var_labels_json};
+const maeVariables = {vars_json};
+
+maeVariables.forEach(function(variable) {{
+    const varData = maeData[variable] || {{}};
+    const traces = Object.entries(varData).map(function([lead, d]) {{
+        return {{
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: lead,
+            x: d.x,
+            y: d.y,
+            line: {{ width: 2 }},
+            marker: {{ size: 6 }}
+        }};
+    }});
+    Plotly.newPlot('mae-chart-' + variable, traces, {{
+        title: {{ text: maeVarLabels[variable], font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
+        margin: {{ t: 40, b: 64, l: 50, r: 16 }},
+        xaxis: {{ tickangle: -40, tickfont: {{ size: 11 }} }},
+        yaxis: {{ tickfont: {{ size: 11 }}, rangemode: 'tozero' }},
+        height: 280,
+        showlegend: true,
+        paper_bgcolor: 'white',
+        plot_bgcolor: '#fafafa'
+    }}, {{responsive: true}});
+}});
+"""
+
+
 def _chart_js(chart_data_dict: dict) -> str:
     data_json = json.dumps(chart_data_dict)
     var_labels_json = json.dumps({
@@ -419,10 +542,16 @@ def generate(
     tempest_history = db.recent_tempest_obs(conn_in)
     nws_history = db.recent_nws_obs(conn_in)
 
+    now = int(time.time())
+    summary_10 = db.score_summary_last_n_runs(conn_out, 10)
+    summary_7d = db.score_summary_since(conn_out, now - 7 * 86400)
+    timeseries = db.score_timeseries(conn_out)
+
     lead_times = sorted({row["lead_hours"] for row in rows})
     table = _table_data(rows)
     charts = _chart_data(rows)
-    generated_at = fmt.ts(int(time.time()))
+    mae_ts = _mae_timeseries_data(timeseries)
+    generated_at = fmt.ts(now)
 
     tempest_card = _conditions_card("Tempest", tempest)
     nws_card = _conditions_card("NWS", nws)
@@ -430,6 +559,13 @@ def generate(
     obs_section = _obs_history_section(tempest_history, nws_history)
     tempest_rows = [_tempest_obs_row(r) for r in tempest_history]
     nws_rows = [_nws_obs_row(r) for r in nws_history]
+
+    table_10 = _score_window_table(summary_10, "last 10 runs")
+    table_7d = _score_window_table(summary_7d, "last 7 days")
+    mae_chart_divs = "".join(
+        f'<div class="chart-container"><div id="mae-chart-{v}"></div></div>'
+        for v in VARIABLES
+    )
 
     chart_divs = "".join(
         f'<div class="chart-container"><div id="chart-{v}"></div></div>'
@@ -485,11 +621,24 @@ def generate(
   </div>
 </section>
 
+<section class="section">
+  <h2>Verification</h2>
+  <div class="verification-windows">
+    {table_10}
+    {table_7d}
+  </div>
+  <h3 class="obs-subhead">MAE over time</h3>
+  <div class="charts-grid">
+    {mae_chart_divs}
+  </div>
+</section>
+
 </div>
 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 <script>
 {_chart_js(charts)}
 {_obs_history_js(tempest_rows, nws_rows)}
+{_mae_timeseries_js(mae_ts)}
 </script>
 </body>
 </html>

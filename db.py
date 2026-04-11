@@ -147,6 +147,55 @@ def score_summary(conn: sqlite3.Connection) -> list:
     ).fetchall()
 
 
+def score_summary_since(conn: sqlite3.Connection, since: int) -> list:
+    return conn.execute(
+        """
+        SELECT model, variable, lead_hours,
+               COUNT(*) AS n, AVG(mae) AS avg_mae, AVG(error) AS avg_bias
+        FROM forecasts
+        WHERE scored_at IS NOT NULL AND issued_at >= ?
+        GROUP BY model, variable, lead_hours
+        ORDER BY model, variable, lead_hours
+        """,
+        (since,),
+    ).fetchall()
+
+
+def score_summary_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
+    return conn.execute(
+        """
+        WITH recent AS (
+            SELECT DISTINCT issued_at
+            FROM forecasts
+            WHERE scored_at IS NOT NULL
+            ORDER BY issued_at DESC
+            LIMIT ?
+        )
+        SELECT f.model, f.variable, f.lead_hours,
+               COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
+        FROM forecasts f
+        JOIN recent r ON r.issued_at = f.issued_at
+        WHERE f.scored_at IS NOT NULL
+        GROUP BY f.model, f.variable, f.lead_hours
+        ORDER BY f.model, f.variable, f.lead_hours
+        """,
+        (n,),
+    ).fetchall()
+
+
+def score_timeseries(conn: sqlite3.Connection) -> list:
+    """Per-run average MAE by model/variable/lead, ordered by run time."""
+    return conn.execute(
+        """
+        SELECT model, variable, lead_hours, issued_at, AVG(mae) AS avg_mae
+        FROM forecasts
+        WHERE scored_at IS NOT NULL
+        GROUP BY model, variable, lead_hours, issued_at
+        ORDER BY issued_at
+        """
+    ).fetchall()
+
+
 def open_output_db(path: str) -> sqlite3.Connection:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
