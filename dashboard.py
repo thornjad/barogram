@@ -156,6 +156,9 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .score-table tbody tr:last-child th { border-bottom: none; }
 .score-table td small { color: #888; display: block; font-size: 11px; }
 .window-label { font-size: 12px; color: #666; margin-bottom: 6px; }
+.model-header th { background: #f0f0f0; font-size: 11px; color: #555; padding: 4px 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.ensemble-header th { background: #eff4ff; font-size: 11px; color: #3b5bdb; padding: 4px 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.ensemble-row th, .ensemble-row td { background: #f8faff; }
 @media (max-width: 600px) {
     .conditions-grid, .charts-grid, .verification-windows { grid-template-columns: 1fr; }
 }
@@ -390,34 +393,43 @@ def _score_window_table(summary_rows: list, label: str) -> str:
     if not summary_rows:
         return f'<div><p class="window-label">{label}</p><p class="muted">no scored forecasts</p></div>'
 
-    data: dict = {}
+    # group by (model, type) -> variable -> lead_hours -> (mae, bias)
+    by_model: dict = {}
     for row in summary_rows:
-        data.setdefault(row["variable"], {})[row["lead_hours"]] = (
+        key = (row["model"], row["type"])
+        by_model.setdefault(key, {}).setdefault(row["variable"], {})[row["lead_hours"]] = (
             row["avg_mae"], row["avg_bias"]
         )
+
     leads = sorted({row["lead_hours"] for row in summary_rows})
     total = sum(row["n"] for row in summary_rows)
-
     header_cells = "".join(f"<th>+{h}h</th>" for h in leads)
+
+    sorted_models = sorted(by_model.keys(), key=lambda k: (0 if k[1] == "base" else 1, k[0]))
     rows_html = []
-    for var in VARIABLES:
-        if var not in data:
-            continue
-        label_str = _VARIABLE_LABEL.get(var, var)
-        unit = _UNIT.get(var, "")
-        cells = []
-        for l in leads:
-            if l in data[var]:
-                mae, bias = data[var][l]
-                sign = "+" if bias >= 0 else ""
-                cells.append(
-                    f"<td>{mae:.2f}<small>{sign}{bias:.2f}</small></td>"
-                )
-            else:
-                cells.append("<td>\u2014</td>")
+    for model_name, model_type in sorted_models:
+        hdr_class = "ensemble-header" if model_type == "ensemble" else "model-header"
         rows_html.append(
-            f'<tr><th>{label_str} ({unit})</th>{"".join(cells)}</tr>'
+            f'<tr class="{hdr_class}"><th colspan="{len(leads) + 1}">{model_name}</th></tr>'
         )
+        var_data = by_model[(model_name, model_type)]
+        row_class = ' class="ensemble-row"' if model_type == "ensemble" else ""
+        for var in VARIABLES:
+            if var not in var_data:
+                continue
+            label_str = _VARIABLE_LABEL.get(var, var)
+            unit = _UNIT.get(var, "")
+            cells = []
+            for l in leads:
+                if l in var_data[var]:
+                    mae, bias = var_data[var][l]
+                    sign = "+" if bias >= 0 else ""
+                    cells.append(f"<td>{mae:.2f}<small>{sign}{bias:.2f}</small></td>")
+                else:
+                    cells.append("<td>\u2014</td>")
+            rows_html.append(
+                f'<tr{row_class}><th>{label_str} ({unit})</th>{"".join(cells)}</tr>'
+            )
 
     return (
         f'<div>'
@@ -431,14 +443,15 @@ def _score_window_table(summary_rows: list, label: str) -> str:
 
 
 def _mae_timeseries_data(timeseries_rows: list) -> dict:
-    """variable -> '+Nh' -> {x: [timestamps], y: [avg_mae]}"""
+    """variable -> 'model +Nh' -> {x, y, is_ensemble}"""
     data: dict = {}
     for row in timeseries_rows:
         var = row["variable"]
-        lead = f"+{row['lead_hours']}h"
-        data.setdefault(var, {}).setdefault(lead, {"x": [], "y": []})
-        data[var][lead]["x"].append(fmt.ts(row["issued_at"]))
-        data[var][lead]["y"].append(row["avg_mae"])
+        key = f"{row['model']} +{row['lead_hours']}h"
+        is_ensemble = row["type"] == "ensemble"
+        data.setdefault(var, {}).setdefault(key, {"x": [], "y": [], "is_ensemble": is_ensemble})
+        data[var][key]["x"].append(fmt.ts(row["issued_at"]))
+        data[var][key]["y"].append(row["avg_mae"])
     return data
 
 
@@ -459,14 +472,15 @@ const maeVariables = {vars_json};
 maeVariables.forEach(function(variable) {{
     const varData = maeData[variable] || {{}};
     const traces = Object.entries(varData).map(function([lead, d]) {{
+        const ens = d.is_ensemble;
         return {{
             type: 'scatter',
             mode: 'lines+markers',
             name: lead,
             x: d.x,
             y: d.y,
-            line: {{ width: 2 }},
-            marker: {{ size: 6 }}
+            line: {{ width: ens ? 3 : 2, dash: ens ? 'dash' : 'solid' }},
+            marker: {{ size: ens ? 8 : 6 }}
         }};
     }});
     Plotly.newPlot('mae-chart-' + variable, traces, {{

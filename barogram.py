@@ -151,19 +151,24 @@ def cmd_score(args, conf):
     if not summary:
         return
 
-    # group: model -> variable -> lead_hours -> (n, avg_mae, avg_bias)
+    # group: (model, type) -> variable -> lead_hours -> (n, avg_mae, avg_bias)
     by_model: dict = {}
     for row in summary:
-        m, v, l = row["model"], row["variable"], row["lead_hours"]
-        by_model.setdefault(m, {}).setdefault(v, {})[l] = (
+        m, t, v, l = row["model"], row["type"], row["variable"], row["lead_hours"]
+        by_model.setdefault((m, t), {}).setdefault(v, {})[l] = (
             row["n"], row["avg_mae"], row["avg_bias"]
         )
 
-    for model, var_data in by_model.items():
+    # base models first, then ensemble
+    sorted_models = sorted(
+        by_model.keys(), key=lambda k: (0 if k[1] == "base" else 1, k[0])
+    )
+    for (model, model_type), var_data in sorted_models:
         leads = sorted({l for vd in var_data.values() for l in vd})
         total_n = sum(r["n"] for r in summary if r["model"] == model)
         lead_header = "  ".join(f"+{l}h".ljust(14) for l in leads)
-        print(f"\n{model} \u2014 MAE / bias ({total_n} scored):")
+        type_tag = " [ensemble]" if model_type == "ensemble" else ""
+        print(f"\n{model}{type_tag} \u2014 MAE / bias ({total_n} scored):")
         print(f"  {'variable':<12}  {lead_header}")
         for var in _SCORE_VAR_ORDER:
             if var not in var_data:
