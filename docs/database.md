@@ -41,8 +41,43 @@ Compare the output against `001_baseline.sql`. The `metadata` table and `sqlite_
 |--------|----------|
 | New table or column | New numbered migration file |
 | New model row | `INSERT OR IGNORE` in `001_baseline.sql` directly |
+| New member row | `INSERT OR IGNORE` in `001_baseline.sql` directly |
 | Structural restructure (SQLite can't ALTER) | New table, `INSERT INTO new SELECT FROM old`, drop old, rename |
 | Accumulated file count is annoying | Squash into new baseline |
+
+## Members
+
+The `members` table tracks every valid `(model_id, member_id)` pair:
+
+```sql
+CREATE TABLE members (
+    model_id   INTEGER NOT NULL REFERENCES models(id),
+    member_id  INTEGER NOT NULL DEFAULT 0,
+    name       TEXT,
+    PRIMARY KEY (model_id, member_id)
+);
+```
+
+Every model has at least one members row: `(model_id, 0, NULL)`. For single-member models
+this is the only row. For multi-member models (e.g. model 003 with several weight schemes),
+members 1+ are the individual parameterized runs and member 0 is the ensemble mean.
+
+The `name` column is a short human-readable label for display (e.g. `"week-heavy"`).
+Member 0 always has `name=NULL`.
+
+The foreign key from `forecasts.member_id` to `members` is not enforced at the DB level
+(SQLite would require a full table recreation to add it retroactively). Application code
+is responsible for ensuring `(model_id, member_id)` pairs written to `forecasts` exist
+in `members`.
+
+## `forecasts` columns: `member_id` and `spread`
+
+`member_id INTEGER NOT NULL DEFAULT 0` — identifies which member produced the row.
+Existing single-member models always write member_id=0.
+
+`spread REAL` — ensemble spread (standard deviation across members) for the given
+(model_id, issued_at, valid_at, variable). Non-NULL only on member_id=0 rows for
+multi-member models. NULL for all other rows.
 
 ## Fresh install
 

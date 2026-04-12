@@ -169,13 +169,15 @@ def update_scored_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
 def score_summary(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """
-        SELECT f.model, m.type, f.variable, f.lead_hours,
+        SELECT f.model, m.type, f.member_id, mem.name AS member_name,
+               f.variable, f.lead_hours,
                COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
         FROM forecasts f
         JOIN models m ON m.id = f.model_id
+        LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
         WHERE f.scored_at IS NOT NULL
-        GROUP BY f.model, m.type, f.variable, f.lead_hours
-        ORDER BY m.type, f.model, f.variable, f.lead_hours
+        GROUP BY f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
+        ORDER BY m.type, f.model, f.member_id, f.variable, f.lead_hours
         """
     ).fetchall()
 
@@ -183,13 +185,15 @@ def score_summary(conn: sqlite3.Connection) -> list:
 def score_summary_since(conn: sqlite3.Connection, since: int) -> list:
     return conn.execute(
         """
-        SELECT f.model, m.type, f.variable, f.lead_hours,
+        SELECT f.model, m.type, f.member_id, mem.name AS member_name,
+               f.variable, f.lead_hours,
                COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
         FROM forecasts f
         JOIN models m ON m.id = f.model_id
+        LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
         WHERE f.scored_at IS NOT NULL AND f.issued_at >= ?
-        GROUP BY f.model, m.type, f.variable, f.lead_hours
-        ORDER BY m.type, f.model, f.variable, f.lead_hours
+        GROUP BY f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
+        ORDER BY m.type, f.model, f.member_id, f.variable, f.lead_hours
         """,
         (since,),
     ).fetchall()
@@ -205,48 +209,51 @@ def score_summary_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
             ORDER BY issued_at DESC
             LIMIT ?
         )
-        SELECT f.model, m.type, f.variable, f.lead_hours,
+        SELECT f.model, m.type, f.member_id, mem.name AS member_name,
+               f.variable, f.lead_hours,
                COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
         FROM forecasts f
         JOIN models m ON m.id = f.model_id
+        LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
         JOIN recent r ON r.issued_at = f.issued_at
         WHERE f.scored_at IS NOT NULL
-        GROUP BY f.model, m.type, f.variable, f.lead_hours
-        ORDER BY m.type, f.model, f.variable, f.lead_hours
+        GROUP BY f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
+        ORDER BY m.type, f.model, f.member_id, f.variable, f.lead_hours
         """,
         (n,),
     ).fetchall()
 
 
 def score_timeseries(conn: sqlite3.Connection) -> list:
-    """Per-run average MAE by model/variable/lead, ordered by run time."""
+    """Per-run average MAE by model/member/variable/lead, ordered by run time."""
     return conn.execute(
         """
-        SELECT f.model, m.type, f.variable, f.lead_hours, f.issued_at,
+        SELECT f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at,
                AVG(f.mae) AS avg_mae
         FROM forecasts f
         JOIN models m ON m.id = f.model_id
         WHERE f.scored_at IS NOT NULL
-        GROUP BY f.model, m.type, f.variable, f.lead_hours, f.issued_at
+        GROUP BY f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at
         ORDER BY f.issued_at
         """
     ).fetchall()
 
 
 def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
-    """All rows from each model's most recent run, ordered by type then name."""
+    """All rows from each model/member's most recent run, ordered by type then name."""
     return conn.execute(
         """
-        SELECT f.model_id, f.model, m.type, f.issued_at,
-               f.variable, f.lead_hours, f.value, f.valid_at
+        SELECT f.model_id, f.model, f.member_id, mem.name AS member_name,
+               m.type, f.issued_at, f.variable, f.lead_hours, f.value, f.valid_at
         FROM forecasts f
         JOIN models m ON m.id = f.model_id
+        LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
         WHERE f.issued_at = (
             SELECT MAX(f2.issued_at)
             FROM forecasts f2
-            WHERE f2.model_id = f.model_id
+            WHERE f2.model_id = f.model_id AND f2.member_id = f.member_id
         )
-        ORDER BY m.type, f.model, f.variable, f.lead_hours
+        ORDER BY m.type, f.model, f.member_id, f.variable, f.lead_hours
         """
     ).fetchall()
 
@@ -285,16 +292,20 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
 
 
 def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    normalized = [
+        {**row, "member_id": row.get("member_id", 0), "spread": row.get("spread")}
+        for row in rows
+    ]
     conn.execute("BEGIN")
     try:
         conn.executemany(
             """
             INSERT INTO forecasts
-                (model_id, model, issued_at, valid_at, lead_hours, variable, value)
+                (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, spread)
             VALUES
-                (:model_id, :model, :issued_at, :valid_at, :lead_hours, :variable, :value)
+                (:model_id, :model, :member_id, :issued_at, :valid_at, :lead_hours, :variable, :value, :spread)
             """,
-            rows,
+            normalized,
         )
         conn.execute("COMMIT")
     except Exception:
