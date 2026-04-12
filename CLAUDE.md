@@ -18,7 +18,7 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 ## Adding a model
 
 1. Create `models/<name>.py` with:
-   - `MODEL_ID: int` — next unused ID (base models: 1–99, ensemble: 100)
+   - `MODEL_ID: int` — next unused ID
    - `MODEL_NAME: str`
    - `NEEDS_CONN_IN = True` if the model needs historical DB access, else omit
    - `run(obs, issued_at, *, conn_in=None) -> list[dict]` returning forecast dicts
@@ -65,11 +65,12 @@ Register each `(model_id, member_id, name)` pair in the members table in
 
 ## Model inventory
 
-| ID  | Name                  | Type     | Status |
-|-----|-----------------------|----------|--------|
-| 1   | persistence           | base     | done   |
-| 2   | climatological_mean   | base     | done   |
-| 100 | ensemble              | ensemble | stub   |
+| ID  | Name                         | Type     | Status |
+|-----|------------------------------|----------|--------|
+| 1   | persistence                  | base     | done   |
+| 2   | climatological_mean          | base     | done   |
+| 3   | weighted_climatological_mean | base     | done   |
+| 4   | climo_deviation              | base     | done   |
 
 ## Key files
 

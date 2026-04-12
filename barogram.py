@@ -12,10 +12,11 @@ import dashboard as dash
 import db
 import fmt
 import models.climatological_mean as climatological_mean
+import models.climo_deviation as climo_deviation
 import models.persistence as persistence
 import models.weighted_climatological_mean as weighted_climatological_mean
 
-_MODELS = [persistence, climatological_mean, weighted_climatological_mean]
+_MODELS = [persistence, climatological_mean, weighted_climatological_mean, climo_deviation]
 import score as scorer
 
 
