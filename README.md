@@ -44,16 +44,31 @@ uv run barogram [--config PATH] <command>
 ### Commands
 
 ```
-conditions    show latest observed conditions from the input database
+run           score pending forecasts, run all models, rebuild dashboard
 forecast      run forecast models and write to output database
+score         score past forecasts against observations
 dashboard     generate dashboard.html from latest forecast run
+conditions    show latest observed conditions from the input database
 ```
 
 The dashboard requires internet connectivity to load Plotly from CDN.
 
+### Makefile
+
+A `Makefile` wraps the common commands for convenience:
+
+```bash
+make          # equivalent to uv run barogram run
+make forecast
+make score
+make dashboard
+make conditions
+```
+
 ### Examples
 
 ```bash
+uv run barogram run
 uv run barogram conditions
 uv run barogram forecast
 uv run barogram dashboard

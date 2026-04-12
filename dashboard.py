@@ -167,6 +167,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .base-badge, .ensemble-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .base-badge { background: #e8f4e8; color: #2d6a2d; }
 .ensemble-badge { background: #eff4ff; color: #3b5bdb; }
+.member-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 500; background: #f5f0ff; color: #6b3fa0; }
 .run-detail { font-size: 12px; color: #666; margin-left: auto; }
 @media (max-width: 600px) {
     .conditions-grid, .charts-grid, .verification-windows { grid-template-columns: 1fr; }
@@ -265,7 +266,7 @@ def _forecast_table_html(table: dict, lead_times: list) -> str:
     )
 
 
-def _model_runs_html(rows: list, lead_times: list) -> str:
+def _model_runs_html(rows: list, lead_times: list, member_counts: dict | None = None) -> str:
     by_model: dict = {}
     for row in rows:
         key = (row["model_id"], row["model"], row["type"], row["issued_at"])
@@ -276,15 +277,19 @@ def _model_runs_html(rows: list, lead_times: list) -> str:
     for (model_id, model, mtype, issued_at) in sorted_keys:
         model_rows = by_model[(model_id, model, mtype, issued_at)]
         table = _table_data(model_rows)
-        n = len(model_rows)
         badge_class = "ensemble-badge" if mtype == "ensemble" else "base-badge"
         table_html = _forecast_table_html(table, lead_times)
+        n_members = (member_counts or {}).get(model_id, 0)
+        member_badge = (
+            f'<span class="member-badge">{n_members} members</span>' if n_members else ""
+        )
         cards.append(
             f'<div class="model-run-card">'
             f'<div class="model-run-header">'
             f'<strong>{model}</strong>'
             f'<span class="{badge_class}">{mtype}</span>'
-            f'<span class="run-detail">issued {fmt.ts(issued_at)} &mdash; {n} rows</span>'
+            f'{member_badge}'
+            f'<span class="run-detail">issued {fmt.ts(issued_at)} &mdash; {len(model_rows)} rows</span>'
             f'</div>'
             f'{table_html}'
             f'</div>'
@@ -556,24 +561,35 @@ def generate(
             "no forecasts in output database \u2014 run barogram.py forecast first"
         )
 
+    # for multi-member models, use only member_id=0 (ensemble mean) in all displays;
+    # for single-member models, member_id=0 is already their only member
+    mean_rows = [r for r in all_rows if r["member_id"] == 0]
+
+    # count named members per model for the member badge
+    model_member_ids: dict = {}
+    for row in all_rows:
+        if row["member_id"] > 0:
+            model_member_ids.setdefault(row["model_id"], set()).add(row["member_id"])
+    member_counts = {mid: len(mids) for mid, mids in model_member_ids.items()}
+
     tempest = db.latest_tempest_obs(conn_in)
     nws = db.latest_nws_obs(conn_in)
     tempest_history = db.recent_tempest_obs(conn_in)
     nws_history = db.recent_nws_obs(conn_in)
 
     now = int(time.time())
-    summary_10 = db.score_summary_last_n_runs(conn_out, 10)
-    summary_7d = db.score_summary_since(conn_out, now - 7 * 86400)
-    timeseries = db.score_timeseries(conn_out)
+    summary_10 = [r for r in db.score_summary_last_n_runs(conn_out, 10) if r["member_id"] == 0]
+    summary_7d = [r for r in db.score_summary_since(conn_out, now - 7 * 86400) if r["member_id"] == 0]
+    timeseries = [r for r in db.score_timeseries(conn_out) if r["member_id"] == 0]
 
-    lead_times = sorted({row["lead_hours"] for row in all_rows})
-    charts = _chart_data(all_rows)
+    lead_times = sorted({row["lead_hours"] for row in mean_rows})
+    charts = _chart_data(mean_rows)
     mae_ts = _mae_timeseries_data(timeseries)
     generated_at = fmt.ts(now)
 
     tempest_card = _conditions_card("Tempest", tempest)
     nws_card = _conditions_card("NWS", nws)
-    model_runs = _model_runs_html(all_rows, lead_times)
+    model_runs = _model_runs_html(mean_rows, lead_times, member_counts)
     obs_section = _obs_history_section(tempest_history, nws_history)
     tempest_rows = [_tempest_obs_row(r) for r in tempest_history]
     nws_rows = [_nws_obs_row(r) for r in nws_history]
@@ -610,7 +626,7 @@ def generate(
 </header>
 
 <section class="section">
-  <h2>Current Conditions</h2>
+  <h2>Latest Conditions</h2>
   <div class="conditions-grid">
     {tempest_card}
     {nws_card}
