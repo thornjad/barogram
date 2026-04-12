@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS models (
 
 INSERT OR IGNORE INTO models (id, name, type) VALUES (1, 'persistence', 'base');
 INSERT OR IGNORE INTO models (id, name, type) VALUES (2, 'climatological_mean', 'base');
+INSERT OR IGNORE INTO models (id, name, type) VALUES (3, 'weighted_climatological_mean', 'base');
 INSERT OR IGNORE INTO models (id, name, type) VALUES (100, 'ensemble', 'ensemble');
 
 CREATE TABLE IF NOT EXISTS forecasts (

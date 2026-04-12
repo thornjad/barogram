@@ -13,8 +13,9 @@ import db
 import fmt
 import models.climatological_mean as climatological_mean
 import models.persistence as persistence
+import models.weighted_climatological_mean as weighted_climatological_mean
 
-_MODELS = [persistence, climatological_mean]
+_MODELS = [persistence, climatological_mean, weighted_climatological_mean]
 import score as scorer
 
 

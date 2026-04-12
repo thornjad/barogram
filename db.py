@@ -149,6 +149,26 @@ def climo_bucket_means(
     }
 
 
+def climo_bucket_obs(
+    conn: sqlite3.Connection,
+    month: int,
+    hour: int,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT t.timestamp, t.air_temp, t.relative_humidity,
+               t.station_pressure, t.wind_avg
+        FROM tempest_obs t
+        JOIN stations s ON s.station_id = t.station_id
+        WHERE s.source = 'tempest'
+          AND CAST(strftime('%m', datetime(t.timestamp, 'unixepoch', 'localtime')) AS INTEGER) = ?
+          AND CAST(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) AS INTEGER) = ?
+        ORDER BY t.timestamp DESC
+        """,
+        (month, hour),
+    ).fetchall()
+
+
 def update_scored_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
     conn.execute("BEGIN")
     try:
