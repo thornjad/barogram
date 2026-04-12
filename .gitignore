@@ -6,3 +6,5 @@ dashboard.html
 .venv/
 __pycache__/
 *.pyc
+.playwright-mcp/
+*.png

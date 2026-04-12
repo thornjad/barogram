@@ -86,6 +86,7 @@ table.forecast-table td {
 }
 table.forecast-table th { text-align: left; font-weight: 500; color: #555; }
 table.forecast-table thead th { background: #f9f9f9; font-weight: 600; color: #1a1a1a; }
+table.forecast-table thead th:not(:first-child) { text-align: right; }
 table.forecast-table tbody tr:last-child td,
 table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .charts-grid {
@@ -159,39 +160,18 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .model-header th { background: #f0f0f0; font-size: 11px; color: #555; padding: 4px 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .ensemble-header th { background: #eff4ff; font-size: 11px; color: #3b5bdb; padding: 4px 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .ensemble-row th, .ensemble-row td { background: #f8faff; }
+.model-runs { display: flex; flex-direction: column; gap: 20px; }
+.model-run-card { background: #fff; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
+.model-run-header { display: flex; align-items: baseline; gap: 10px; padding: 10px 16px; background: #f9f9f9; border-bottom: 1px solid #eee; }
+.model-run-header strong { font-size: 14px; }
+.base-badge, .ensemble-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.base-badge { background: #e8f4e8; color: #2d6a2d; }
+.ensemble-badge { background: #eff4ff; color: #3b5bdb; }
+.run-detail { font-size: 12px; color: #666; margin-left: auto; }
 @media (max-width: 600px) {
     .conditions-grid, .charts-grid, .verification-windows { grid-template-columns: 1fr; }
 }
 """
-
-
-def _latest_run(conn_out: sqlite3.Connection) -> int | None:
-    row = conn_out.execute("SELECT MAX(issued_at) FROM forecasts").fetchone()
-    return row[0] if row and row[0] is not None else None
-
-
-def _run_rows(conn_out: sqlite3.Connection, issued_at: int) -> list:
-    return conn_out.execute(
-        """
-        SELECT variable, lead_hours, value, valid_at, model_id, model
-        FROM forecasts WHERE issued_at = ?
-        ORDER BY variable, model_id, lead_hours
-        """,
-        (issued_at,),
-    ).fetchall()
-
-
-def _model_name(conn_out: sqlite3.Connection, issued_at: int) -> str:
-    row = conn_out.execute(
-        """
-        SELECT m.name FROM models m
-        JOIN forecasts f ON f.model_id = m.id
-        WHERE f.issued_at = ?
-        LIMIT 1
-        """,
-        (issued_at,),
-    ).fetchone()
-    return row[0] if row else "unknown"
 
 
 def _table_data(rows) -> dict:
@@ -283,6 +263,33 @@ def _forecast_table_html(table: dict, lead_times: list) -> str:
         f'<tbody>{"".join(rows)}</tbody>'
         '</table>'
     )
+
+
+def _model_runs_html(rows: list, lead_times: list) -> str:
+    by_model: dict = {}
+    for row in rows:
+        key = (row["model_id"], row["model"], row["type"], row["issued_at"])
+        by_model.setdefault(key, []).append(row)
+
+    sorted_keys = sorted(by_model, key=lambda k: (0 if k[2] == "base" else 1, k[1]))
+    cards = []
+    for (model_id, model, mtype, issued_at) in sorted_keys:
+        model_rows = by_model[(model_id, model, mtype, issued_at)]
+        table = _table_data(model_rows)
+        n = len(model_rows)
+        badge_class = "ensemble-badge" if mtype == "ensemble" else "base-badge"
+        table_html = _forecast_table_html(table, lead_times)
+        cards.append(
+            f'<div class="model-run-card">'
+            f'<div class="model-run-header">'
+            f'<strong>{model}</strong>'
+            f'<span class="{badge_class}">{mtype}</span>'
+            f'<span class="run-detail">issued {fmt.ts(issued_at)} &mdash; {n} rows</span>'
+            f'</div>'
+            f'{table_html}'
+            f'</div>'
+        )
+    return "\n".join(cards)
 
 
 def _tempest_obs_row(row) -> str:
@@ -543,14 +550,12 @@ def generate(
     conn_out: sqlite3.Connection,
     output_path: Path,
 ) -> None:
-    issued_at = _latest_run(conn_out)
-    if issued_at is None:
+    all_rows = db.latest_forecast_per_model(conn_out)
+    if not all_rows:
         raise ValueError(
             "no forecasts in output database \u2014 run barogram.py forecast first"
         )
 
-    rows = _run_rows(conn_out, issued_at)
-    model_name = _model_name(conn_out, issued_at)
     tempest = db.latest_tempest_obs(conn_in)
     nws = db.latest_nws_obs(conn_in)
     tempest_history = db.recent_tempest_obs(conn_in)
@@ -561,15 +566,14 @@ def generate(
     summary_7d = db.score_summary_since(conn_out, now - 7 * 86400)
     timeseries = db.score_timeseries(conn_out)
 
-    lead_times = sorted({row["lead_hours"] for row in rows})
-    table = _table_data(rows)
-    charts = _chart_data(rows)
+    lead_times = sorted({row["lead_hours"] for row in all_rows})
+    charts = _chart_data(all_rows)
     mae_ts = _mae_timeseries_data(timeseries)
     generated_at = fmt.ts(now)
 
     tempest_card = _conditions_card("Tempest", tempest)
     nws_card = _conditions_card("NWS", nws)
-    forecast_table = _forecast_table_html(table, lead_times)
+    model_runs = _model_runs_html(all_rows, lead_times)
     obs_section = _obs_history_section(tempest_history, nws_history)
     tempest_rows = [_tempest_obs_row(r) for r in tempest_history]
     nws_rows = [_nws_obs_row(r) for r in nws_history]
@@ -613,26 +617,9 @@ def generate(
   </div>
 </section>
 
-{obs_section}
-
 <section class="section">
-  <h2>Latest Forecast Run</h2>
-  <div class="run-meta">
-    <strong>{model_name}</strong> &mdash;
-    issued {fmt.ts(issued_at)}
-  </div>
-</section>
-
-<section class="section">
-  <h2>Forecast Table</h2>
-  {forecast_table}
-</section>
-
-<section class="section">
-  <h2>Forecast Charts</h2>
-  <div class="charts-grid">
-    {chart_divs}
-  </div>
+  <h2>Ensemble Forecast</h2>
+  <p class="muted">Ensemble model not yet available &mdash; in development.</p>
 </section>
 
 <section class="section">
@@ -646,6 +633,19 @@ def generate(
     {mae_chart_divs}
   </div>
 </section>
+
+<section class="section">
+  <h2>Latest Forecast Run</h2>
+  <div class="model-runs">
+    {model_runs}
+  </div>
+  <h3 class="obs-subhead">Forecast Charts</h3>
+  <div class="charts-grid">
+    {chart_divs}
+  </div>
+</section>
+
+{obs_section}
 
 </div>
 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>

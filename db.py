@@ -233,6 +233,24 @@ def score_timeseries(conn: sqlite3.Connection) -> list:
     ).fetchall()
 
 
+def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
+    """All rows from each model's most recent run, ordered by type then name."""
+    return conn.execute(
+        """
+        SELECT f.model_id, f.model, m.type, f.issued_at,
+               f.variable, f.lead_hours, f.value, f.valid_at
+        FROM forecasts f
+        JOIN models m ON m.id = f.model_id
+        WHERE f.issued_at = (
+            SELECT MAX(f2.issued_at)
+            FROM forecasts f2
+            WHERE f2.model_id = f.model_id
+        )
+        ORDER BY m.type, f.model, f.variable, f.lead_hours
+        """
+    ).fetchall()
+
+
 def open_output_db(path: str) -> sqlite3.Connection:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
