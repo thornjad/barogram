@@ -23,7 +23,9 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
    - `NEEDS_CONN_IN = True` if the model needs historical DB access, else omit
    - `run(obs, issued_at, *, conn_in=None) -> list[dict]` returning forecast dicts
 
-2. Add an `INSERT OR IGNORE` for the model row directly to `migrations/001_baseline.sql`.
+2. Add an `INSERT OR IGNORE` for the model row to `migrations/001_baseline.sql` (models
+   table) and a row for each member to the members table. Single-member models need one
+   members row: `(model_id, 0, NULL)`.
 
 3. Add the model to `_MODELS` in `barogram.py`.
 
@@ -37,15 +39,29 @@ Every dict returned by `run()` must have these keys:
 {
     "model_id": int,
     "model": str,
-    "issued_at": int,   # unix epoch
-    "valid_at": int,    # unix epoch
-    "lead_hours": int,  # one of [6, 12, 18, 24]
-    "variable": str,    # "temperature" | "humidity" | "pressure" | "wind_speed"
+    "issued_at": int,    # unix epoch
+    "valid_at": int,     # unix epoch
+    "lead_hours": int,   # one of [6, 12, 18, 24]
+    "variable": str,     # "temperature" | "humidity" | "pressure" | "wind_speed"
     "value": float | None,
+    # optional — single-member models may omit; insert_forecasts applies defaults
+    "member_id": int,    # default 0; 1+ for named members of a multi-member model
+    "spread": float | None,  # default None; non-None only on member_id=0 rows
+                             # for multi-member models (ensemble spread)
 }
 ```
 
 `value=None` is valid — the scoring engine skips those rows.
+
+### Multi-member models
+
+A multi-member model produces one batch of rows per member (member_id 1+), plus a
+member_id=0 row per (lead_hours, variable) holding the ensemble mean as `value` and the
+ensemble spread as `spread`. All members share the same `issued_at`.
+
+Register each `(model_id, member_id, name)` pair in the members table in
+`migrations/001_baseline.sql`. Member names should be short descriptive labels
+(e.g. `"week-heavy"`, `"exponential"`). The member_id=0 row has `name=NULL`.
 
 ## Model inventory
 
