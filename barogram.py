@@ -11,7 +11,10 @@ import config as cfg
 import dashboard as dash
 import db
 import fmt
+import models.climatological_mean as climatological_mean
 import models.persistence as persistence
+
+_MODELS = [persistence, climatological_mean]
 import score as scorer
 
 
@@ -83,14 +86,14 @@ def cmd_forecast(args, conf):
     if obs is None:
         sys.exit("error: no Tempest observations in input database")
 
-    rows = persistence.run(obs, issued_at)
-    db.insert_forecasts(conn_out, rows)
-
-    valid_start = fmt.ts(obs["timestamp"] + 6 * 3600)
-    valid_end = fmt.ts(obs["timestamp"] + 24 * 3600)
-    print(f"persistence: {len(rows)} forecasts issued at {fmt.ts(issued_at)}")
-    print(f"  obs:   {fmt.ts(obs['timestamp'])}")
-    print(f"  valid: {valid_start} \u2014 {valid_end}")
+    print(f"issued at {fmt.ts(issued_at)}, obs {fmt.ts(obs['timestamp'])}")
+    for model in _MODELS:
+        if getattr(model, "NEEDS_CONN_IN", False):
+            rows = model.run(obs, issued_at, conn_in=conn_in)
+        else:
+            rows = model.run(obs, issued_at)
+        db.insert_forecasts(conn_out, rows)
+        print(f"  {model.MODEL_NAME}: {len(rows)} forecasts")
 
 
 def cmd_run(args, conf):
@@ -119,13 +122,14 @@ def cmd_run(args, conf):
     if obs is None:
         sys.exit("error: no Tempest observations in input database")
 
-    rows = persistence.run(obs, issued_at)
-    db.insert_forecasts(conn_out, rows)
-    valid_start = fmt.ts(obs["timestamp"] + 6 * 3600)
-    valid_end = fmt.ts(obs["timestamp"] + 24 * 3600)
-    print(f"forecast: {len(rows)} rows issued at {fmt.ts(issued_at)}")
-    print(f"  obs:   {fmt.ts(obs['timestamp'])}")
-    print(f"  valid: {valid_start} \u2014 {valid_end}")
+    print(f"forecast: issued at {fmt.ts(issued_at)}, obs {fmt.ts(obs['timestamp'])}")
+    for model in _MODELS:
+        if getattr(model, "NEEDS_CONN_IN", False):
+            rows = model.run(obs, issued_at, conn_in=conn_in)
+        else:
+            rows = model.run(obs, issued_at)
+        db.insert_forecasts(conn_out, rows)
+        print(f"  {model.MODEL_NAME}: {len(rows)} forecasts")
 
     dash.generate(conn_in, conn_out, output)
     print(f"dashboard: {output}")

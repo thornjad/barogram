@@ -117,6 +117,38 @@ def nearest_tempest_obs(
     ).fetchone()
 
 
+def climo_bucket_means(
+    conn: sqlite3.Connection,
+    month: int,
+    hour: int,
+    min_obs: int = 30,
+) -> dict[str, float | None]:
+    row = conn.execute(
+        """
+        SELECT
+            AVG(t.air_temp)           AS temperature,
+            AVG(t.relative_humidity)  AS humidity,
+            AVG(t.station_pressure)   AS pressure,
+            AVG(t.wind_avg)           AS wind_speed,
+            COUNT(*)                  AS n
+        FROM tempest_obs t
+        JOIN stations s ON s.station_id = t.station_id
+        WHERE s.source = 'tempest'
+          AND CAST(strftime('%m', datetime(t.timestamp, 'unixepoch', 'localtime')) AS INTEGER) = ?
+          AND CAST(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) AS INTEGER) = ?
+        """,
+        (month, hour),
+    ).fetchone()
+    if row is None or row["n"] < min_obs:
+        return {}
+    return {
+        "temperature": row["temperature"],
+        "humidity": row["humidity"],
+        "pressure": row["pressure"],
+        "wind_speed": row["wind_speed"],
+    }
+
+
 def update_scored_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
     conn.execute("BEGIN")
     try:
