@@ -93,6 +93,8 @@ def cmd_forecast(args, conf):
         else:
             rows = model.run(obs, issued_at)
         db.insert_forecasts(conn_out, rows)
+        print(f"  {model.MODEL_NAME}: {len(rows)} rows")
+    print("forecast complete")
 
 
 def cmd_run(args, conf):
@@ -112,20 +114,26 @@ def cmd_run(args, conf):
     conn_out = db.open_output_db(conf.output_db)
     db.run_migrations(conn_out, migrations_dir)
 
-    scorer.run(conn_in, conn_out)
+    print("scoring...")
+    result = scorer.run(conn_in, conn_out)
+    print(f"  scored {result['scored']}, skipped {result['skipped']}")
 
     obs = db.latest_tempest_obs(conn_in)
     if obs is None:
         sys.exit("error: no Tempest observations in input database")
 
+    print("forecasting...")
     for model in _MODELS:
         if getattr(model, "NEEDS_CONN_IN", False):
             rows = model.run(obs, issued_at, conn_in=conn_in)
         else:
             rows = model.run(obs, issued_at)
         db.insert_forecasts(conn_out, rows)
+        print(f"  {model.MODEL_NAME}: {len(rows)} rows")
 
+    print("building dashboard...")
     dash.generate(conn_in, conn_out, output)
+    print(f"  wrote {output}")
 
 
 def cmd_dashboard(args, conf):
@@ -148,6 +156,7 @@ def cmd_dashboard(args, conf):
         dash.generate(conn_in, conn_out, output)
     except ValueError as e:
         sys.exit(f"error: {e}")
+    print(f"wrote {output}")
 
 
 def cmd_score(args, conf):
@@ -165,7 +174,8 @@ def cmd_score(args, conf):
     conn_out = db.open_output_db(conf.output_db)
     db.run_migrations(conn_out, migrations_dir)
 
-    scorer.run(conn_in, conn_out)
+    result = scorer.run(conn_in, conn_out)
+    print(f"scored {result['scored']}, skipped {result['skipped']}")
 
 
 def main():
