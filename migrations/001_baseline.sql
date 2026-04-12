@@ -1,11 +1,14 @@
-CREATE TABLE models (
+CREATE TABLE IF NOT EXISTS models (
     id   INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
+    name TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL DEFAULT 'base'
 );
 
-INSERT INTO models (id, name) VALUES (1, 'persistence');
+INSERT OR IGNORE INTO models (id, name, type) VALUES (1, 'persistence', 'base');
+INSERT OR IGNORE INTO models (id, name, type) VALUES (2, 'climatological_mean', 'base');
+INSERT OR IGNORE INTO models (id, name, type) VALUES (100, 'ensemble', 'ensemble');
 
-CREATE TABLE forecasts (
+CREATE TABLE IF NOT EXISTS forecasts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     model_id    INTEGER NOT NULL REFERENCES models(id),
     model       TEXT    NOT NULL,  -- denormalized for query convenience
@@ -20,11 +23,11 @@ CREATE TABLE forecasts (
     mae         REAL
 );
 
-CREATE INDEX idx_forecasts_lookup
+CREATE INDEX IF NOT EXISTS idx_forecasts_lookup
     ON forecasts (model_id, variable, valid_at);
 
-CREATE INDEX idx_forecasts_issued
+CREATE INDEX IF NOT EXISTS idx_forecasts_issued
     ON forecasts (issued_at);
 
-CREATE INDEX idx_forecasts_scoring
+CREATE INDEX IF NOT EXISTS idx_forecasts_scoring
     ON forecasts (valid_at, scored_at);

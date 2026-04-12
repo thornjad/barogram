@@ -23,10 +23,7 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
    - `NEEDS_CONN_IN = True` if the model needs historical DB access, else omit
    - `run(obs, issued_at, *, conn_in=None) -> list[dict]` returning forecast dicts
 
-2. Add a migration `migrations/00N_<name>.sql` seeding the model row:
-   ```sql
-   INSERT OR IGNORE INTO models (id, name, type) VALUES (N, '<name>', 'base');
-   ```
+2. Add an `INSERT OR IGNORE` for the model row directly to `migrations/001_baseline.sql`.
 
 3. Add the model to `_MODELS` in `barogram.py`.
 
@@ -68,7 +65,7 @@ Every dict returned by `run()` must have these keys:
 - `fmt.py` — shared formatting helpers
 - `migrations/` — numbered SQL files, run automatically at startup
 - `models/` — one file per model
-- `docs/` — one Markdown doc per model plus `README.md` index
+- `docs/` — one Markdown doc per model plus `README.md` index and `database.md` (schema evolution rules)
 
 ## Config
 
