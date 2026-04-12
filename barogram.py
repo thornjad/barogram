@@ -93,6 +93,44 @@ def cmd_forecast(args, conf):
     print(f"  valid: {valid_start} \u2014 {valid_end}")
 
 
+def cmd_run(args, conf):
+    issued_at = int(time.time())
+    output = Path(__file__).parent / "dashboard.html"
+    migrations_dir = Path(__file__).parent / "migrations"
+
+    try:
+        conn_in = db.open_input_db(conf.input_db)
+    except FileNotFoundError as e:
+        sys.exit(f"error: {e}")
+    try:
+        db.validate_schema(conn_in)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+
+    conn_out = db.open_output_db(conf.output_db)
+    db.run_migrations(conn_out, migrations_dir)
+
+    result = scorer.run(conn_in, conn_out)
+    print(
+        f"score: {result['scored']} scored, {result['skipped']} skipped"
+    )
+
+    obs = db.latest_tempest_obs(conn_in)
+    if obs is None:
+        sys.exit("error: no Tempest observations in input database")
+
+    rows = persistence.run(obs, issued_at)
+    db.insert_forecasts(conn_out, rows)
+    valid_start = fmt.ts(obs["timestamp"] + 6 * 3600)
+    valid_end = fmt.ts(obs["timestamp"] + 24 * 3600)
+    print(f"forecast: {len(rows)} rows issued at {fmt.ts(issued_at)}")
+    print(f"  obs:   {fmt.ts(obs['timestamp'])}")
+    print(f"  valid: {valid_start} \u2014 {valid_end}")
+
+    dash.generate(conn_in, conn_out, output)
+    print(f"dashboard: {output}")
+
+
 def cmd_dashboard(args, conf):
     output = Path(__file__).parent / "dashboard.html"
     migrations_dir = Path(__file__).parent / "migrations"
@@ -200,6 +238,9 @@ def main():
         help="config file (default: barogram.toml next to this script)",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="command")
+    subparsers.add_parser(
+        "run", help="score pending forecasts, run models, and rebuild dashboard"
+    )
     subparsers.add_parser("conditions", help="show latest observed conditions")
     subparsers.add_parser(
         "forecast", help="run forecast models and write to output database"
@@ -219,7 +260,9 @@ def main():
 
     conf = cfg.load(args.config)
 
-    if args.command == "conditions":
+    if args.command == "run":
+        cmd_run(args, conf)
+    elif args.command == "conditions":
         cmd_conditions(args, conf)
     elif args.command == "forecast":
         cmd_forecast(args, conf)
