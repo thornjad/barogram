@@ -189,15 +189,15 @@ def update_scored_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
 def score_summary(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """
-        SELECT f.model, m.type, f.member_id, mem.name AS member_name,
+        SELECT f.model_id, f.model, m.type, f.member_id, mem.name AS member_name,
                f.variable, f.lead_hours,
                COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
         FROM forecasts f
         JOIN models m ON m.id = f.model_id
         LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
         WHERE f.scored_at IS NOT NULL
-        GROUP BY f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
-        ORDER BY m.type, f.model, f.member_id, f.variable, f.lead_hours
+        GROUP BY f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
+        ORDER BY f.model_id, f.member_id, f.variable, f.lead_hours
         """
     ).fetchall()
 
@@ -205,15 +205,15 @@ def score_summary(conn: sqlite3.Connection) -> list:
 def score_summary_since(conn: sqlite3.Connection, since: int) -> list:
     return conn.execute(
         """
-        SELECT f.model, m.type, f.member_id, mem.name AS member_name,
+        SELECT f.model_id, f.model, m.type, f.member_id, mem.name AS member_name,
                f.variable, f.lead_hours,
                COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
         FROM forecasts f
         JOIN models m ON m.id = f.model_id
         LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
         WHERE f.scored_at IS NOT NULL AND f.issued_at >= ?
-        GROUP BY f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
-        ORDER BY m.type, f.model, f.member_id, f.variable, f.lead_hours
+        GROUP BY f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
+        ORDER BY f.model_id, f.member_id, f.variable, f.lead_hours
         """,
         (since,),
     ).fetchall()
@@ -229,7 +229,7 @@ def score_summary_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
             ORDER BY issued_at DESC
             LIMIT ?
         )
-        SELECT f.model, m.type, f.member_id, mem.name AS member_name,
+        SELECT f.model_id, f.model, m.type, f.member_id, mem.name AS member_name,
                f.variable, f.lead_hours,
                COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
         FROM forecasts f
@@ -237,8 +237,8 @@ def score_summary_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
         LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
         JOIN recent r ON r.issued_at = f.issued_at
         WHERE f.scored_at IS NOT NULL
-        GROUP BY f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
-        ORDER BY m.type, f.model, f.member_id, f.variable, f.lead_hours
+        GROUP BY f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
+        ORDER BY f.model_id, f.member_id, f.variable, f.lead_hours
         """,
         (n,),
     ).fetchall()
