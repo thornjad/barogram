@@ -18,7 +18,7 @@ def wind_dir(degrees: int | None) -> str:
 def temp(c: float | None) -> str:
     if c is None:
         return "\u2014"
-    return f"{c:.1f}\u00b0C ({c * 9/5 + 32:.1f}\u00b0F)"
+    return f"{c * 9/5 + 32:.1f}\u00b0F"
 
 
 def val(v, spec=".1f", unit="") -> str:
@@ -29,3 +29,7 @@ def val(v, spec=".1f", unit="") -> str:
 
 def ts(epoch: int) -> str:
     return datetime.fromtimestamp(epoch, tz=CENTRAL).strftime("%Y-%m-%d %H:%M %Z")
+
+
+def short_ts(epoch: int) -> str:
+    return datetime.fromtimestamp(epoch, tz=CENTRAL).strftime("%b %-d %H:%M")
