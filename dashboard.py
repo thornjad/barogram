@@ -6,21 +6,37 @@ from pathlib import Path
 import db
 import fmt
 
-VARIABLES = ["temperature", "humidity", "pressure", "wind_speed"]
+VARIABLES = ["temperature", "dewpoint", "pressure", "wind_speed"]
 
 _VARIABLE_LABEL = {
     "temperature": "Temperature",
-    "humidity": "Humidity",
+    "dewpoint": "Dew Point",
     "pressure": "Pressure",
     "wind_speed": "Wind Speed",
 }
 
 _UNIT = {
-    "temperature": "\u00b0C",
-    "humidity": "%",
+    "temperature": "\u00b0F",
+    "dewpoint": "\u00b0F",
     "pressure": "mb",
-    "wind_speed": "m/s",
+    "wind_speed": "mph",
 }
+
+
+def _to_f(c):
+    return None if c is None else c * 9 / 5 + 32
+
+
+def _to_mph(ms):
+    return None if ms is None else ms * 2.23694
+
+
+def _diff_to_f(v):
+    return None if v is None else v * 1.8
+
+
+def _to_in(mm):
+    return None if mm is None else mm / 25.4
 
 _CSS = """\
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -94,11 +110,28 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     grid-template-columns: 1fr 1fr;
     gap: 16px;
 }
+.mae-charts-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.mae-filter-bar { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+.mae-filter-btn, .fcst-filter-btn,
+.bias-filter-btn, .lead-skill-filter-btn, .heatmap-filter-btn,
+.diurnal-filter-btn, .error-dist-var-btn, .error-dist-lead-btn { padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #444; }
+.mae-filter-btn:hover, .fcst-filter-btn:hover,
+.bias-filter-btn:hover, .lead-skill-filter-btn:hover, .heatmap-filter-btn:hover,
+.diurnal-filter-btn:hover, .error-dist-var-btn:hover, .error-dist-lead-btn:hover { background: #f0f0f0; }
+.mae-filter-btn.active, .fcst-filter-btn.active,
+.bias-filter-btn.active, .lead-skill-filter-btn.active, .heatmap-filter-btn.active,
+.diurnal-filter-btn.active, .error-dist-var-btn.active, .error-dist-lead-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.mae-raw-btn { margin-left: auto; padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #666; }
+.mae-raw-btn:hover { background: #f0f0f0; }
+.mae-raw-btn.active { background: #555; color: #fff; border-color: #555; }
 .chart-container {
     background: #fff;
     border: 1px solid #ddd;
     border-radius: 4px;
-    overflow: hidden;
 }
 .muted { color: #888; font-style: italic; font-size: 13px; }
 .obs-subhead { margin-top: 20px; margin-bottom: 6px; }
@@ -164,9 +197,13 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .model-run-card { background: #fff; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
 .model-run-header { display: flex; align-items: baseline; gap: 10px; padding: 10px 16px; background: #f9f9f9; border-bottom: 1px solid #eee; }
 .model-run-header strong { font-size: 14px; }
-.base-badge, .ensemble-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.base-badge, .ensemble-badge, .baseline-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .base-badge { background: #e8f4e8; color: #2d6a2d; }
 .ensemble-badge { background: #eff4ff; color: #3b5bdb; }
+.baseline-badge { background: #ece9e0; color: #aaa; }
+.mae-summary-table .baseline-row th { color: #bbb; }
+.baseline-row td { color: #bbb; }
+.baseline-row .model-id-cell { color: #888; }
 .member-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 500; background: #f5f0ff; color: #6b3fa0; }
 .run-detail { font-size: 12px; color: #666; margin-left: auto; }
 .mae-summary-table {
@@ -192,6 +229,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .mae-summary-table thead th:not(:nth-child(2)) { text-align: right; }
 .score-table thead th:not(:first-child) { text-align: right; }
 .mae-better { color: #2a6a2a; font-weight: 600; }
+.mae-baseline-val { color: #bbb; }
 .mae-worse { color: #8b2020; font-weight: 600; }
 .score-details summary {
     cursor: pointer;
@@ -232,6 +270,23 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 }
 .member-btn:hover { background: #f0f0f0; }
 .member-detail-row td { padding: 6px 10px; }
+.mf-btn {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 500;
+    background: #f5f0ff;
+    color: #6b3fa0;
+    border: 1px solid #d4bfff;
+    cursor: pointer;
+    font-family: inherit;
+}
+.mf-btn:hover { background: #ede3ff; }
+.member-forecast-panel {
+    padding: 12px 16px;
+    background: #f8f8ff;
+    border-top: 1px solid #eee;
+}
 @media (max-width: 600px) {
     .conditions-grid, .charts-grid, .verification-windows { grid-template-columns: 1fr; }
 }
@@ -258,9 +313,14 @@ def _chart_data(rows) -> dict:
         if var not in data:
             data[var] = {}
         if model not in data[var]:
-            data[var][model] = {"x": [], "y": []}
-        data[var][model]["x"].append(fmt.ts(row["valid_at"]))
-        data[var][model]["y"].append(row["value"])
+            data[var][model] = {"x": [], "y": [], "model_id": row["model_id"]}
+        v = row["value"]
+        if var == "temperature" or var == "dewpoint":
+            v = _to_f(v)
+        elif var == "wind_speed":
+            v = _to_mph(v)
+        data[var][model]["x"].append(fmt.short_ts(row["valid_at"]))
+        data[var][model]["y"].append(v)
     return data
 
 
@@ -277,14 +337,14 @@ def _conditions_card(label: str, obs) -> str:
 
     if label == "Tempest":
         gust = obs["wind_gust"]
-        gust_str = f", gusts to {fmt.val(gust, '.1f', ' m/s')}" if gust is not None else ""
+        gust_str = f", gusts to {fmt.val(_to_mph(gust), '.1f', ' mph')}" if gust is not None else ""
         lc = obs["lightning_count"]
         rows_html = (
             f'<tr><th>Temperature</th><td>{fmt.temp(obs["air_temp"])}</td></tr>'
-            f'<tr><th>Humidity</th><td>{fmt.val(obs["relative_humidity"], ".0f", "%")}</td></tr>'
+            f'<tr><th>Dew Point</th><td>{fmt.temp(obs["dew_point"])}</td></tr>'
             f'<tr><th>Pressure</th><td>{fmt.val(obs["station_pressure"], ".1f", " mb")} (station)</td></tr>'
-            f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(obs["wind_avg"], ".1f", " m/s")}{gust_str}</td></tr>'
-            f'<tr><th>Precip today</th><td>{fmt.val(obs["precip_accum_day"], ".1f", " mm")}</td></tr>'
+            f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(_to_mph(obs["wind_avg"]), ".1f", " mph")}{gust_str}</td></tr>'
+            f'<tr><th>Precip today</th><td>{fmt.val(_to_in(obs["precip_accum_day"]), ".2f", " in")}</td></tr>'
             f'<tr><th>UV Index</th><td>{fmt.val(obs["uv_index"], ".1f")}</td></tr>'
             f'<tr><th>Solar</th><td>{fmt.val(obs["solar_radiation"], ".0f", " W/m\u00b2")}</td></tr>'
             f'<tr><th>Lightning</th><td>{lc if lc is not None else 0} strikes</td></tr>'
@@ -292,9 +352,8 @@ def _conditions_card(label: str, obs) -> str:
     else:
         rows_html = (
             f'<tr><th>Temperature</th><td>{fmt.temp(obs["air_temp"])}</td></tr>'
-            f'<tr><th>Dewpoint</th><td>{fmt.temp(obs["dew_point"])}</td></tr>'
-            f'<tr><th>Humidity</th><td>{fmt.val(obs["relative_humidity"], ".0f", "%")}</td></tr>'
-            f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(obs["wind_speed"], ".1f", " m/s")}</td></tr>'
+            f'<tr><th>Dew Point</th><td>{fmt.temp(obs["dew_point"])}</td></tr>'
+            f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(_to_mph(obs["wind_speed"]), ".1f", " mph")}</td></tr>'
             f'<tr><th>Pressure</th><td>{fmt.val(obs["sea_level_pressure"], ".1f", " mb")}</td></tr>'
             f'<tr><th>Sky</th><td>{obs["sky_cover"] or "\u2014"}</td></tr>'
             f'<tr><th>METAR</th><td>{obs["raw_metar"] or "\u2014"}</td></tr>'
@@ -318,6 +377,10 @@ def _forecast_table_html(table: dict, lead_times: list) -> str:
         cells = []
         for h in lead_times:
             v = table.get(var, {}).get(h)
+            if var == "temperature" or var == "dewpoint":
+                v = _to_f(v)
+            elif var == "wind_speed":
+                v = _to_mph(v)
             cells.append(f"<td>{fmt.val(v, '.1f', unit)}</td>")
         rows.append(f'<tr><th>{label}</th>{"".join(cells)}</tr>')
 
@@ -329,7 +392,12 @@ def _forecast_table_html(table: dict, lead_times: list) -> str:
     )
 
 
-def _model_runs_html(rows: list, lead_times: list, member_counts: dict | None = None) -> str:
+def _model_runs_html(
+    rows: list,
+    lead_times: list,
+    member_counts: dict | None = None,
+    member_rows: list | None = None,
+) -> str:
     by_model: dict = {}
     for row in rows:
         key = (row["model_id"], row["model"], row["type"], row["issued_at"])
@@ -345,18 +413,25 @@ def _model_runs_html(rows: list, lead_times: list, member_counts: dict | None = 
         )
         table_html = _forecast_table_html(table, lead_times)
         n_members = (member_counts or {}).get(model_id, 0)
-        member_badge = (
-            f'<span class="member-badge">{n_members} members</span>' if n_members else ""
+        member_toggle = (
+            f'<button class="mf-btn" data-model-id="{model_id}">'
+            f'{n_members} members &#x25be;</button>'
+            if n_members else ""
+        )
+        member_panel = (
+            f'<div class="member-forecast-panel" id="mfp-{model_id}" style="display:none"></div>'
+            if n_members else ""
         )
         cards.append(
             f'<div class="model-run-card">'
             f'<div class="model-run-header">'
             f'<strong><span class="model-id-cell">{model_id}</span> {model}</strong>'
             f'{type_badge}'
-            f'{member_badge}'
+            f'{member_toggle}'
             f'<span class="run-detail">issued {fmt.ts(issued_at)} &mdash; {len(model_rows)} rows</span>'
             f'</div>'
             f'{table_html}'
+            f'{member_panel}'
             f'</div>'
         )
     return "\n".join(cards)
@@ -364,18 +439,18 @@ def _model_runs_html(rows: list, lead_times: list, member_counts: dict | None = 
 
 def _tempest_obs_row(row) -> str:
     gust = row["wind_gust"]
-    wind = fmt.wind_dir(row["wind_direction"]) + " " + fmt.val(row["wind_avg"], ".1f", " m/s")
+    wind = fmt.wind_dir(row["wind_direction"]) + " " + fmt.val(_to_mph(row["wind_avg"]), ".1f", " mph")
     if gust is not None:
-        wind += f" g{fmt.val(gust, '.1f')}"
+        wind += f" g{fmt.val(_to_mph(gust), '.1f')}"
     lc = row["lightning_count"]
     return (
         "<tr>"
         f"<td>{fmt.ts(row['timestamp'])}</td>"
         f"<td>{fmt.temp(row['air_temp'])}</td>"
-        f"<td>{fmt.val(row['relative_humidity'], '.0f', '%')}</td>"
+        f"<td>{fmt.temp(row['dew_point'])}</td>"
         f"<td>{fmt.val(row['station_pressure'], '.1f', ' mb')}</td>"
         f"<td>{wind}</td>"
-        f"<td>{fmt.val(row['precip_accum_day'], '.1f', ' mm')}</td>"
+        f"<td>{fmt.val(_to_in(row['precip_accum_day']), '.2f', ' in')}</td>"
         f"<td>{lc if lc is not None else 0}</td>"
         "</tr>"
     )
@@ -387,8 +462,7 @@ def _nws_obs_row(row) -> str:
         f"<td>{fmt.ts(row['timestamp'])}</td>"
         f"<td>{fmt.temp(row['air_temp'])}</td>"
         f"<td>{fmt.temp(row['dew_point'])}</td>"
-        f"<td>{fmt.val(row['relative_humidity'], '.0f', '%')}</td>"
-        f"<td>{fmt.wind_dir(row['wind_direction'])} {fmt.val(row['wind_speed'], '.1f', ' m/s')}</td>"
+        f"<td>{fmt.wind_dir(row['wind_direction'])} {fmt.val(_to_mph(row['wind_speed']), '.1f', ' mph')}</td>"
         f"<td>{fmt.val(row['sea_level_pressure'], '.1f', ' mb')}</td>"
         f"<td>{row['sky_cover'] or '\u2014'}</td>"
         "</tr>"
@@ -423,11 +497,11 @@ def _obs_history_section(tempest_obs: list, nws_obs: list) -> str:
 
     tempest_block = table_block(
         "Tempest", tempest_obs, "tempest-obs-tbody", "tempest-more-btn",
-        ["Time", "Temperature", "Humidity", "Pressure", "Wind", "Precip (day)", "Lightning"],
+        ["Time", "Temperature", "Dew Point", "Pressure", "Wind", "Precip (day)", "Lightning"],
     )
     nws_block = table_block(
         "NWS", nws_obs, "nws-obs-tbody", "nws-more-btn",
-        ["Time", "Temperature", "Dewpoint", "Humidity", "Wind", "Pressure", "Sky"],
+        ["Time", "Temperature", "Dew Point", "Wind", "Pressure", "Sky"],
     )
 
     return (
@@ -546,15 +620,30 @@ def _score_summary_table(
     summary_tbody = []
     for name in sorted_names:
         m = model_summary[name]
-        badge = (
-            f'<span class="ensemble-badge">{m["type"]}</span>'
-            if m["type"] == "ensemble" else ""
-        )
+        if name == "persistence":
+            badge = '<span class="baseline-badge">baseline</span>'
+        elif m["type"] == "ensemble":
+            badge = f'<span class="ensemble-badge">{m["type"]}</span>'
+        else:
+            badge = ""
 
-        avg_cls = _mae_color_class(m["avg_mae"], p_avg) if name != "persistence" else ""
-        h24_cls = _mae_color_class(m["mae_24h"], p_24h) if name != "persistence" else ""
-        avg_str = f'<span{avg_cls}>{m["avg_mae"]:.2f}</span>' if m["avg_mae"] is not None else "\u2014"
-        h24_str = f'<span{h24_cls}>{m["mae_24h"]:.2f}</span>' if m["mae_24h"] is not None else "\u2014"
+        if name == "persistence":
+            avg_ratio = 1.0 if m["avg_mae"] is not None else None
+            h24_ratio = 1.0 if m["mae_24h"] is not None else None
+        else:
+            avg_ratio = m["avg_mae"] / p_avg if (m["avg_mae"] is not None and p_avg) else None
+            h24_ratio = m["mae_24h"] / p_24h if (m["mae_24h"] is not None and p_24h) else None
+        avg_cls = _mae_color_class(avg_ratio, 1.0) if name != "persistence" and avg_ratio is not None else ""
+        h24_cls = _mae_color_class(h24_ratio, 1.0) if name != "persistence" and h24_ratio is not None else ""
+        def _cell(ratio, raw, cls, is_baseline=False):
+            if ratio is None:
+                return "\u2014"
+            raw_str = f"{raw:.2f}" if raw is not None else "\u2014"
+            effective_cls = ' class="mae-baseline-val"' if is_baseline else cls
+            return f'<span{effective_cls} data-raw="{raw_str}" data-ratio="{ratio:.2f}">{ratio:.2f}</span>'
+        is_baseline = name == "persistence"
+        avg_str = _cell(avg_ratio, m["avg_mae"], avg_cls, is_baseline)
+        h24_str = _cell(h24_ratio, m["mae_24h"], h24_cls, is_baseline)
 
         has_members = bool(member_models) and name in member_models
         safe = name.replace("_", "-").replace(" ", "-")
@@ -568,8 +657,9 @@ def _score_summary_table(
             f'</tr>'
             if has_members else ""
         )
+        row_cls = ' class="baseline-row"' if name == 'persistence' else ''
         summary_tbody.append(
-            f'<tr>'
+            f'<tr{row_cls}>'
             f'<td class="model-id-cell">{m["model_id"]}</td>'
             f'<th>{name} {badge}</th>'
             f'<td>{avg_str}</td>'
@@ -581,7 +671,7 @@ def _score_summary_table(
 
     summary_table = (
         '<table class="mae-summary-table">'
-        '<thead><tr><th>ID</th><th>Model</th><th>Avg MAE</th><th>+24h MAE</th><th></th></tr></thead>'
+        '<thead><tr><th>ID</th><th>Model</th><th class="col-avg-hdr">Avg skill ratio</th><th class="col-24h-hdr">+24h skill ratio</th><th></th></tr></thead>'
         f'<tbody>{"".join(summary_tbody)}</tbody>'
         '</table>'
     )
@@ -614,7 +704,13 @@ def _score_summary_table(
             for l in leads:
                 if l in var_data[var]:
                     mae, bias = var_data[var][l]
-                    sign = "+" if bias >= 0 else ""
+                    if var in ("temperature", "dewpoint"):
+                        mae = _diff_to_f(mae)
+                        bias = _diff_to_f(bias)
+                    elif var == "wind_speed":
+                        mae = _to_mph(mae)
+                        bias = _to_mph(bias)
+                    sign = "+" if (bias or 0) >= 0 else ""
                     cells.append(f"<td>{mae:.2f}<small>{sign}{bias:.2f}</small></td>")
                 else:
                     cells.append("<td>\u2014</td>")
@@ -642,57 +738,447 @@ def _score_summary_table(
 
 
 def _mae_timeseries_data(timeseries_rows: list) -> dict:
-    """variable -> 'model +Nh' -> {x, y, is_ensemble}"""
-    data: dict = {}
+    """lead (str) -> model -> {is_persistence, is_ensemble, series: {var|avg -> {x, y_raw, y_ratio}}}
+
+    y_ratio = MAE / persistence_MAE for the same (var, lead, issued_at).
+    Persistence series always has y_ratio = 1.0. Average series ratios are
+    the mean ratio across variables (dimensionless, comparable across vars).
+    """
+    raw: dict = {}
+    model_meta: dict = {}
     for row in timeseries_rows:
+        lead = row["lead_hours"]
+        model_meta[row["model"]] = {"is_ensemble": row["type"] == "ensemble", "model_id": row["model_id"]}
+        raw.setdefault(lead, {}).setdefault(row["model"], {}).setdefault(
+            row["variable"], {}
+        )[row["issued_at"]] = row["avg_mae"]
+
+    result: dict = {}
+    for lead in sorted(raw):
+        # persistence MAE for this lead: var -> issued_at -> mae
+        p_ts: dict = raw[lead].get("persistence", {})
+        result[str(lead)] = {}
+        for model, vars_ in raw[lead].items():
+            is_persistence = model == "persistence"
+            is_ensemble = model_meta[model]["is_ensemble"]
+            series: dict = {}
+            for var, ts in vars_.items():
+                p_var = p_ts.get(var, {})
+                x, y_raw, y_ratio = [], [], []
+                for issued in sorted(ts):
+                    mae = ts[issued]
+                    mae_display = (
+                        _diff_to_f(mae) if var in ("temperature", "dewpoint")
+                        else _to_mph(mae) if var == "wind_speed"
+                        else mae
+                    )
+                    p = p_var.get(issued)
+                    ratio = 1.0 if is_persistence else (mae / p if p else None)
+                    x.append(fmt.short_ts(issued))
+                    y_raw.append(mae_display)
+                    y_ratio.append(ratio)
+                series[var] = {"x": x, "y_raw": y_raw, "y_ratio": y_ratio}
+            # average series
+            all_issued = sorted(set().union(*[set(ts) for ts in vars_.values()]))
+            ax, ay_raw, ay_ratio = [], [], []
+            for issued in all_issued:
+                ratios, raws = [], []
+                for var, ts in vars_.items():
+                    if issued not in ts:
+                        continue
+                    mae = ts[issued]
+                    p_var = p_ts.get(var, {})
+                    p = p_var.get(issued)
+                    if is_persistence or p:
+                        ratios.append(1.0 if is_persistence else mae / p)
+                    raws.append(mae)
+                if ratios:
+                    ax.append(fmt.short_ts(issued))
+                    ay_ratio.append(sum(ratios) / len(ratios))
+                    ay_raw.append(sum(raws) / len(raws) if raws else None)
+            series["avg"] = {"x": ax, "y_raw": ay_raw, "y_ratio": ay_ratio}
+            result[str(lead)][model] = {
+                "is_persistence": is_persistence,
+                "is_ensemble": is_ensemble,
+                "model_id": model_meta[model]["model_id"],
+                "series": series,
+            }
+    return result
+
+
+def _bias_timeseries_data(rows: list) -> dict:
+    """lead (str) -> model -> {is_persistence, is_ensemble, model_id, series: {var -> {x, y}}}"""
+    raw: dict = {}
+    model_meta: dict = {}
+    for row in rows:
+        lead = row["lead_hours"]
+        model_meta[row["model"]] = {
+            "is_ensemble": row["type"] == "ensemble",
+            "model_id": row["model_id"],
+        }
+        raw.setdefault(lead, {}).setdefault(row["model"], {}).setdefault(
+            row["variable"], {}
+        )[row["issued_at"]] = row["avg_bias"]
+
+    result: dict = {}
+    for lead in sorted(raw):
+        result[str(lead)] = {}
+        for model, vars_ in raw[lead].items():
+            is_persistence = model == "persistence"
+            is_ensemble = model_meta[model]["is_ensemble"]
+            series: dict = {}
+            for var, ts in vars_.items():
+                x, y = [], []
+                for issued in sorted(ts):
+                    bias = ts[issued]
+                    bias_display = (
+                        _diff_to_f(bias) if var in ("temperature", "dewpoint")
+                        else _to_mph(bias) if var == "wind_speed"
+                        else bias
+                    )
+                    x.append(fmt.short_ts(issued))
+                    y.append(bias_display)
+                series[var] = {"x": x, "y": y}
+            result[str(lead)][model] = {
+                "is_persistence": is_persistence,
+                "is_ensemble": is_ensemble,
+                "model_id": model_meta[model]["model_id"],
+                "series": series,
+            }
+    return result
+
+
+def _lead_skill_data(summary_rows: list) -> dict:
+    """variable -> model -> {model_id, is_persistence, is_ensemble, points: {lead -> avg_mae}}"""
+    result: dict = {}
+    for row in summary_rows:
         var = row["variable"]
-        key = f"{row['model']} +{row['lead_hours']}h"
-        is_ensemble = row["type"] == "ensemble"
-        data.setdefault(var, {}).setdefault(key, {"x": [], "y": [], "is_ensemble": is_ensemble})
-        data[var][key]["x"].append(fmt.ts(row["issued_at"]))
-        data[var][key]["y"].append(row["avg_mae"])
-    return data
+        model = row["model"]
+        if var not in result:
+            result[var] = {}
+        if model not in result[var]:
+            result[var][model] = {
+                "model_id": row["model_id"],
+                "is_persistence": model == "persistence",
+                "is_ensemble": row["type"] == "ensemble",
+                "points": {},
+            }
+        mae = row["avg_mae"]
+        if mae is not None:
+            if var in ("temperature", "dewpoint"):
+                mae = _diff_to_f(mae)
+            elif var == "wind_speed":
+                mae = _to_mph(mae)
+        result[var][model]["points"][row["lead_hours"]] = mae
+    return result
+
+
+def _heatmap_data(summary_rows: list) -> dict:
+    """variable -> {models, model_ids, leads, z}"""
+    lookup: dict = {}
+    models_seen: dict = {}
+    leads_seen: set = set()
+
+    for row in summary_rows:
+        var = row["variable"]
+        model = row["model"]
+        lead = row["lead_hours"]
+        if model not in models_seen:
+            models_seen[model] = row["model_id"]
+        leads_seen.add(lead)
+        mae = row["avg_mae"]
+        if mae is not None:
+            if var in ("temperature", "dewpoint"):
+                mae = _diff_to_f(mae)
+            elif var == "wind_speed":
+                mae = _to_mph(mae)
+        lookup[(var, model, lead)] = mae
+
+    sorted_models = sorted(models_seen.keys(), key=lambda m: models_seen[m])
+    sorted_leads = sorted(leads_seen)
+
+    result: dict = {}
+    for var in VARIABLES:
+        if not any((var, m, l) in lookup for m in sorted_models for l in sorted_leads):
+            continue
+        z = [
+            [lookup.get((var, model, lead)) for lead in sorted_leads]
+            for model in sorted_models
+        ]
+        result[var] = {
+            "models": sorted_models,
+            "model_ids": [models_seen[m] for m in sorted_models],
+            "leads": sorted_leads,
+            "z": z,
+        }
+    return result
+
+
+def _diurnal_data(rows: list) -> dict:
+    """variable -> model -> {model_id, is_persistence, is_ensemble, hours, bias, mae}"""
+    raw: dict = {}
+    model_meta: dict = {}
+    for row in rows:
+        var = row["variable"]
+        model = row["model"]
+        if model not in model_meta:
+            model_meta[model] = {
+                "model_id": row["model_id"],
+                "is_persistence": model == "persistence",
+                "is_ensemble": row["type"] == "ensemble",
+            }
+        raw.setdefault(var, {}).setdefault(model, {})[row["hour"]] = (
+            row["avg_bias"], row["avg_mae"]
+        )
+
+    result: dict = {}
+    for var, models in raw.items():
+        result[var] = {}
+        for model, hours_data in models.items():
+            hours = sorted(hours_data.keys())
+            bias_list, mae_list = [], []
+            for h in hours:
+                b, m = hours_data[h]
+                if var in ("temperature", "dewpoint"):
+                    b = _diff_to_f(b)
+                    m = _diff_to_f(m)
+                elif var == "wind_speed":
+                    b = _to_mph(b)
+                    m = _to_mph(m)
+                bias_list.append(b)
+                mae_list.append(m)
+            meta = model_meta[model]
+            result[var][model] = {
+                "model_id": meta["model_id"],
+                "is_persistence": meta["is_persistence"],
+                "is_ensemble": meta["is_ensemble"],
+                "hours": hours,
+                "bias": bias_list,
+                "mae": mae_list,
+            }
+    return result
+
+
+def _error_dist_data(rows: list) -> dict:
+    """variable -> lead_str -> model -> {model_id, is_persistence, is_ensemble, errors}"""
+    raw: dict = {}
+    model_meta: dict = {}
+    for row in rows:
+        var = row["variable"]
+        lead = str(row["lead_hours"])
+        model = row["model"]
+        if model not in model_meta:
+            model_meta[model] = {
+                "model_id": row["model_id"],
+                "is_persistence": model == "persistence",
+                "is_ensemble": row["type"] == "ensemble",
+            }
+        err = row["error"]
+        if err is not None:
+            if var in ("temperature", "dewpoint"):
+                err = _diff_to_f(err)
+            elif var == "wind_speed":
+                err = _to_mph(err)
+        raw.setdefault(var, {}).setdefault(lead, {}).setdefault(model, []).append(err)
+
+    result: dict = {}
+    for var, leads in raw.items():
+        result[var] = {}
+        for lead, models in leads.items():
+            result[var][lead] = {}
+            for model, errors in models.items():
+                meta = model_meta[model]
+                result[var][lead][model] = {
+                    "model_id": meta["model_id"],
+                    "is_persistence": meta["is_persistence"],
+                    "is_ensemble": meta["is_ensemble"],
+                    "errors": [e for e in errors if e is not None],
+                }
+    return result
 
 
 def _mae_timeseries_js(timeseries_data: dict) -> str:
     data_json = json.dumps(timeseries_data)
-    var_labels_json = json.dumps({
-        "temperature": "Temperature MAE (\u00b0C)",
-        "humidity": "Humidity MAE (%)",
+    filter_labels_json = json.dumps({
+        "avg": "Average MAE",
+        "temperature": "Temperature MAE (°F)",
+        "dewpoint": "Dew Point MAE (°F)",
         "pressure": "Pressure MAE (mb)",
-        "wind_speed": "Wind Speed MAE (m/s)",
+        "wind_speed": "Wind Speed MAE (mph)",
     })
-    vars_json = json.dumps(VARIABLES)
-    return f"""\
-const maeData = {data_json};
-const maeVarLabels = {var_labels_json};
-const maeVariables = {vars_json};
+    return f"""const maeLeadData = {data_json};
+const maeFilterLabels = {filter_labels_json};
+const maeLeads = Object.keys(maeLeadData).map(Number).sort(function(a,b){{return a-b;}});
 
-maeVariables.forEach(function(variable) {{
-    const varData = maeData[variable] || {{}};
-    const traces = Object.entries(varData).map(function([lead, d]) {{
-        const ens = d.is_ensemble;
-        return {{
-            type: 'scatter',
-            mode: 'lines+markers',
-            name: lead,
-            x: d.x,
-            y: d.y,
-            line: {{ width: ens ? 3 : 2, dash: ens ? 'dash' : 'solid' }},
-            marker: {{ size: ens ? 8 : 6 }}
-        }};
+const MAE_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
+const maeAllModels = [...new Set(
+    Object.values(maeLeadData).flatMap(function(d){{return Object.keys(d);}})
+)].sort();
+const maeModelColors = {{}};
+maeAllModels.forEach(function(m, i) {{ maeModelColors[m] = MAE_PALETTE[i % MAE_PALETTE.length]; }});
+
+let maeActiveVar = 'avg';
+let verifMode = 'ratio';
+
+function drawMaeCharts() {{
+    maeLeads.forEach(function(lead) {{
+        const leadData = maeLeadData[String(lead)] || {{}};
+        const traces = Object.entries(leadData).map(function([model, info]) {{
+            const s = (info.series || {{}})[maeActiveVar] || {{}};
+            const y = verifMode === 'ratio' ? (s.y_ratio || []) : (s.y_raw || []);
+            const isPersistence = info.is_persistence;
+            const isEns = info.is_ensemble;
+            const color = isPersistence ? '#aaaaaa' : maeModelColors[model];
+            return {{
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: String(info.model_id),
+                x: s.x || [],
+                y: y,
+                line: {{
+                    width: 2,
+                    dash: isPersistence ? 'dot' : (isEns ? 'dash' : 'solid'),
+                    color: color
+                }},
+                marker: {{ size: isPersistence ? 5 : 6, color: color }}
+            }};
+        }});
+        const isRatio = verifMode === 'ratio';
+        const varLabel = isRatio
+            ? (maeActiveVar === 'avg' ? 'average skill ratio' : maeFilterLabels[maeActiveVar].replace(' MAE', ' skill ratio'))
+            : (maeFilterLabels[maeActiveVar] || maeActiveVar);
+        const title = '+' + lead + 'h — ' + varLabel;
+        const yRange = isRatio ? {{ rangemode: 'tozero' }} : {{ rangemode: 'tozero' }};
+        const shapes = isRatio ? [{{
+            type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 1, y1: 1,
+            line: {{ color: '#dddddd', width: 1, dash: 'dot' }}
+        }}] : [];
+        Plotly.react('mae-chart-' + lead, traces, {{
+            title: {{ text: title, font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
+            margin: {{ t: 40, b: 60, l: 50, r: 16 }},
+            xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }} }},
+            yaxis: Object.assign({{ tickfont: {{ size: 11 }} }}, yRange),
+            height: 380,
+            showlegend: false,
+            shapes: shapes,
+            paper_bgcolor: 'white',
+            plot_bgcolor: '#fafafa'
+        }}, {{responsive: true}});
     }});
-    Plotly.newPlot('mae-chart-' + variable, traces, {{
-        title: {{ text: maeVarLabels[variable], font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-        margin: {{ t: 40, b: 24, l: 50, r: 16 }},
-        xaxis: {{ tickangle: -40, tickfont: {{ size: 11 }} }},
-        yaxis: {{ tickfont: {{ size: 11 }}, rangemode: 'tozero' }},
-        height: 320,
-        showlegend: true,
-        legend: {{ orientation: 'h', x: 0, y: -0.35, font: {{ size: 11 }} }},
-        paper_bgcolor: 'white',
-        plot_bgcolor: '#fafafa'
-    }}, {{responsive: true}});
+}}
+
+function updateTableMode() {{
+    const isRatio = verifMode === 'ratio';
+    document.querySelectorAll('[data-raw][data-ratio]').forEach(function(el) {{
+        el.textContent = isRatio ? el.dataset.ratio : el.dataset.raw;
+    }});
+    document.querySelectorAll('.col-avg-hdr').forEach(function(el) {{
+        el.textContent = isRatio ? 'Avg skill ratio' : 'Avg MAE';
+    }});
+    document.querySelectorAll('.col-24h-hdr').forEach(function(el) {{
+        el.textContent = isRatio ? '+24h skill ratio' : '+24h MAE';
+    }});
+}}
+
+document.querySelectorAll('.mae-filter-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        document.querySelectorAll('.mae-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        maeActiveVar = btn.dataset.var;
+        drawMaeCharts();
+    }});
+}});
+
+document.getElementById('raw-toggle').addEventListener('click', function() {{
+    verifMode = verifMode === 'ratio' ? 'raw' : 'ratio';
+    this.classList.toggle('active');
+    this.textContent = verifMode === 'ratio' ? 'Raw values' : 'Skill ratio';
+    drawMaeCharts();
+    updateTableMode();
+}});
+
+drawMaeCharts();
+"""
+
+
+def _member_forecast_js(member_rows: list, lead_times: list) -> str:
+    if not member_rows:
+        return ""
+
+    data: dict = {}
+    for row in member_rows:
+        mid = row["model_id"]
+        memid = row["member_id"]
+        data.setdefault(mid, {})
+        if memid not in data[mid]:
+            data[mid][memid] = {"name": row["member_name"] or str(memid), "vars": {}}
+        entry = data[mid][memid]
+        if row["member_name"] and not entry["name"]:
+            entry["name"] = row["member_name"]
+        v = row["value"]
+        if row["variable"] in ("temperature", "dewpoint"):
+            v = _to_f(v)
+        elif row["variable"] == "wind_speed":
+            v = _to_mph(v)
+        entry["vars"].setdefault(row["variable"], {})[row["lead_hours"]] = v
+
+    data_json = json.dumps(data)
+    vars_json = json.dumps(VARIABLES)
+    var_labels_json = json.dumps(_VARIABLE_LABEL)
+    units_json = json.dumps(_UNIT)
+    leads_json = json.dumps(lead_times)
+
+    return f"""\
+const memberFcstData = {data_json};
+const memberFcstVars = {vars_json};
+const memberFcstVarLabels = {var_labels_json};
+const memberFcstUnits = {units_json};
+const memberFcstLeads = {leads_json};
+
+function buildMemberForecastTables(modelId) {{
+    const members = memberFcstData[modelId] || {{}};
+    const parts = [];
+    Object.entries(members).sort(function(a, b) {{ return +a[0] - +b[0]; }}).forEach(function([mid, m]) {{
+        const headerCells = memberFcstLeads.map(function(h) {{
+            return '<th>+' + h + 'h</th>';
+        }}).join('');
+        const bodyRows = memberFcstVars.map(function(v) {{
+            const varData = (m.vars || {{}})[v] || {{}};
+            const cells = memberFcstLeads.map(function(h) {{
+                const val = varData[h];
+                if (val === null || val === undefined) return '<td>\u2014</td>';
+                return '<td>' + val.toFixed(1) + (memberFcstUnits[v] || '') + '</td>';
+            }}).join('');
+            return '<tr><th>' + (memberFcstVarLabels[v] || v) + '</th>' + cells + '</tr>';
+        }}).join('');
+        parts.push(
+            '<div style="margin-bottom:10px">'
+            + '<div style="font-size:11px;font-weight:600;color:#6b3fa0;text-transform:uppercase;'
+            + 'letter-spacing:0.03em;margin-bottom:4px">' + m.name + '</div>'
+            + '<table class="forecast-table" style="font-size:12px">'
+            + '<thead><tr><th>Variable</th>' + headerCells + '</tr></thead>'
+            + '<tbody>' + bodyRows + '</tbody>'
+            + '</table>'
+            + '</div>'
+        );
+    }});
+    return parts.join('') || '<p class="muted">no member data</p>';
+}}
+
+document.querySelectorAll('.mf-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        const modelId = btn.dataset.modelId;
+        const panel = document.getElementById('mfp-' + modelId);
+        if (!panel) return;
+        if (panel.style.display !== 'none') {{
+            panel.style.display = 'none';
+            btn.innerHTML = btn.innerHTML.replace('\u25b4', '\u25be');
+            return;
+        }}
+        panel.innerHTML = buildMemberForecastTables(+modelId);
+        panel.style.display = '';
+        btn.innerHTML = btn.innerHTML.replace('\u25be', '\u25b4');
+    }});
 }});
 """
 
@@ -703,12 +1189,17 @@ def _member_detail_js(member_rows: list) -> str:
 
     data: dict = {}
     for row in member_rows:
+        mae = row["avg_mae"]
+        if row["variable"] in ("temperature", "dewpoint"):
+            mae = _diff_to_f(mae)
+        elif row["variable"] == "wind_speed":
+            mae = _to_mph(mae)
         data.setdefault(row["model"], []).append({
             "member_id": row["member_id"],
             "member_name": row["member_name"],
             "variable": row["variable"],
             "lead_hours": row["lead_hours"],
-            "avg_mae": row["avg_mae"],
+            "avg_mae": mae,
             "n": row["n"],
         })
 
@@ -738,14 +1229,15 @@ function buildMemberTable(rows) {{
         return rows.some(function(r) {{ return r.variable === v; }});
     }});
     const headerCells = varCols.map(function(v) {{
-        return '<th>' + (memberVarLabels[v] || v) + '</th>';
+        const unit = memberUnits[v] ? ' (' + memberUnits[v] + ')' : '';
+        return '<th>Avg MAE' + unit + '</th>';
     }}).join('');
     const bodyRows = Object.entries(members).map(function([key, varData]) {{
         const label = key.split(':')[1];
         const cells = varCols.map(function(v) {{
             const d = varData[v];
             if (!d || d.n === 0) return '<td>\u2014</td>';
-            return '<td>' + (d.sum / d.n).toFixed(2) + ' ' + (memberUnits[v] || '') + '</td>';
+            return '<td>' + (d.sum / d.n).toFixed(2) + '</td>';
         }}).join('');
         return '<tr><th>' + label + '</th>' + cells + '</tr>';
     }}).join('');
@@ -775,42 +1267,440 @@ document.querySelectorAll('.member-btn').forEach(function(btn) {{
 def _chart_js(chart_data_dict: dict) -> str:
     data_json = json.dumps(chart_data_dict)
     var_labels_json = json.dumps({
-        "temperature": "Temperature (\u00b0C)",
-        "humidity": "Humidity (%)",
+        "temperature": "Temperature (\u00b0F)",
+        "dewpoint": "Dew Point (\u00b0F)",
         "pressure": "Pressure (mb)",
-        "wind_speed": "Wind Speed (m/s)",
+        "wind_speed": "Wind Speed (mph)",
     })
     vars_json = json.dumps(VARIABLES)
     return f"""\
-const chartData = {data_json};
-const varLabels = {var_labels_json};
-const variables = {vars_json};
+const fcstData = {data_json};
+const fcstVarLabels = {var_labels_json};
+const fcstVariables = {vars_json};
+const FCST_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
 
-variables.forEach(function(variable) {{
-    const varData = chartData[variable] || {{}};
+const fcstAllModels = [...new Set(
+    Object.values(fcstData).flatMap(function(d) {{ return Object.keys(d); }})
+)].sort();
+const fcstModelColors = {{}};
+fcstAllModels.filter(function(m) {{ return m !== 'persistence'; }}).forEach(function(m, i) {{
+    fcstModelColors[m] = FCST_PALETTE[i % FCST_PALETTE.length];
+}});
+if (fcstAllModels.includes('persistence')) fcstModelColors['persistence'] = '#aaaaaa';
+
+let fcstActiveVar = fcstVariables[0];
+
+function drawFcstChart() {{
+    const varData = fcstData[fcstActiveVar] || {{}};
     const traces = Object.entries(varData).map(function([model, d]) {{
+        const isPersistence = model === 'persistence';
+        const color = fcstModelColors[model] || '#888888';
         return {{
             type: 'scatter',
             mode: 'lines+markers',
-            name: model,
+            name: String(d.model_id),
             x: d.x,
             y: d.y,
-            line: {{ width: 2 }},
-            marker: {{ size: 6 }}
+            line: {{ width: 2, dash: isPersistence ? 'dot' : 'solid', color: color }},
+            marker: {{ size: isPersistence ? 5 : 6, color: color }}
         }};
     }});
-    Plotly.newPlot('chart-' + variable, traces, {{
-        title: {{ text: varLabels[variable], font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-        margin: {{ t: 40, b: 24, l: 50, r: 16 }},
-        xaxis: {{ tickangle: -40, tickfont: {{ size: 11 }} }},
+    Plotly.react('chart-forecast', traces, {{
+        title: {{ text: fcstVarLabels[fcstActiveVar], font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
+        margin: {{ t: 40, b: 60, l: 50, r: 16 }},
+        xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }} }},
         yaxis: {{ tickfont: {{ size: 11 }} }},
-        height: 320,
-        showlegend: traces.length > 1,
-        legend: {{ orientation: 'h', x: 0, y: -0.35, font: {{ size: 11 }} }},
+        height: 420,
+        showlegend: false,
         paper_bgcolor: 'white',
         plot_bgcolor: '#fafafa'
     }}, {{responsive: true}});
+}}
+
+document.querySelectorAll('.fcst-filter-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        document.querySelectorAll('.fcst-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        fcstActiveVar = btn.dataset.var;
+        drawFcstChart();
+    }});
 }});
+
+drawFcstChart();
+"""
+
+
+def _bias_timeseries_js(bias_data: dict) -> str:
+    data_json = json.dumps(bias_data)
+    filter_labels_json = json.dumps({
+        "temperature": "Temperature Bias (\u00b0F)",
+        "dewpoint": "Dew Point Bias (\u00b0F)",
+        "pressure": "Pressure Bias (mb)",
+        "wind_speed": "Wind Speed Bias (mph)",
+    })
+    return f"""const biasLeadData = {data_json};
+const biasFilterLabels = {filter_labels_json};
+const biasLeads = Object.keys(biasLeadData).map(Number).sort(function(a,b){{return a-b;}});
+
+const BIAS_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
+const biasAllModels = [...new Set(
+    Object.values(biasLeadData).flatMap(function(d){{return Object.keys(d);}})
+)].sort();
+const biasModelColors = {{}};
+biasAllModels.forEach(function(m, i) {{ biasModelColors[m] = BIAS_PALETTE[i % BIAS_PALETTE.length]; }});
+
+let biasActiveVar = 'temperature';
+
+function drawBiasCharts() {{
+    biasLeads.forEach(function(lead) {{
+        const leadData = biasLeadData[String(lead)] || {{}};
+        const traces = Object.entries(leadData).map(function([model, info]) {{
+            const s = (info.series || {{}})[biasActiveVar] || {{}};
+            const isPersistence = info.is_persistence;
+            const isEns = info.is_ensemble;
+            const color = isPersistence ? '#aaaaaa' : biasModelColors[model];
+            return {{
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: String(info.model_id),
+                x: s.x || [],
+                y: s.y || [],
+                line: {{
+                    width: 2,
+                    dash: isPersistence ? 'dot' : (isEns ? 'dash' : 'solid'),
+                    color: color
+                }},
+                marker: {{ size: isPersistence ? 5 : 6, color: color }}
+            }};
+        }});
+        const shapes = [{{
+            type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 0, y1: 0,
+            line: {{ color: '#dddddd', width: 1, dash: 'dot' }}
+        }}];
+        Plotly.react('bias-chart-' + lead, traces, {{
+            title: {{ text: '+' + lead + 'h \u2014 ' + (biasFilterLabels[biasActiveVar] || biasActiveVar),
+                      font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
+            margin: {{ t: 40, b: 60, l: 50, r: 16 }},
+            xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }} }},
+            yaxis: {{ tickfont: {{ size: 11 }} }},
+            height: 380,
+            showlegend: false,
+            shapes: shapes,
+            paper_bgcolor: 'white',
+            plot_bgcolor: '#fafafa'
+        }}, {{responsive: true}});
+    }});
+}}
+
+document.querySelectorAll('.bias-filter-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        document.querySelectorAll('.bias-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        biasActiveVar = btn.dataset.var;
+        drawBiasCharts();
+    }});
+}});
+
+drawBiasCharts();
+"""
+
+
+def _lead_skill_js(skill_data: dict) -> str:
+    data_json = json.dumps(skill_data)
+    filter_labels_json = json.dumps({
+        "temperature": "Temperature MAE (\u00b0F)",
+        "dewpoint": "Dew Point MAE (\u00b0F)",
+        "pressure": "Pressure MAE (mb)",
+        "wind_speed": "Wind Speed MAE (mph)",
+    })
+    return f"""const leadSkillData = {data_json};
+const leadSkillFilterLabels = {filter_labels_json};
+
+const LEAD_SKILL_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
+const leadSkillAllModels = [...new Set(
+    Object.values(leadSkillData).flatMap(function(d){{return Object.keys(d);}})
+)].sort();
+const leadSkillModelColors = {{}};
+leadSkillAllModels.filter(function(m){{return m !== 'persistence';}}).forEach(function(m, i) {{
+    leadSkillModelColors[m] = LEAD_SKILL_PALETTE[i % LEAD_SKILL_PALETTE.length];
+}});
+if (leadSkillAllModels.includes('persistence')) leadSkillModelColors['persistence'] = '#aaaaaa';
+
+let leadSkillActiveVar = 'temperature';
+
+function drawLeadSkillChart() {{
+    const varData = leadSkillData[leadSkillActiveVar] || {{}};
+    const allLeads = [...new Set(
+        Object.values(varData).flatMap(function(m){{return Object.keys(m.points).map(Number);}})
+    )].sort(function(a,b){{return a-b;}});
+    const traces = Object.entries(varData).map(function([model, info]) {{
+        const isPersistence = info.is_persistence;
+        const isEns = info.is_ensemble;
+        const color = leadSkillModelColors[model] || '#888888';
+        const y = allLeads.map(function(l) {{
+            const v = info.points[l];
+            return (v !== undefined && v !== null) ? v : null;
+        }});
+        return {{
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: String(info.model_id),
+            x: allLeads,
+            y: y,
+            line: {{
+                width: 2,
+                dash: isPersistence ? 'dot' : (isEns ? 'dash' : 'solid'),
+                color: color
+            }},
+            marker: {{ size: isPersistence ? 5 : 6, color: color }},
+            connectgaps: false
+        }};
+    }});
+    Plotly.react('lead-skill-chart', traces, {{
+        title: {{ text: leadSkillFilterLabels[leadSkillActiveVar] || leadSkillActiveVar,
+                  font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
+        margin: {{ t: 40, b: 60, l: 50, r: 16 }},
+        xaxis: {{ title: 'Lead hours', tickvals: allLeads, tickfont: {{ size: 11 }} }},
+        yaxis: {{ title: 'Avg MAE', rangemode: 'tozero', tickfont: {{ size: 11 }} }},
+        height: 380,
+        showlegend: false,
+        paper_bgcolor: 'white',
+        plot_bgcolor: '#fafafa'
+    }}, {{responsive: true}});
+}}
+
+document.querySelectorAll('.lead-skill-filter-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        document.querySelectorAll('.lead-skill-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        leadSkillActiveVar = btn.dataset.var;
+        drawLeadSkillChart();
+    }});
+}});
+
+drawLeadSkillChart();
+"""
+
+
+def _heatmap_js(heatmap_data: dict) -> str:
+    data_json = json.dumps(heatmap_data)
+    return f"""const heatmapData = {data_json};
+
+let heatmapActiveVar = 'temperature';
+
+function drawHeatmapChart() {{
+    const d = heatmapData[heatmapActiveVar] || {{}};
+    const models = d.models || [];
+    const leads = d.leads || [];
+    const z = d.z || [];
+    const annotations = [];
+    models.forEach(function(model, i) {{
+        leads.forEach(function(lead, j) {{
+            const val = (z[i] || [])[j];
+            if (val !== null && val !== undefined) {{
+                annotations.push({{
+                    x: lead, y: model,
+                    text: val.toFixed(2),
+                    showarrow: false,
+                    font: {{ size: 11, color: '#333' }}
+                }});
+            }}
+        }});
+    }});
+    Plotly.react('heatmap-chart', [{{
+        type: 'heatmap',
+        x: leads,
+        y: models,
+        z: z,
+        colorscale: 'RdYlGn',
+        reversescale: false,
+        showscale: true,
+        hovertemplate: '%{{y}}<br>+%{{x}}h<br>MAE: %{{z:.2f}}<extra></extra>'
+    }}], {{
+        title: {{ text: 'Score Heatmap \u2014 ' + heatmapActiveVar.replace('_', ' '),
+                  font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
+        margin: {{ t: 40, b: 60, l: 180, r: 16 }},
+        xaxis: {{ title: 'Lead hours', tickvals: leads, tickfont: {{ size: 11 }} }},
+        yaxis: {{ tickfont: {{ size: 11 }} }},
+        height: 300,
+        showlegend: false,
+        annotations: annotations,
+        paper_bgcolor: 'white',
+        plot_bgcolor: '#fafafa'
+    }}, {{responsive: true}});
+}}
+
+document.querySelectorAll('.heatmap-filter-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        document.querySelectorAll('.heatmap-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        heatmapActiveVar = btn.dataset.var;
+        drawHeatmapChart();
+    }});
+}});
+
+drawHeatmapChart();
+"""
+
+
+def _diurnal_js(diurnal_data: dict) -> str:
+    data_json = json.dumps(diurnal_data)
+    filter_labels_json = json.dumps({
+        "temperature": "Temperature (\u00b0F)",
+        "dewpoint": "Dew Point (\u00b0F)",
+        "pressure": "Pressure (mb)",
+        "wind_speed": "Wind Speed (mph)",
+    })
+    return f"""const diurnalData = {data_json};
+const diurnalFilterLabels = {filter_labels_json};
+
+const DIURNAL_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
+const diurnalAllModels = [...new Set(
+    Object.values(diurnalData).flatMap(function(d){{return Object.keys(d);}})
+)].sort();
+const diurnalModelColors = {{}};
+diurnalAllModels.filter(function(m){{return m !== 'persistence';}}).forEach(function(m, i) {{
+    diurnalModelColors[m] = DIURNAL_PALETTE[i % DIURNAL_PALETTE.length];
+}});
+if (diurnalAllModels.includes('persistence')) diurnalModelColors['persistence'] = '#aaaaaa';
+
+let diurnalActiveVar = 'temperature';
+let diurnalMode = 'bias';
+
+function drawDiurnalChart() {{
+    const varData = diurnalData[diurnalActiveVar] || {{}};
+    const traces = Object.entries(varData).map(function([model, info]) {{
+        const isPersistence = info.is_persistence;
+        const isEns = info.is_ensemble;
+        const color = diurnalModelColors[model] || '#888888';
+        const y = diurnalMode === 'bias' ? info.bias : info.mae;
+        return {{
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: String(info.model_id),
+            x: info.hours,
+            y: y,
+            line: {{
+                width: 2,
+                dash: isPersistence ? 'dot' : (isEns ? 'dash' : 'solid'),
+                color: color
+            }},
+            marker: {{ size: isPersistence ? 5 : 6, color: color }}
+        }};
+    }});
+    const shapes = diurnalMode === 'bias' ? [{{
+        type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 0, y1: 0,
+        line: {{ color: '#dddddd', width: 1, dash: 'dot' }}
+    }}] : [];
+    const modeLabel = diurnalMode === 'bias' ? 'Bias' : 'MAE';
+    Plotly.react('diurnal-chart', traces, {{
+        title: {{ text: 'Diurnal ' + modeLabel + ' \u2014 ' + (diurnalFilterLabels[diurnalActiveVar] || diurnalActiveVar),
+                  font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
+        margin: {{ t: 40, b: 60, l: 50, r: 16 }},
+        xaxis: {{ title: 'Hour (local)', range: [-0.5, 23.5], tickfont: {{ size: 11 }} }},
+        yaxis: {{ tickfont: {{ size: 11 }} }},
+        height: 380,
+        showlegend: false,
+        shapes: shapes,
+        paper_bgcolor: 'white',
+        plot_bgcolor: '#fafafa'
+    }}, {{responsive: true}});
+}}
+
+document.querySelectorAll('.diurnal-filter-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        document.querySelectorAll('.diurnal-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        diurnalActiveVar = btn.dataset.var;
+        drawDiurnalChart();
+    }});
+}});
+
+document.getElementById('diurnal-mode-btn').addEventListener('click', function() {{
+    diurnalMode = diurnalMode === 'bias' ? 'mae' : 'bias';
+    this.classList.toggle('active');
+    this.textContent = diurnalMode === 'bias' ? 'Show MAE' : 'Show Bias';
+    drawDiurnalChart();
+}});
+
+drawDiurnalChart();
+"""
+
+
+def _error_dist_js(dist_data: dict) -> str:
+    data_json = json.dumps(dist_data)
+    return f"""const errorDistData = {data_json};
+
+const ERROR_DIST_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
+const errorDistAllModels = [...new Set(
+    Object.values(errorDistData).flatMap(function(byLead){{
+        return Object.values(byLead).flatMap(function(d){{return Object.keys(d);}});
+    }})
+)].sort();
+const errorDistModelColors = {{}};
+errorDistAllModels.filter(function(m){{return m !== 'persistence';}}).forEach(function(m, i) {{
+    errorDistModelColors[m] = ERROR_DIST_PALETTE[i % ERROR_DIST_PALETTE.length];
+}});
+if (errorDistAllModels.includes('persistence')) errorDistModelColors['persistence'] = '#aaaaaa';
+
+let errorDistActiveVar = 'temperature';
+let errorDistActiveLead = '6';
+
+function drawErrorDistChart() {{
+    const varData = (errorDistData[errorDistActiveVar] || {{}})[errorDistActiveLead] || {{}};
+    const traces = Object.entries(varData).map(function([model, info]) {{
+        const color = errorDistModelColors[model] || '#888888';
+        return {{
+            type: 'histogram',
+            name: String(info.model_id),
+            x: info.errors,
+            opacity: 0.55,
+            autobinx: true,
+            marker: {{ color: color, line: {{ color: color, width: 1 }} }}
+        }};
+    }});
+    const shapes = [{{
+        type: 'line', xref: 'x', x0: 0, x1: 0, yref: 'paper', y0: 0, y1: 1,
+        line: {{ color: '#333', width: 1.5, dash: 'dot' }}
+    }}];
+    const unitLabels = {{
+        temperature: '\u00b0F', dewpoint: '\u00b0F', pressure: 'mb', wind_speed: 'mph'
+    }};
+    Plotly.react('error-dist-chart', traces, {{
+        barmode: 'overlay',
+        title: {{ text: 'Error Distribution \u2014 ' + errorDistActiveVar.replace('_', ' ') + ' +' + errorDistActiveLead + 'h',
+                  font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
+        margin: {{ t: 40, b: 60, l: 50, r: 16 }},
+        xaxis: {{ title: 'Error (forecast \u2212 observed) (' + (unitLabels[errorDistActiveVar] || '') + ')',
+                  tickfont: {{ size: 11 }} }},
+        yaxis: {{ title: 'Count', tickfont: {{ size: 11 }} }},
+        height: 380,
+        showlegend: false,
+        shapes: shapes,
+        paper_bgcolor: 'white',
+        plot_bgcolor: '#fafafa'
+    }}, {{responsive: true}});
+}}
+
+document.querySelectorAll('.error-dist-var-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        document.querySelectorAll('.error-dist-var-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        errorDistActiveVar = btn.dataset.var;
+        drawErrorDistChart();
+    }});
+}});
+
+document.querySelectorAll('.error-dist-lead-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        document.querySelectorAll('.error-dist-lead-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        errorDistActiveLead = btn.dataset.lead;
+        drawErrorDistChart();
+    }});
+}});
+
+drawErrorDistChart();
 """
 
 
@@ -828,8 +1718,9 @@ def generate(
     # for multi-member models, use only member_id=0 (ensemble mean) in all displays;
     # for single-member models, member_id=0 is already their only member
     mean_rows = [r for r in all_rows if r["member_id"] == 0]
+    member_forecast_rows = [r for r in all_rows if r["member_id"] > 0]
 
-    # count named members per model for the member badge
+    # count named members per model for the member toggle button
     model_member_ids: dict = {}
     for row in all_rows:
         if row["member_id"] > 0:
@@ -848,15 +1739,24 @@ def generate(
     member_models = {r["model"] for r in members_10}
     summary_7d = [r for r in db.score_summary_since(conn_out, now - 7 * 86400) if r["member_id"] == 0]
     timeseries = [r for r in db.score_timeseries(conn_out) if r["member_id"] == 0]
+    all_time_summary = [r for r in db.score_summary(conn_out) if r["member_id"] == 0]
+    bias_ts_rows = [r for r in db.bias_timeseries(conn_out) if r["member_id"] == 0]
+    diurnal_rows = [r for r in db.diurnal_errors(conn_out) if r["member_id"] == 0]
+    error_dist_rows = db.error_distribution(conn_out)
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
     mae_ts = _mae_timeseries_data(timeseries)
+    bias_ts = _bias_timeseries_data(bias_ts_rows)
+    lead_skill = _lead_skill_data(all_time_summary)
+    heatmap = _heatmap_data(all_time_summary)
+    diurnal = _diurnal_data(diurnal_rows)
+    error_dist = _error_dist_data(error_dist_rows)
     generated_at = fmt.ts(now)
 
     tempest_card = _conditions_card("Tempest", tempest)
     nws_card = _conditions_card("NWS", nws)
-    model_runs = _model_runs_html(mean_rows, lead_times, member_counts)
+    model_runs = _model_runs_html(mean_rows, lead_times, member_counts, member_forecast_rows)
     obs_section = _obs_history_section(tempest_history, nws_history)
     tempest_rows = [_tempest_obs_row(r) for r in tempest_history]
     nws_rows = [_nws_obs_row(r) for r in nws_history]
@@ -864,14 +1764,57 @@ def generate(
     all_models = {r["model"]: {"model_id": r["model_id"], "type": r["type"]} for r in mean_rows}
     table_10 = _score_summary_table(summary_10, "last 10 runs", member_models, all_models)
     table_7d = _score_summary_table(summary_7d, "last 7 days", member_models, all_models)
+    filter_btns = "".join(
+        f'<button class="mae-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
+        for i, (v, lbl) in enumerate([
+            ("avg", "Average"), ("temperature", "Temperature"),
+            ("dewpoint", "Dew Point"), ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
+        ])
+    )
     mae_chart_divs = "".join(
-        f'<div class="chart-container"><div id="mae-chart-{v}"></div></div>'
-        for v in VARIABLES
+        f'<div class="chart-container"><div id="mae-chart-{lt}"></div></div>'
+        for lt in lead_times
     )
 
-    chart_divs = "".join(
-        f'<div class="chart-container"><div id="chart-{v}"></div></div>'
-        for v in VARIABLES
+    fcst_filter_btns = "".join(
+        f'<button class="fcst-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
+        for i, (v, lbl) in enumerate([
+            ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
+            ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
+        ])
+    )
+
+    _var_btns = [
+        ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
+        ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
+    ]
+    bias_filter_btns = "".join(
+        f'<button class="bias-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
+        for i, (v, lbl) in enumerate(_var_btns)
+    )
+    bias_chart_divs = "".join(
+        f'<div class="chart-container"><div id="bias-chart-{lt}"></div></div>'
+        for lt in lead_times
+    )
+    lead_skill_filter_btns = "".join(
+        f'<button class="lead-skill-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
+        for i, (v, lbl) in enumerate(_var_btns)
+    )
+    heatmap_filter_btns = "".join(
+        f'<button class="heatmap-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
+        for i, (v, lbl) in enumerate(_var_btns)
+    )
+    diurnal_filter_btns = "".join(
+        f'<button class="diurnal-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
+        for i, (v, lbl) in enumerate(_var_btns)
+    )
+    error_dist_var_btns = "".join(
+        f'<button class="error-dist-var-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
+        for i, (v, lbl) in enumerate(_var_btns)
+    )
+    error_dist_lead_btns = "".join(
+        f'<button class="error-dist-lead-btn{" active" if i == 0 else ""}" data-lead="{lt}">+{lt}h</button>'
+        for i, lt in enumerate(lead_times)
     )
 
     html = f"""\
@@ -913,19 +1856,48 @@ def generate(
     {table_7d}
   </div>
   <h3 class="obs-subhead">MAE over time</h3>
-  <div class="charts-grid">
+  <div class="mae-filter-bar">{filter_btns}<button id="raw-toggle" class="mae-raw-btn">Raw values</button></div>
+  <div class="mae-charts-grid">
     {mae_chart_divs}
   </div>
 </section>
 
 <section class="section">
-  <h2>Latest Forecast Run</h2>
-  <div class="model-runs">
-    {model_runs}
+  <h2>Model Analysis</h2>
+
+  <h3>Bias Over Time</h3>
+  <div class="mae-filter-bar">{bias_filter_btns}</div>
+  <div class="mae-charts-grid">
+    {bias_chart_divs}
   </div>
-  <h3 class="obs-subhead">Forecast Charts</h3>
-  <div class="charts-grid">
-    {chart_divs}
+
+  <h3 class="obs-subhead">Lead-Time Skill Curves</h3>
+  <div class="mae-filter-bar">{lead_skill_filter_btns}</div>
+  <div class="chart-container"><div id="lead-skill-chart"></div></div>
+
+  <h3 class="obs-subhead">Score Heatmap</h3>
+  <div class="mae-filter-bar">{heatmap_filter_btns}</div>
+  <div class="chart-container"><div id="heatmap-chart"></div></div>
+
+  <h3 class="obs-subhead">Diurnal Stratification</h3>
+  <div class="mae-filter-bar">
+    {diurnal_filter_btns}
+    <button id="diurnal-mode-btn" class="mae-raw-btn">Show MAE</button>
+  </div>
+  <div class="chart-container"><div id="diurnal-chart"></div></div>
+
+  <h3 class="obs-subhead">Error Distribution</h3>
+  <div class="mae-filter-bar">{error_dist_var_btns}</div>
+  <div class="mae-filter-bar">{error_dist_lead_btns}</div>
+  <div class="chart-container"><div id="error-dist-chart"></div></div>
+</section>
+
+<section class="section">
+  <h2>Latest Forecast Run</h2>
+  <div class="mae-filter-bar">{fcst_filter_btns}</div>
+  <div class="chart-container"><div id="chart-forecast"></div></div>
+  <div class="model-runs" style="margin-top:16px">
+    {model_runs}
   </div>
 </section>
 
@@ -937,7 +1909,13 @@ def generate(
 {_chart_js(charts)}
 {_obs_history_js(tempest_rows, nws_rows)}
 {_mae_timeseries_js(mae_ts)}
+{_member_forecast_js(member_forecast_rows, lead_times)}
 {_member_detail_js(members_10)}
+{_bias_timeseries_js(bias_ts)}
+{_lead_skill_js(lead_skill)}
+{_heatmap_js(heatmap)}
+{_diurnal_js(diurnal)}
+{_error_dist_js(error_dist)}
 </script>
 </body>
 </html>
