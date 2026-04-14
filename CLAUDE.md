@@ -23,9 +23,9 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
    - `NEEDS_CONN_IN = True` if the model needs historical DB access, else omit
    - `run(obs, issued_at, *, conn_in=None) -> list[dict]` returning forecast dicts
 
-2. Add an `INSERT OR IGNORE` for the model row to `migrations/001_baseline.sql` (models
+2. Add an `insert or ignore` for the model row to `migrations/001_baseline.sql` (models
    table) and a row for each member to the members table. Single-member models need one
-   members row: `(model_id, 0, NULL)`.
+   members row: `(model_id, 0, null)`.
 
 3. Add the model to `_MODELS` in `barogram.py`.
 
@@ -61,7 +61,14 @@ ensemble spread as `spread`. All members share the same `issued_at`.
 
 Register each `(model_id, member_id, name)` pair in the members table in
 `migrations/001_baseline.sql`. Member names should be short descriptive labels
-(e.g. `"week-heavy"`, `"exponential"`). The member_id=0 row has `name=NULL`.
+(e.g. `"week-heavy"`, `"exponential"`). The member_id=0 row has `name=null`.
+
+## SQL style
+
+All SQL keywords must be lowercase — `select`, `insert`, `create table`, `where`, `join`,
+`order by`, etc. This applies to both `.sql` migration files and inline SQL strings in
+Python. Data types (`integer`, `text`, `real`) and functions (`avg`, `count`, `cast`) are
+lowercase as well.
 
 ## Model inventory
 

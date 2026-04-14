@@ -1,17 +1,17 @@
-CREATE TABLE IF NOT EXISTS members (
-    model_id   INTEGER NOT NULL REFERENCES models(id),
-    member_id  INTEGER NOT NULL DEFAULT 0,
-    name       TEXT,
-    PRIMARY KEY (model_id, member_id)
+create table if not exists members (
+    model_id   integer not null references models(id),
+    member_id  integer not null default 0,
+    name       text,
+    primary key (model_id, member_id)
 );
 
-INSERT OR IGNORE INTO members (model_id, member_id, name) VALUES (1, 0, NULL);
-INSERT OR IGNORE INTO members (model_id, member_id, name) VALUES (2, 0, NULL);
-INSERT OR IGNORE INTO members (model_id, member_id, name) VALUES (100, 0, NULL);
+insert or ignore into members (model_id, member_id, name) values (1, 0, null);
+insert or ignore into members (model_id, member_id, name) values (2, 0, null);
+insert or ignore into members (model_id, member_id, name) values (100, 0, null);
 
-ALTER TABLE forecasts ADD COLUMN member_id INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE forecasts ADD COLUMN spread REAL;
+alter table forecasts add column member_id integer not null default 0;
+alter table forecasts add column spread real;
 
-DROP INDEX IF EXISTS idx_forecasts_lookup;
-CREATE INDEX IF NOT EXISTS idx_forecasts_lookup
-    ON forecasts (model_id, member_id, variable, valid_at);
+drop index if exists idx_forecasts_lookup;
+create index if not exists idx_forecasts_lookup
+    on forecasts (model_id, member_id, variable, valid_at);

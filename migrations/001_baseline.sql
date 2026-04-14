@@ -1,34 +1,34 @@
-CREATE TABLE IF NOT EXISTS models (
-    id   INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    type TEXT NOT NULL DEFAULT 'base'
+create table if not exists models (
+    id   integer primary key,
+    name text not null unique,
+    type text not null default 'base'
 );
 
-INSERT OR IGNORE INTO models (id, name, type) VALUES (1, 'persistence', 'base');
-INSERT OR IGNORE INTO models (id, name, type) VALUES (2, 'climatological_mean', 'base');
-INSERT OR IGNORE INTO models (id, name, type) VALUES (3, 'weighted_climatological_mean', 'base');
-INSERT OR IGNORE INTO models (id, name, type) VALUES (100, 'ensemble', 'ensemble');
+insert or ignore into models (id, name, type) values (1, 'persistence', 'base');
+insert or ignore into models (id, name, type) values (2, 'climatological_mean', 'base');
+insert or ignore into models (id, name, type) values (3, 'weighted_climatological_mean', 'base');
+insert or ignore into models (id, name, type) values (100, 'ensemble', 'ensemble');
 
-CREATE TABLE IF NOT EXISTS forecasts (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    model_id    INTEGER NOT NULL REFERENCES models(id),
-    model       TEXT    NOT NULL,  -- denormalized for query convenience
-    issued_at   INTEGER NOT NULL,
-    valid_at    INTEGER NOT NULL,
-    lead_hours  INTEGER NOT NULL,
-    variable    TEXT    NOT NULL,
-    value       REAL,
-    observed    REAL,
-    scored_at   INTEGER,
-    error       REAL,
-    mae         REAL
+create table if not exists forecasts (
+    id          integer primary key autoincrement,
+    model_id    integer not null references models(id),
+    model       text    not null,  -- denormalized for query convenience
+    issued_at   integer not null,
+    valid_at    integer not null,
+    lead_hours  integer not null,
+    variable    text    not null,
+    value       real,
+    observed    real,
+    scored_at   integer,
+    error       real,
+    mae         real
 );
 
-CREATE INDEX IF NOT EXISTS idx_forecasts_lookup
-    ON forecasts (model_id, variable, valid_at);
+create index if not exists idx_forecasts_lookup
+    on forecasts (model_id, variable, valid_at);
 
-CREATE INDEX IF NOT EXISTS idx_forecasts_issued
-    ON forecasts (issued_at);
+create index if not exists idx_forecasts_issued
+    on forecasts (issued_at);
 
-CREATE INDEX IF NOT EXISTS idx_forecasts_scoring
-    ON forecasts (valid_at, scored_at);
+create index if not exists idx_forecasts_scoring
+    on forecasts (valid_at, scored_at);

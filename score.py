@@ -23,9 +23,9 @@ def run(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
     now = int(time.time())
     unscored = conn_out.execute(
         """
-        SELECT id, variable, value, valid_at
-        FROM forecasts
-        WHERE valid_at < ? AND scored_at IS NULL
+        select id, variable, value, valid_at
+        from forecasts
+        where valid_at < ? and scored_at is null
         """,
         (now,),
     ).fetchall()
