@@ -3,7 +3,8 @@
 # deviation = current_obs - climo_now (per member weight function).
 # static group: forecast = future_baseline + deviation.
 # decay groups: forecast = future_baseline + deviation * exp(-k * lead_hours).
-# member_id=0 is the equal-weighted mean of all members.
+# member_id=0 is the performance-weighted mean of all members when weights are
+# available, otherwise equal-weighted.
 
 import datetime as dt
 import math
@@ -15,6 +16,7 @@ from models._climo_weights import LEAD_HOURS, MEMBERS as _BASE_MEMBERS, VARIABLE
 MODEL_ID = 4
 MODEL_NAME = "climo_deviation"
 NEEDS_CONN_IN = True
+NEEDS_WEIGHTS = True
 
 # (id_offset, decay_k or None for static, member name prefix)
 _GROUPS = [
@@ -25,7 +27,7 @@ _GROUPS = [
 ]
 
 
-def run(obs, issued_at: int, *, conn_in) -> list[dict]:
+def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     now = dt.datetime.fromtimestamp(obs["timestamp"])
     now_bucket = db.climo_bucket_obs(conn_in, now.month, now.hour)
 
@@ -75,16 +77,27 @@ def run(obs, issued_at: int, *, conn_in) -> list[dict]:
                     })
                 member_vals[actual_mid] = vals
 
-        # member_id=0: equal-weighted mean + spread across all 36 members
+        # member_id=0: weighted mean + spread across all 36 members
+        all_member_ids = [offset + mid for offset, k, prefix in _GROUPS for mid, _, _ in _BASE_MEMBERS]
         for variable in VARIABLES:
-            all_vals = [
-                member_vals[offset + mid][variable]
-                for offset, k, prefix in _GROUPS
-                for mid, _, _ in _BASE_MEMBERS
-                if member_vals[offset + mid][variable] is not None
+            valid_pairs = [
+                (mid, member_vals[mid][variable])
+                for mid in all_member_ids
+                if member_vals[mid][variable] is not None
             ]
-            mean = sum(all_vals) / len(all_vals) if all_vals else None
-            spread = statistics.pstdev(all_vals) if len(all_vals) > 1 else None
+            if not valid_pairs:
+                mean = None
+            elif weights:
+                w_pairs = [(weights.get((mid, variable, lead), None), v) for mid, v in valid_pairs]
+                if any(w is None for w, _ in w_pairs):
+                    # incomplete weights for this group — fall back to equal weighting
+                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                else:
+                    total_w = sum(w for w, _ in w_pairs)
+                    mean = sum(w * v for w, v in w_pairs) / total_w
+            else:
+                mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+            spread = statistics.pstdev([v for _, v in valid_pairs]) if len(valid_pairs) > 1 else None
             rows.append({
                 "model_id": MODEL_ID,
                 "model": MODEL_NAME,

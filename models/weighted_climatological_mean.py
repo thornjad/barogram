@@ -1,6 +1,7 @@
 # weighted climatological mean: historical (month, hour) bucket mean with
 # recency weighting. each member uses a different weighting hypothesis.
-# member_id=0 is the equal-weighted mean of all members.
+# member_id=0 is the performance-weighted mean of all members when weights are
+# available, otherwise equal-weighted.
 
 import datetime as dt
 import statistics
@@ -11,9 +12,10 @@ from models._climo_weights import LEAD_HOURS, MEMBERS as _MEMBERS, VARIABLES, we
 MODEL_ID = 3
 MODEL_NAME = "weighted_climatological_mean"
 NEEDS_CONN_IN = True
+NEEDS_WEIGHTS = True
 
 
-def run(obs, issued_at: int, *, conn_in) -> list[dict]:
+def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     rows = []
     for lead in LEAD_HOURS:
         valid_at = obs["timestamp"] + lead * 3600
@@ -38,15 +40,26 @@ def run(obs, issued_at: int, *, conn_in) -> list[dict]:
                 })
             member_vals[mid] = vals
 
-        # member_id=0: equal-weighted mean + spread across members 1-9
+        # member_id=0: weighted mean + spread across members 1-9
         for variable in VARIABLES:
-            member_values = [
-                member_vals[mid][variable]
+            valid_pairs = [
+                (mid, member_vals[mid][variable])
                 for mid, _, _ in _MEMBERS
                 if member_vals[mid][variable] is not None
             ]
-            mean = sum(member_values) / len(member_values) if member_values else None
-            spread = statistics.pstdev(member_values) if len(member_values) > 1 else None
+            if not valid_pairs:
+                mean = None
+            elif weights:
+                w_pairs = [(weights.get((mid, variable, lead), None), v) for mid, v in valid_pairs]
+                if any(w is None for w, _ in w_pairs):
+                    # incomplete weights for this group — fall back to equal weighting
+                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                else:
+                    total_w = sum(w for w, _ in w_pairs)
+                    mean = sum(w * v for w, v in w_pairs) / total_w
+            else:
+                mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+            spread = statistics.pstdev([v for _, v in valid_pairs]) if len(valid_pairs) > 1 else None
             rows.append({
                 "model_id": MODEL_ID,
                 "model": MODEL_NAME,
