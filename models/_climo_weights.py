@@ -4,7 +4,7 @@ LEAD_HOURS = [6, 12, 18, 24]
 
 VARIABLES = {
     "temperature": "air_temp",
-    "humidity": "relative_humidity",
+    "dewpoint": "dew_point",
     "pressure": "station_pressure",
     "wind_speed": "wind_avg",
 }

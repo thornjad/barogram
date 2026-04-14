@@ -37,7 +37,7 @@ def cmd_conditions(args, conf):
         name = tempest["name"] or tempest["station_id"]
         print(f"{name} ({tempest['station_id']}) \u2014 {fmt.ts(tempest['timestamp'])}")
         print(f"  Temperature:   {fmt.temp(tempest['air_temp'])}")
-        print(f"  Humidity:      {fmt.val(tempest['relative_humidity'], '.0f', '%')}")
+        print(f"  Dewpoint:      {fmt.temp(tempest['dew_point'])}")
         print(f"  Pressure:      {fmt.val(tempest['station_pressure'], '.1f', ' mb')} (station)")
         gust = tempest["wind_gust"]
         gust_str = f", gusts to {fmt.val(gust, '.1f', ' m/s')}" if gust is not None else ""
@@ -58,7 +58,6 @@ def cmd_conditions(args, conf):
         print(f"NWS {nws['station_id']} ({name}) \u2014 {fmt.ts(nws['timestamp'])}")
         print(f"  Temperature:   {fmt.temp(nws['air_temp'])}")
         print(f"  Dewpoint:      {fmt.temp(nws['dew_point'])}")
-        print(f"  Humidity:      {fmt.val(nws['relative_humidity'], '.0f', '%')}")
         print(f"  Wind:          {fmt.wind_dir(nws['wind_direction'])} "
               f"{fmt.val(nws['wind_speed'], '.1f', ' m/s')}")
         print(f"  Pressure:      {fmt.val(nws['sea_level_pressure'], '.1f', ' mb')}")

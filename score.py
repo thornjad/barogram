@@ -8,7 +8,7 @@ import db
 # does not depend on any model module
 _OBS_COLUMN = {
     "temperature": "air_temp",
-    "humidity":    "relative_humidity",
+    "dewpoint":    "dew_point",
     "pressure":    "station_pressure",
     "wind_speed":  "wind_avg",
 }

@@ -4,15 +4,6 @@
 
 The persistence model is the ultimate naive forecast. It rejects the idea that the climate changes, that weather is transient, and confidently asserts that whatever the conditions are now, they will continue to be the conditions forever. Specifically, it checks the latest observed conditions and forecasts that the same conditions will be present at all future times.
 
-## Variables Forecast
-
-| Variable    | Unit | Source column      |
-|-------------|------|--------------------|
-| temperature | °C   | air_temp           |
-| humidity    | %    | relative_humidity  |
-| pressure    | mb   | station_pressure   |
-| wind_speed  | m/s  | wind_avg           |
-
 ## Lead Times
 
 6, 12, 18, 24 hours from the most recent Tempest observation.

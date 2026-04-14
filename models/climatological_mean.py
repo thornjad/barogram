@@ -15,7 +15,7 @@ MIN_OBS = 30
 # barogram variable name -> tempest_obs column name
 VARIABLES = {
     "temperature": "air_temp",
-    "humidity": "relative_humidity",
+    "dewpoint": "dew_point",
     "pressure": "station_pressure",
     "wind_speed": "wind_avg",
 }

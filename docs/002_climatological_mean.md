@@ -11,15 +11,6 @@ Bucket matching uses local time for both the query (SQLite `'localtime'` modifie
 
 A bucket with fewer than `MIN_OBS = 30` observations produces `value = None` for all variables, which the scoring engine treats as skipped. This threshold guards against garbage forecasts from a bucket that has barely been observed — 30 samples represents roughly one reading per day over a month.
 
-## Variables Forecast
-
-| Variable    | Unit | Source column      |
-|-------------|------|--------------------|
-| temperature | °C   | air_temp           |
-| humidity    | %    | relative_humidity  |
-| pressure    | mb   | station_pressure   |
-| wind_speed  | m/s  | wind_avg           |
-
 ## Lead Times
 
 6, 12, 18, 24 hours from the most recent Tempest observation.
@@ -33,9 +24,9 @@ This particular model does not use official NCEI normals. Instead, for fun and e
 
 ### Pros
 - Captures the diurnal cycle and seasonal baseline that persistence ignores
-- Likely to outperform persistence on slowly-varying variables (pressure, humidity) at longer lead times once sufficient data accumulates
+- Likely to outperform persistence on slowly-varying variables (pressure, dewpoint) at longer lead times once sufficient data accumulates
 
 ### Cons
 - Currently a single-year diurnal average, not a 30-year climatological normal
 - No synoptic-scale skill, this cannot anticipate fronts, storm systems, or anomalous patterns
-- Cannot forecast variables not measured by the Tempest (dewpoint, sky cover, sea-level pressure)
+- Cannot forecast variables not measured by the Tempest (sky cover, sea-level pressure)

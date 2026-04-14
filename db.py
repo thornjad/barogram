@@ -5,11 +5,11 @@ from pathlib import Path
 REQUIRED_COLUMNS: dict[str, set[str]] = {
     "tempest_obs": {
         "station_id", "timestamp", "air_temp", "station_pressure",
-        "relative_humidity", "wind_avg", "wind_gust", "wind_direction",
+        "dew_point", "wind_avg", "wind_gust", "wind_direction",
         "precip_accum_day", "solar_radiation", "uv_index", "lightning_count",
     },
     "nws_obs": {
-        "station_id", "timestamp", "air_temp", "dew_point", "relative_humidity",
+        "station_id", "timestamp", "air_temp", "dew_point",
         "wind_speed", "wind_direction", "sea_level_pressure", "sky_cover", "raw_metar",
     },
     "stations": {"station_id", "source", "name"},
@@ -105,7 +105,7 @@ def nearest_tempest_obs(
 ) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT t.air_temp, t.relative_humidity, t.station_pressure, t.wind_avg
+        SELECT t.air_temp, t.dew_point, t.station_pressure, t.wind_avg
         FROM tempest_obs t
         JOIN stations s ON s.station_id = t.station_id
         WHERE s.source = 'tempest'
@@ -127,7 +127,7 @@ def climo_bucket_means(
         """
         SELECT
             AVG(t.air_temp)           AS temperature,
-            AVG(t.relative_humidity)  AS humidity,
+            AVG(t.dew_point)          AS dewpoint,
             AVG(t.station_pressure)   AS pressure,
             AVG(t.wind_avg)           AS wind_speed,
             COUNT(*)                  AS n
@@ -143,7 +143,7 @@ def climo_bucket_means(
         return {}
     return {
         "temperature": row["temperature"],
-        "humidity": row["humidity"],
+        "dewpoint": row["dewpoint"],
         "pressure": row["pressure"],
         "wind_speed": row["wind_speed"],
     }
@@ -156,7 +156,7 @@ def climo_bucket_obs(
 ) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT t.timestamp, t.air_temp, t.relative_humidity,
+        SELECT t.timestamp, t.air_temp, t.dew_point,
                t.station_pressure, t.wind_avg
         FROM tempest_obs t
         JOIN stations s ON s.station_id = t.station_id
