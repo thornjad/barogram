@@ -23,13 +23,13 @@ def open_input_db(path: str) -> sqlite3.Connection:
         raise FileNotFoundError(f"input database not found: {p}")
     conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True, isolation_level=None)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("pragma foreign_keys=on")
     return conn
 
 
 def validate_schema(conn: sqlite3.Connection) -> None:
     tables = {row[0] for row in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
+        "select name from sqlite_master where type='table'"
     )}
     for table, required_cols in REQUIRED_COLUMNS.items():
         if table not in tables:
@@ -37,7 +37,7 @@ def validate_schema(conn: sqlite3.Connection) -> None:
                 f"input database is missing required table '{table}' — "
                 f"is this a wxlog database?"
             )
-        actual_cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        actual_cols = {row[1] for row in conn.execute(f"pragma table_info({table})")}
         missing = required_cols - actual_cols
         if missing:
             raise ValueError(
@@ -49,12 +49,12 @@ def validate_schema(conn: sqlite3.Connection) -> None:
 def latest_tempest_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT t.*, s.name
-        FROM tempest_obs t
-        JOIN stations s ON s.station_id = t.station_id
-        WHERE s.source = 'tempest'
-        ORDER BY t.timestamp DESC
-        LIMIT 1
+        select t.*, s.name
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+        order by t.timestamp desc
+        limit 1
         """
     ).fetchone()
 
@@ -62,12 +62,12 @@ def latest_tempest_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
 def latest_nws_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT n.*, s.name
-        FROM nws_obs n
-        JOIN stations s ON s.station_id = n.station_id
-        WHERE s.source = 'nws'
-        ORDER BY n.timestamp DESC
-        LIMIT 1
+        select n.*, s.name
+        from nws_obs n
+        join stations s on s.station_id = n.station_id
+        where s.source = 'nws'
+        order by n.timestamp desc
+        limit 1
         """
     ).fetchone()
 
@@ -75,12 +75,12 @@ def latest_nws_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
 def recent_tempest_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
     return conn.execute(
         """
-        SELECT t.*, s.name
-        FROM tempest_obs t
-        JOIN stations s ON s.station_id = t.station_id
-        WHERE s.source = 'tempest'
-        ORDER BY t.timestamp DESC
-        LIMIT ?
+        select t.*, s.name
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+        order by t.timestamp desc
+        limit ?
         """,
         (limit,),
     ).fetchall()
@@ -89,12 +89,12 @@ def recent_tempest_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
 def recent_nws_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
     return conn.execute(
         """
-        SELECT n.*, s.name
-        FROM nws_obs n
-        JOIN stations s ON s.station_id = n.station_id
-        WHERE s.source = 'nws'
-        ORDER BY n.timestamp DESC
-        LIMIT ?
+        select n.*, s.name
+        from nws_obs n
+        join stations s on s.station_id = n.station_id
+        where s.source = 'nws'
+        order by n.timestamp desc
+        limit ?
         """,
         (limit,),
     ).fetchall()
@@ -105,13 +105,13 @@ def nearest_tempest_obs(
 ) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT t.air_temp, t.dew_point, t.station_pressure, t.wind_avg
-        FROM tempest_obs t
-        JOIN stations s ON s.station_id = t.station_id
-        WHERE s.source = 'tempest'
-          AND t.timestamp BETWEEN ? AND ?
-        ORDER BY ABS(t.timestamp - ?) ASC
-        LIMIT 1
+        select t.air_temp, t.dew_point, t.station_pressure, t.wind_avg
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and t.timestamp between ? and ?
+        order by abs(t.timestamp - ?) asc
+        limit 1
         """,
         (timestamp - window_sec, timestamp + window_sec, timestamp),
     ).fetchone()
@@ -125,17 +125,17 @@ def climo_bucket_means(
 ) -> dict[str, float | None]:
     row = conn.execute(
         """
-        SELECT
-            AVG(t.air_temp)           AS temperature,
-            AVG(t.dew_point)          AS dewpoint,
-            AVG(t.station_pressure)   AS pressure,
-            AVG(t.wind_avg)           AS wind_speed,
-            COUNT(*)                  AS n
-        FROM tempest_obs t
-        JOIN stations s ON s.station_id = t.station_id
-        WHERE s.source = 'tempest'
-          AND CAST(strftime('%m', datetime(t.timestamp, 'unixepoch', 'localtime')) AS INTEGER) = ?
-          AND CAST(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) AS INTEGER) = ?
+        select
+            avg(t.air_temp)           as temperature,
+            avg(t.dew_point)          as dewpoint,
+            avg(t.station_pressure)   as pressure,
+            avg(t.wind_avg)           as wind_speed,
+            count(*)                  as n
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and cast(strftime('%m', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) = ?
+          and cast(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) = ?
         """,
         (month, hour),
     ).fetchone()
@@ -156,48 +156,48 @@ def climo_bucket_obs(
 ) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT t.timestamp, t.air_temp, t.dew_point,
+        select t.timestamp, t.air_temp, t.dew_point,
                t.station_pressure, t.wind_avg
-        FROM tempest_obs t
-        JOIN stations s ON s.station_id = t.station_id
-        WHERE s.source = 'tempest'
-          AND CAST(strftime('%m', datetime(t.timestamp, 'unixepoch', 'localtime')) AS INTEGER) = ?
-          AND CAST(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) AS INTEGER) = ?
-        ORDER BY t.timestamp DESC
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and cast(strftime('%m', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) = ?
+          and cast(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) = ?
+        order by t.timestamp desc
         """,
         (month, hour),
     ).fetchall()
 
 
 def update_scored_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
-    conn.execute("BEGIN")
+    conn.execute("begin")
     try:
         conn.executemany(
             """
-            UPDATE forecasts
-            SET observed = :observed, error = :error, mae = :mae, scored_at = :scored_at
-            WHERE id = :id
+            update forecasts
+            set observed = :observed, error = :error, mae = :mae, scored_at = :scored_at
+            where id = :id
             """,
             rows,
         )
-        conn.execute("COMMIT")
+        conn.execute("commit")
     except Exception:
-        conn.execute("ROLLBACK")
+        conn.execute("rollback")
         raise
 
 
 def score_summary(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """
-        SELECT f.model_id, f.model, m.type, f.member_id, mem.name AS member_name,
+        select f.model_id, f.model, m.type, f.member_id, mem.name as member_name,
                f.variable, f.lead_hours,
-               COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
-        FROM forecasts f
-        JOIN models m ON m.id = f.model_id
-        LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
-        WHERE f.scored_at IS NOT NULL
-        GROUP BY f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
-        ORDER BY f.model_id, f.member_id, f.variable, f.lead_hours
+               count(*) as n, avg(f.mae) as avg_mae, avg(f.error) as avg_bias
+        from forecasts f
+        join models m on m.id = f.model_id
+        left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
+        where f.scored_at is not null
+        group by f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
+        order by f.model_id, f.member_id, f.variable, f.lead_hours
         """
     ).fetchall()
 
@@ -205,15 +205,15 @@ def score_summary(conn: sqlite3.Connection) -> list:
 def score_summary_since(conn: sqlite3.Connection, since: int) -> list:
     return conn.execute(
         """
-        SELECT f.model_id, f.model, m.type, f.member_id, mem.name AS member_name,
+        select f.model_id, f.model, m.type, f.member_id, mem.name as member_name,
                f.variable, f.lead_hours,
-               COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
-        FROM forecasts f
-        JOIN models m ON m.id = f.model_id
-        LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
-        WHERE f.scored_at IS NOT NULL AND f.issued_at >= ?
-        GROUP BY f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
-        ORDER BY f.model_id, f.member_id, f.variable, f.lead_hours
+               count(*) as n, avg(f.mae) as avg_mae, avg(f.error) as avg_bias
+        from forecasts f
+        join models m on m.id = f.model_id
+        left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
+        where f.scored_at is not null and f.issued_at >= ?
+        group by f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
+        order by f.model_id, f.member_id, f.variable, f.lead_hours
         """,
         (since,),
     ).fetchall()
@@ -222,23 +222,23 @@ def score_summary_since(conn: sqlite3.Connection, since: int) -> list:
 def score_summary_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
     return conn.execute(
         """
-        WITH recent AS (
-            SELECT DISTINCT issued_at
-            FROM forecasts
-            WHERE scored_at IS NOT NULL
-            ORDER BY issued_at DESC
-            LIMIT ?
+        with recent as (
+            select distinct issued_at
+            from forecasts
+            where scored_at is not null
+            order by issued_at desc
+            limit ?
         )
-        SELECT f.model_id, f.model, m.type, f.member_id, mem.name AS member_name,
+        select f.model_id, f.model, m.type, f.member_id, mem.name as member_name,
                f.variable, f.lead_hours,
-               COUNT(*) AS n, AVG(f.mae) AS avg_mae, AVG(f.error) AS avg_bias
-        FROM forecasts f
-        JOIN models m ON m.id = f.model_id
-        LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
-        JOIN recent r ON r.issued_at = f.issued_at
-        WHERE f.scored_at IS NOT NULL
-        GROUP BY f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
-        ORDER BY f.model_id, f.member_id, f.variable, f.lead_hours
+               count(*) as n, avg(f.mae) as avg_mae, avg(f.error) as avg_bias
+        from forecasts f
+        join models m on m.id = f.model_id
+        left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
+        join recent r on r.issued_at = f.issued_at
+        where f.scored_at is not null
+        group by f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
+        order by f.model_id, f.member_id, f.variable, f.lead_hours
         """,
         (n,),
     ).fetchall()
@@ -248,13 +248,60 @@ def score_timeseries(conn: sqlite3.Connection) -> list:
     """Per-run average MAE by model/member/variable/lead, ordered by run time."""
     return conn.execute(
         """
-        SELECT f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at,
-               AVG(f.mae) AS avg_mae
-        FROM forecasts f
-        JOIN models m ON m.id = f.model_id
-        WHERE f.scored_at IS NOT NULL
-        GROUP BY f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at
-        ORDER BY f.issued_at
+        select f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at,
+               avg(f.mae) as avg_mae
+        from forecasts f
+        join models m on m.id = f.model_id
+        where f.scored_at is not null
+        group by f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at
+        order by f.issued_at
+        """
+    ).fetchall()
+
+
+def bias_timeseries(conn: sqlite3.Connection) -> list:
+    """Per-run average signed error by model/member/variable/lead, ordered by run time."""
+    return conn.execute(
+        """
+        select f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at,
+               avg(f.error) as avg_bias
+        from forecasts f
+        join models m on m.id = f.model_id
+        where f.scored_at is not null
+        group by f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at
+        order by f.issued_at
+        """
+    ).fetchall()
+
+
+def diurnal_errors(conn: sqlite3.Connection) -> list:
+    """Average bias and MAE grouped by hour of valid_at (local time), model, and variable."""
+    return conn.execute(
+        """
+        select
+            cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) as hour,
+            f.model_id, f.model, m.type, f.member_id, f.variable,
+            count(*) as n, avg(f.error) as avg_bias, avg(f.mae) as avg_mae
+        from forecasts f
+        join models m on m.id = f.model_id
+        where f.scored_at is not null
+        group by hour, f.model_id, f.model, m.type, f.member_id, f.variable
+        order by f.model_id, f.member_id, f.variable, hour
+        """
+    ).fetchall()
+
+
+def error_distribution(conn: sqlite3.Connection) -> list:
+    """Raw signed error values for member_id=0 rows, for histogram analysis."""
+    return conn.execute(
+        """
+        select f.model_id, f.model, m.type, f.variable, f.lead_hours, f.error
+        from forecasts f
+        join models m on m.id = f.model_id
+        where f.scored_at is not null
+          and f.member_id = 0
+          and f.error is not null
+        order by f.model_id, f.variable, f.lead_hours
         """
     ).fetchall()
 
@@ -263,17 +310,17 @@ def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
     """All rows from each model/member's most recent run, ordered by type then name."""
     return conn.execute(
         """
-        SELECT f.model_id, f.model, f.member_id, mem.name AS member_name,
+        select f.model_id, f.model, f.member_id, mem.name as member_name,
                m.type, f.issued_at, f.variable, f.lead_hours, f.value, f.valid_at
-        FROM forecasts f
-        JOIN models m ON m.id = f.model_id
-        LEFT JOIN members mem ON mem.model_id = f.model_id AND mem.member_id = f.member_id
-        WHERE f.issued_at = (
-            SELECT MAX(f2.issued_at)
-            FROM forecasts f2
-            WHERE f2.model_id = f.model_id AND f2.member_id = f.member_id
+        from forecasts f
+        join models m on m.id = f.model_id
+        left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
+        where f.issued_at = (
+            select max(f2.issued_at)
+            from forecasts f2
+            where f2.model_id = f.model_id and f2.member_id = f.member_id
         )
-        ORDER BY m.type, f.model, f.member_id, f.variable, f.lead_hours
+        order by m.type, f.model, f.member_id, f.variable, f.lead_hours
         """
     ).fetchall()
 
@@ -283,18 +330,18 @@ def open_output_db(path: str) -> sqlite3.Connection:
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p), isolation_level=None)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("pragma journal_mode=WAL")
+    conn.execute("pragma foreign_keys=on")
     return conn
 
 
 def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
     # bootstrap metadata table before checking schema_version
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT)"
+        "create table if not exists metadata (key text primary key, value text)"
     )
     row = conn.execute(
-        "SELECT value FROM metadata WHERE key = 'schema_version'"
+        "select value from metadata where key = 'schema_version'"
     ).fetchone()
     current = int(row[0]) if row else 0
 
@@ -306,7 +353,7 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
         # are idempotent via IF NOT EXISTS so re-running on partial failure is safe
         conn.executescript(f.read_text())
         conn.execute(
-            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)",
+            "insert or replace into metadata (key, value) values ('schema_version', ?)",
             (str(version),),
         )
 
@@ -316,18 +363,18 @@ def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
         {**row, "member_id": row.get("member_id", 0), "spread": row.get("spread")}
         for row in rows
     ]
-    conn.execute("BEGIN")
+    conn.execute("begin")
     try:
         conn.executemany(
             """
-            INSERT INTO forecasts
+            insert into forecasts
                 (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, spread)
-            VALUES
+            values
                 (:model_id, :model, :member_id, :issued_at, :valid_at, :lead_hours, :variable, :value, :spread)
             """,
             normalized,
         )
-        conn.execute("COMMIT")
+        conn.execute("commit")
     except Exception:
-        conn.execute("ROLLBACK")
+        conn.execute("rollback")
         raise
