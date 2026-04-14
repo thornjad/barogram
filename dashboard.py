@@ -5,6 +5,7 @@ from pathlib import Path
 
 import db
 import fmt
+import models.pressure_tendency as pressure_tendency
 
 VARIABLES = ["temperature", "dewpoint", "pressure", "wind_speed"]
 
@@ -58,7 +59,7 @@ header {
     border-bottom: 2px solid #1a1a1a;
 }
 header h1 { font-size: 22px; letter-spacing: -0.5px; }
-.generated { font-size: 12px; color: #666; }
+.generated { font-size: 12px; color: #666; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .section { margin-bottom: 32px; }
 h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
 h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
@@ -287,10 +288,113 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     background: #f8f8ff;
     border-top: 1px solid #eee;
 }
+.weights-section { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
+.weights-model-block { }
+.weights-model-block h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.weight-table {
+    border-collapse: collapse;
+    font-size: 12px;
+    background: #fafafa;
+    border: 1px solid #e0e0e0;
+    border-radius: 3px;
+}
+.weight-table th, .weight-table td { padding: 4px 10px; text-align: left; border-bottom: 1px solid #eee; }
+.weight-table thead th { background: #f0f0f0; font-weight: 600; color: #1a1a1a; }
+.weight-table tbody tr:last-child th,
+.weight-table tbody tr:last-child td { border-bottom: none; }
+.weight-table td.wt-pct { text-align: right; font-variant-numeric: tabular-nums; min-width: 52px; }
+.weight-group-hdr th { background: #f5f5f5; font-size: 11px; color: #888; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 10px; }
 @media (max-width: 600px) {
     .conditions-grid, .charts-grid, .verification-windows { grid-template-columns: 1fr; }
 }
 """
+
+
+def _weights_section_html(rows: list) -> str:
+    if not rows:
+        return ""
+
+    # average weight per (model_id, member_id) across all (variable, lead_hours) groups
+    from collections import defaultdict
+    sums: dict = defaultdict(lambda: defaultdict(list))
+    model_names: dict = {}
+    member_names: dict = {}
+    for r in rows:
+        sums[r["model_id"]][r["member_id"]].append(r["weight"])
+        model_names[r["model_id"]] = r["model_name"]
+        member_names[(r["model_id"], r["member_id"])] = r["member_name"] or str(r["member_id"])
+
+    avg_weights: dict = {
+        mid: {mem_id: sum(ws) / len(ws) for mem_id, ws in members.items()}
+        for mid, members in sums.items()
+    }
+
+    def _group_label(name: str) -> str:
+        if name.startswith("s-"):
+            return "static"
+        if name.startswith("d03-"):
+            return "decay k=0.03"
+        if name.startswith("d05-"):
+            return "decay k=0.05"
+        if name.startswith("d10-"):
+            return "decay k=0.10"
+        return ""
+
+    blocks = []
+    for model_id in sorted(avg_weights):
+        weights = avg_weights[model_id]
+        n = len(weights)
+        equal_w = 1.0 / n
+        max_w = max(weights.values())
+        spread = max_w - equal_w
+
+        table_rows = []
+        prev_group = None
+        for mem_id in sorted(weights):
+            w = weights[mem_id]
+            name = member_names[(model_id, mem_id)]
+
+            # group separator for models with named prefixes (model 4)
+            group = _group_label(name)
+            if group and group != prev_group:
+                table_rows.append(
+                    f'<tr class="weight-group-hdr"><th colspan="2">{group}</th></tr>'
+                )
+                prev_group = group
+
+            # color: blue tint proportional to how far above equal weight
+            if spread > 0 and w > equal_w:
+                opacity = min((w - equal_w) / spread, 1.0) * 0.45
+            else:
+                opacity = 0.0
+            color = f'background:rgba(59,91,219,{opacity:.3f})' if opacity > 0.01 else ''
+            cell_style = f' style="{color}"' if color else ''
+
+            table_rows.append(
+                f'<tr>'
+                f'<th><span class="model-id-cell">{mem_id}</span> {name}</th>'
+                f'<td class="wt-pct"{cell_style}>{w:.1%}</td>'
+                f'</tr>'
+            )
+
+        blocks.append(
+            f'<div class="weights-model-block">'
+            f'<h3>{model_names[model_id]} <span class="model-id-cell">(model {model_id})</span></h3>'
+            f'<p class="window-label">equal weight: {equal_w:.1%} per member</p>'
+            f'<table class="weight-table">'
+            f'<thead><tr><th>Member</th><th>Avg weight</th></tr></thead>'
+            f'<tbody>{"".join(table_rows)}</tbody>'
+            f'</table>'
+            f'</div>'
+        )
+
+    return (
+        '<details class="score-details" style="margin-top:16px">'
+        '<summary>Member weights</summary>'
+        f'<div class="weights-section">{"".join(blocks)}</div>'
+        '</details>'
+    )
 
 
 def _table_data(rows) -> dict:
@@ -322,6 +426,26 @@ def _chart_data(rows) -> dict:
         data[var][model]["x"].append(fmt.short_ts(row["valid_at"]))
         data[var][model]["y"].append(v)
     return data
+
+
+def _zambretti_panel_html(z: dict | None) -> str:
+    if z is None or z.get("letter") == "\u2014":
+        return ""
+    cat = z["category"].replace("_", " ")
+    rate = z["rate_hpa_per_h"]
+    rate_str = f"{rate:+.2f} hPa/h" if rate is not None else "\u2014"
+    return (
+        f'<div class="card" style="margin-top:12px">'
+        f'<h3>Barometer says: {z["description"]}'
+        f' <span class="station-id">({z["letter"]})</span></h3>'
+        f'<p style="font-size:13px;color:#555;margin-top:4px">'
+        f'Tendency: {cat} &mdash; {rate_str}'
+        f'</p>'
+        f'<p style="font-size:11px;color:#888;margin-top:4px">'
+        f'Zambretti algorithm &mdash; station pressure, not altitude-corrected'
+        f'</p>'
+        f'</div>'
+    )
 
 
 def _conditions_card(label: str, obs) -> str:
@@ -1743,6 +1867,7 @@ def generate(
     bias_ts_rows = [r for r in db.bias_timeseries(conn_out) if r["member_id"] == 0]
     diurnal_rows = [r for r in db.diurnal_errors(conn_out) if r["member_id"] == 0]
     error_dist_rows = db.error_distribution(conn_out)
+    weight_rows = db.all_weights_with_members(conn_out)
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
@@ -1753,7 +1878,13 @@ def generate(
     diurnal = _diurnal_data(diurnal_rows)
     error_dist = _error_dist_data(error_dist_rows)
     generated_at = fmt.ts(now)
+    _lf = db.get_metadata(conn_out, "last_forecast")
+    _lt = db.get_metadata(conn_out, "last_tune")
+    last_forecast_str = fmt.ts(int(_lf)) if _lf else "\u2014"
+    last_tune_str = fmt.ts(int(_lt)) if _lt else "\u2014"
 
+    zambretti = pressure_tendency.zambretti_text(tempest, conn_in) if tempest else None
+    zambretti_panel = _zambretti_panel_html(zambretti)
     tempest_card = _conditions_card("Tempest", tempest)
     nws_card = _conditions_card("NWS", nws)
     model_runs = _model_runs_html(mean_rows, lead_times, member_counts, member_forecast_rows)
@@ -1764,6 +1895,7 @@ def generate(
     all_models = {r["model"]: {"model_id": r["model_id"], "type": r["type"]} for r in mean_rows}
     table_10 = _score_summary_table(summary_10, "last 10 runs", member_models, all_models)
     table_7d = _score_summary_table(summary_7d, "last 7 days", member_models, all_models)
+    weights_section = _weights_section_html(weight_rows)
     filter_btns = "".join(
         f'<button class="mae-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
@@ -1833,7 +1965,11 @@ def generate(
 
 <header>
   <h1>barogram</h1>
-  <span class="generated">generated {generated_at}</span>
+  <div class="generated">
+    <span>generated {generated_at}</span>
+    <span>last forecast: {last_forecast_str}</span>
+    <span>last tune: {last_tune_str}</span>
+  </div>
 </header>
 
 <section class="section">
@@ -1842,6 +1978,7 @@ def generate(
     {tempest_card}
     {nws_card}
   </div>
+  {zambretti_panel}
 </section>
 
 <section class="section">
@@ -1855,6 +1992,7 @@ def generate(
     {table_10}
     {table_7d}
   </div>
+  {weights_section}
   <h3 class="obs-subhead">MAE over time</h3>
   <div class="mae-filter-bar">{filter_btns}<button id="raw-toggle" class="mae-raw-btn">Raw values</button></div>
   <div class="mae-charts-grid">

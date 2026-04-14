@@ -16,6 +16,20 @@ REQUIRED_COLUMNS: dict[str, set[str]] = {
 }
 
 
+def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute(
+        "select value from metadata where key = ?", (key,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "insert or replace into metadata (key, value) values (?, ?)",
+        (key, value),
+    )
+
+
 def open_input_db(path: str) -> sqlite3.Connection:
     # read-only URI mode: barogram never writes to wxlog's database
     p = Path(path).resolve()
@@ -322,6 +336,80 @@ def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
         )
         order by m.type, f.model, f.member_id, f.variable, f.lead_hours
         """
+    ).fetchall()
+
+
+def all_weights_with_members(conn: sqlite3.Connection) -> list:
+    return conn.execute(
+        """
+        select w.model_id, m.name as model_name, w.member_id,
+               mem.name as member_name, w.variable, w.lead_hours, w.weight
+        from weights w
+        join models m on m.id = w.model_id
+        left join members mem on mem.model_id = w.model_id and mem.member_id = w.member_id
+        order by w.model_id, w.member_id, w.variable, w.lead_hours
+        """
+    ).fetchall()
+
+
+def load_weights(conn: sqlite3.Connection, model_id: int) -> dict:
+    rows = conn.execute(
+        """
+        select member_id, variable, lead_hours, weight
+        from weights
+        where model_id = ?
+        """,
+        (model_id,),
+    ).fetchall()
+    return {(row["member_id"], row["variable"], row["lead_hours"]): row["weight"]
+            for row in rows}
+
+
+def save_weights(
+    conn: sqlite3.Connection,
+    model_id: int,
+    weights_by_key: dict,
+    updated_at: int,
+) -> None:
+    rows = [
+        {
+            "model_id": model_id,
+            "member_id": member_id,
+            "variable": variable,
+            "lead_hours": lead_hours,
+            "weight": weight,
+            "updated_at": updated_at,
+        }
+        for (member_id, variable, lead_hours), weight in weights_by_key.items()
+    ]
+    conn.execute("begin")
+    try:
+        conn.executemany(
+            """
+            insert or replace into weights
+                (model_id, member_id, variable, lead_hours, weight, updated_at)
+            values
+                (:model_id, :member_id, :variable, :lead_hours, :weight, :updated_at)
+            """,
+            rows,
+        )
+        conn.execute("commit")
+    except Exception:
+        conn.execute("rollback")
+        raise
+
+
+def tempest_obs_in_range(conn: sqlite3.Connection, start_ts: int, end_ts: int) -> list:
+    return conn.execute(
+        """
+        select t.timestamp, t.air_temp, t.dew_point, t.station_pressure, t.wind_avg
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and t.timestamp >= ? and t.timestamp <= ?
+        order by t.timestamp asc
+        """,
+        (start_ts, end_ts),
     ).fetchall()
 
 

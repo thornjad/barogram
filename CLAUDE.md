@@ -12,6 +12,7 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 | `run`        | Score pending forecasts, run all models, rebuild dashboard |
 | `forecast`   | Run all models, write forecast rows                  |
 | `score`      | Score past forecasts against observations            |
+| `tune`       | Compute inverse-MAE member weights from scoring history |
 | `dashboard`  | Regenerate dashboard.html                            |
 | `conditions` | Print latest Tempest and NWS observations            |
 
@@ -78,6 +79,7 @@ lowercase as well.
 | 2   | climatological_mean          | base     | done   |
 | 3   | weighted_climatological_mean | base     | done   |
 | 4   | climo_deviation              | base     | done   |
+| 5   | pressure_tendency            | base     | done   |
 
 ## Key files
 
