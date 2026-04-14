@@ -47,11 +47,19 @@ uv run barogram [--config PATH] <command>
 run           score pending forecasts, run all models, rebuild dashboard
 forecast      run forecast models and write to output database
 score         score past forecasts against observations
+tune          compute inverse-MAE member weights from scoring history
 dashboard     generate dashboard.html from latest forecast run
 conditions    show latest observed conditions from the input database
 ```
 
 The dashboard requires internet connectivity to load Plotly from CDN.
+
+### Typical workflow
+
+`run` fires automatically (e.g. every 3 hours via a cron job or launchd) and handles the
+score → forecast → dashboard pipeline. `tune` is a separate, infrequent step — run it
+periodically once enough scoring data has accumulated to meaningfully differentiate ensemble
+members. See [docs/tune.md](docs/tune.md) for details.
 
 ### Makefile
 
@@ -61,6 +69,7 @@ A `Makefile` wraps the common commands for convenience:
 make          # equivalent to uv run barogram run
 make forecast
 make score
+make tune     # tune weights, then rebuild dashboard
 make dashboard
 make conditions
 ```
@@ -71,6 +80,9 @@ make conditions
 uv run barogram run
 uv run barogram conditions
 uv run barogram forecast
+uv run barogram score
+uv run barogram tune
+uv run barogram tune --dry-run
 uv run barogram dashboard
 uv run barogram --config /path/to/barogram.toml conditions
 uv run barogram --help

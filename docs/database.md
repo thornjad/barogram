@@ -45,6 +45,36 @@ Compare the output against `001_baseline.sql`. The `metadata` table and `sqlite_
 | Structural restructure (SQLite can't ALTER) | New table, `INSERT INTO new SELECT FROM old`, drop old, rename |
 | Accumulated file count is annoying | Squash into new baseline |
 
+## `metadata` keys
+
+| Key | Written by | Value |
+|-----|------------|-------|
+| `schema_version` | `run_migrations` | Current migration version (integer as string) |
+| `last_forecast` | `forecast`, `run` | Unix epoch of the most recent forecast run |
+| `last_tune` | `tune` | Unix epoch of the most recent tune run |
+
+## `weights` table
+
+Stores per-member weights computed by `tune`. Read at forecast time by ensemble
+models to compute the `member_id=0` weighted mean.
+
+```sql
+CREATE TABLE weights (
+    model_id   INTEGER NOT NULL REFERENCES models(id),
+    member_id  INTEGER NOT NULL,
+    variable   TEXT    NOT NULL,
+    lead_hours INTEGER NOT NULL,
+    weight     REAL    NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (model_id, member_id, variable, lead_hours)
+);
+```
+
+Weights are keyed on `(model_id, member_id, variable, lead_hours)` so each
+variable and lead time can independently favor different members. `insert or replace`
+makes repeated `tune` runs idempotent. See [tune.md](tune.md) for the weighting
+algorithm.
+
 ## Members
 
 The `members` table tracks every valid `(model_id, member_id)` pair:
