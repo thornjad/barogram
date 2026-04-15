@@ -334,7 +334,7 @@ def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """
         select f.model_id, f.model, f.member_id, mem.name as member_name,
-               m.type, f.issued_at, f.variable, f.lead_hours, f.value, f.valid_at
+               m.type, f.issued_at, f.variable, f.lead_hours, f.value, f.spread, f.valid_at
         from forecasts f
         join models m on m.id = f.model_id
         left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
