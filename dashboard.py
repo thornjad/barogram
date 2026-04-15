@@ -21,7 +21,7 @@ _VARIABLE_LABEL = {
 _UNIT = {
     "temperature": "\u00b0F",
     "dewpoint": "\u00b0F",
-    "pressure": "mb",
+    "pressure": "hPa",
     "wind_speed": "mph",
 }
 
@@ -44,7 +44,7 @@ def _to_in(mm):
 
 
 def _slp_correction(obs, elevation_m: float = 0.0) -> float:
-    """Derive the station→SLP pressure offset (mb) from the latest tempest obs.
+    """Derive the station→SLP pressure offset (hPa) from the latest tempest obs.
 
     Prefers the stored sea_level_pressure if available; otherwise computes
     from the barometric formula using station pressure, temperature, and
@@ -570,9 +570,9 @@ def _conditions_card(label: str, obs, elevation_m: float = 0.0) -> str:
         if slp is None and sp is not None and elevation_m > 0.0 and obs["air_temp"] is not None:
             slp = fmt.to_slp(sp, obs["air_temp"], elevation_m)
         if slp is not None:
-            pres_cell = fmt.val(slp, ".1f", " mb")
+            pres_cell = fmt.val(slp, ".1f", " hPa")
         else:
-            pres_cell = fmt.val(sp, ".1f", " mb") + " (station)"
+            pres_cell = fmt.val(sp, ".1f", " hPa") + " (station)"
         rows_html = (
             f'<tr><th>Temperature</th><td>{fmt.temp(obs["air_temp"])}</td></tr>'
             f'<tr><th>Dew Point</th><td>{fmt.temp(obs["dew_point"])}</td></tr>'
@@ -594,7 +594,7 @@ def _conditions_card(label: str, obs, elevation_m: float = 0.0) -> str:
             f'<tr><th>Temperature</th><td>{fmt.temp(obs["air_temp"])}</td></tr>'
             f'<tr><th>Dew Point</th><td>{fmt.temp(obs["dew_point"])}</td></tr>'
             f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(_to_mph(obs["wind_speed"]), ".1f", " mph")}</td></tr>'
-            f'<tr><th>Pressure</th><td>{fmt.val(nws_slp, ".1f", " mb")}</td></tr>'
+            f'<tr><th>Pressure</th><td>{fmt.val(nws_slp, ".1f", " hPa")}</td></tr>'
             f'<tr><th>Sky</th><td>{obs["sky_cover"] or "\u2014"}</td></tr>'
             f'<tr><th>METAR</th><td>{obs["raw_metar"] or "\u2014"}</td></tr>'
         )
@@ -630,7 +630,7 @@ def _forecast_table_html(table: dict, lead_times: list, slp_offset: float = 0.0)
             for h in lead_times:
                 v = table.get(var, {}).get(h)
                 slp_cells.append(
-                    f"<td>{fmt.val(v + slp_offset if v is not None else None, '.1f', ' mb')}</td>"
+                    f"<td>{fmt.val(v + slp_offset if v is not None else None, '.1f', ' hPa')}</td>"
                 )
             rows.append(f'<tr><th>SLP</th>{"".join(slp_cells)}</tr>')
 
@@ -700,13 +700,13 @@ def _tempest_obs_row(row, elevation_m: float = 0.0) -> str:
         slp = row["sea_level_pressure"]
         if slp is None and sp is not None and row["air_temp"] is not None:
             slp = fmt.to_slp(sp, row["air_temp"], elevation_m)
-        slp_cell = f"<td>{fmt.val(slp, '.1f', ' mb')}</td>"
+        slp_cell = f"<td>{fmt.val(slp, '.1f', ' hPa')}</td>"
     return (
         "<tr>"
         f"<td>{fmt.ts(row['timestamp'])}</td>"
         f"<td>{fmt.temp(row['air_temp'])}</td>"
         f"<td>{fmt.temp(row['dew_point'])}</td>"
-        f"<td>{fmt.val(sp, '.1f', ' mb')}</td>"
+        f"<td>{fmt.val(sp, '.1f', ' hPa')}</td>"
         f"{slp_cell}"
         f"<td>{wind}</td>"
         f"<td>{fmt.val(_to_in(row['precip_accum_day']), '.2f', ' in')}</td>"
@@ -722,7 +722,7 @@ def _nws_obs_row(row) -> str:
         f"<td>{fmt.temp(row['air_temp'])}</td>"
         f"<td>{fmt.temp(row['dew_point'])}</td>"
         f"<td>{fmt.wind_dir(row['wind_direction'])} {fmt.val(_to_mph(row['wind_speed']), '.1f', ' mph')}</td>"
-        f"<td>{fmt.val(row['sea_level_pressure'], '.1f', ' mb')}</td>"
+        f"<td>{fmt.val(row['sea_level_pressure'], '.1f', ' hPa')}</td>"
         f"<td>{row['sky_cover'] or '\u2014'}</td>"
         "</tr>"
     )
@@ -1304,7 +1304,7 @@ def _mae_timeseries_js(timeseries_data: dict) -> str:
         "avg": "Average MAE",
         "temperature": "Temperature MAE (°F)",
         "dewpoint": "Dew Point MAE (°F)",
-        "pressure": "Pressure MAE (mb)",
+        "pressure": "Pressure MAE (hPa)",
         "wind_speed": "Wind Speed MAE (mph)",
     })
     return f"""const maeLeadData = {data_json};
@@ -1600,7 +1600,7 @@ def _chart_js(chart_data_dict: dict) -> str:
     var_labels_json = json.dumps({
         "temperature": "Temperature (\u00b0F)",
         "dewpoint": "Dew Point (\u00b0F)",
-        "pressure": "Pressure (mb)",
+        "pressure": "Pressure (hPa)",
         "wind_speed": "Wind Speed (mph)",
     })
     vars_json = json.dumps(VARIABLES)
@@ -1666,7 +1666,7 @@ def _bias_timeseries_js(bias_data: dict) -> str:
     filter_labels_json = json.dumps({
         "temperature": "Temperature Bias (\u00b0F)",
         "dewpoint": "Dew Point Bias (\u00b0F)",
-        "pressure": "Pressure Bias (mb)",
+        "pressure": "Pressure Bias (hPa)",
         "wind_speed": "Wind Speed Bias (mph)",
     })
     return f"""const biasLeadData = {data_json};
@@ -1741,7 +1741,7 @@ def _lead_skill_js(skill_data: dict) -> str:
     filter_labels_json = json.dumps({
         "temperature": "Temperature MAE (\u00b0F)",
         "dewpoint": "Dew Point MAE (\u00b0F)",
-        "pressure": "Pressure MAE (mb)",
+        "pressure": "Pressure MAE (hPa)",
         "wind_speed": "Wind Speed MAE (mph)",
     })
     return f"""const leadSkillData = {data_json};
@@ -1879,7 +1879,7 @@ def _diurnal_js(diurnal_data: dict) -> str:
     filter_labels_json = json.dumps({
         "temperature": "Temperature (\u00b0F)",
         "dewpoint": "Dew Point (\u00b0F)",
-        "pressure": "Pressure (mb)",
+        "pressure": "Pressure (hPa)",
         "wind_speed": "Wind Speed (mph)",
     })
     return f"""const diurnalData = {data_json};
@@ -1995,7 +1995,7 @@ function drawErrorDistChart() {{
         line: {{ color: '#333', width: 1.5, dash: 'dot' }}
     }}];
     const unitLabels = {{
-        temperature: '\u00b0F', dewpoint: '\u00b0F', pressure: 'mb', wind_speed: 'mph'
+        temperature: '\u00b0F', dewpoint: '\u00b0F', pressure: 'hPa', wind_speed: 'mph'
     }};
     Plotly.react('error-dist-chart', traces, {{
         barmode: 'overlay',
@@ -2065,7 +2065,7 @@ def _ensemble_forecast_section(
         if issued_at is None:
             issued_at = row["issued_at"]
 
-    # keep as raw SI (Celsius, m/s, mb) so _fmt_value can apply display conversions uniformly
+    # keep as raw SI (Celsius, m/s, hPa) so _fmt_value can apply display conversions uniformly
     slp_offset = _slp_correction(tempest, elevation_m)
     now: dict[str, float | None] = {}
     if tempest:
@@ -2135,7 +2135,7 @@ def _ensemble_forecast_section(
             )
         if pres_val is not None:
             details.append(
-                f'<span class="detail-label">Pres</span> {pres_val:.1f} mb'
+                f'<span class="detail-label">Pres</span> {pres_val:.1f} hPa'
             )
         if wind_val is not None:
             details.append(
