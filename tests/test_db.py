@@ -77,8 +77,8 @@ def test_run_migrations_applies_all():
     db.run_migrations(conn, _MIGRATIONS_DIR)
     row = conn.execute("select value from metadata where key='schema_version'").fetchone()
     assert row is not None
-    # stored as str(int("010")) = "10", not "010"
-    assert row[0] == "10"
+    # stored as str(int("011")) = "11", not "011"
+    assert row[0] == "11"
 
 
 def test_run_migrations_idempotent():
@@ -86,7 +86,7 @@ def test_run_migrations_idempotent():
     db.run_migrations(conn, _MIGRATIONS_DIR)
     db.run_migrations(conn, _MIGRATIONS_DIR)  # second run should not raise
     row = conn.execute("select value from metadata where key='schema_version'").fetchone()
-    assert row[0] == "10"
+    assert row[0] == "11"
 
 
 # --- nearest_tempest_obs ---
@@ -177,3 +177,52 @@ def test_insert_forecasts_default_spread_is_null():
     db.insert_forecasts(conn, [row])
     stored = conn.execute("select spread from forecasts").fetchone()
     assert stored["spread"] is None
+
+
+# --- ensemble_inputs ---
+
+def test_ensemble_inputs_empty_when_no_base_rows():
+    conn = make_output_db()
+    result = db.ensemble_inputs(conn, 1700000000)
+    assert result == []
+
+
+def test_ensemble_inputs_returns_base_model_rows():
+    conn = make_output_db()
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value)
+        values (1, 'persistence', 0, 1700000000, 1700021600, 6, 'temperature', 20.0)
+        """
+    )
+    rows = db.ensemble_inputs(conn, 1700000000)
+    assert len(rows) == 1
+    assert rows[0]["model_id"] == 1
+    assert rows[0]["variable"] == "temperature"
+
+
+def test_ensemble_inputs_excludes_wrong_issued_at():
+    conn = make_output_db()
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value)
+        values (1, 'persistence', 0, 1700000000, 1700021600, 6, 'temperature', 20.0)
+        """
+    )
+    rows = db.ensemble_inputs(conn, 9999999999)
+    assert rows == []
+
+
+def test_ensemble_inputs_excludes_nonzero_member_id():
+    conn = make_output_db()
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value)
+        values (3, 'weighted_climatological_mean', 1, 1700000000, 1700021600, 6, 'temperature', 20.0)
+        """
+    )
+    rows = db.ensemble_inputs(conn, 1700000000)
+    assert rows == []
