@@ -12,7 +12,7 @@ REQUIRED_COLUMNS: dict[str, set[str]] = {
         "station_id", "timestamp", "air_temp", "dew_point",
         "wind_speed", "wind_direction", "sea_level_pressure", "sky_cover", "raw_metar",
     },
-    "stations": {"station_id", "source", "name"},
+    "stations": {"station_id", "source", "name", "latitude", "longitude"},
 }
 
 
@@ -129,6 +129,15 @@ def nearest_tempest_obs(
         """,
         (timestamp - window_sec, timestamp + window_sec, timestamp),
     ).fetchone()
+
+
+def tempest_station_location(conn: sqlite3.Connection) -> tuple[float, float] | None:
+    row = conn.execute(
+        "select latitude, longitude from stations where source = 'tempest' limit 1"
+    ).fetchone()
+    if row is None or row["latitude"] is None or row["longitude"] is None:
+        return None
+    return (row["latitude"], row["longitude"])
 
 
 def climo_bucket_means(
