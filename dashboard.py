@@ -1893,7 +1893,7 @@ def generate(
     nws_rows = [_nws_obs_row(r) for r in nws_history]
 
     all_models = {r["model"]: {"model_id": r["model_id"], "type": r["type"]} for r in mean_rows}
-    table_10 = _score_summary_table(summary_10, "last 10 runs", member_models, all_models)
+    table_10 = _score_summary_table(summary_10, "last 10 scored runs", member_models, all_models)
     table_7d = _score_summary_table(summary_7d, "last 7 days", member_models, all_models)
     weights_section = _weights_section_html(weight_rows)
     filter_btns = "".join(
@@ -2042,7 +2042,7 @@ def generate(
 {obs_section}
 
 </div>
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2/plotly.min.js"></script>
 <script>
 {_chart_js(charts)}
 {_obs_history_js(tempest_rows, nws_rows)}

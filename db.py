@@ -239,7 +239,7 @@ def score_summary_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
         with recent as (
             select distinct issued_at
             from forecasts
-            where scored_at is not null
+            where scored_at is not null and lead_hours = 24
             order by issued_at desc
             limit ?
         )
