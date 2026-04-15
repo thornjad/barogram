@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import time
+from datetime import datetime
 from pathlib import Path
 
 import db
@@ -311,6 +312,15 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 @media (max-width: 600px) {
     .conditions-grid, .charts-grid, .verification-windows { grid-template-columns: 1fr; }
 }
+.forecast-cards { display:flex; gap:12px; overflow-x:auto; padding-bottom:4px; }
+.forecast-card { flex:0 0 auto; min-width:110px; background:#fff; border:1px solid #ddd; border-radius:8px; padding:14px 16px; text-align:center; }
+.forecast-card.now-card { border-color:#b0c4de; background:#f5f8fc; }
+.fcst-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#888; margin-bottom:8px; }
+.fcst-temp { font-size:32px; font-weight:700; color:#1a1a1a; line-height:1; }
+.fcst-temp-spread { font-size:11px; color:#aaa; margin-top:2px; margin-bottom:10px; }
+.fcst-details { font-size:12px; color:#555; line-height:1.8; text-align:left; }
+.fcst-details .detail-label { color:#999; }
+.fcst-no-data { color:#bbb; font-size:13px; }
 """
 
 
@@ -1898,6 +1908,144 @@ drawErrorDistChart();
 """
 
 
+def _ensemble_forecast_section(mean_rows: list, tempest) -> str:
+    """Render the barogram_ensemble forecast section HTML.
+
+    Returns a muted placeholder if no ensemble rows exist yet.
+    """
+    ens_rows = [
+        r for r in mean_rows
+        if r["model"] == "barogram_ensemble" and r["member_id"] == 0
+    ]
+    if not ens_rows:
+        return (
+            '<section class="section">\n'
+            '  <h2>Ensemble Forecast</h2>\n'
+            '  <p class="muted">Ensemble model not yet available &mdash; in development.</p>\n'
+            '</section>\n'
+        )
+
+    # {variable: {lead_hours: (value, spread)}}
+    table: dict[str, dict[int, tuple]] = {v: {} for v in VARIABLES}
+    lead_valid_at: dict[int, int] = {}
+    issued_at = None
+    for row in ens_rows:
+        if row["variable"] in table:
+            table[row["variable"]][row["lead_hours"]] = (row["value"], row["spread"])
+        lead_valid_at.setdefault(row["lead_hours"], row["valid_at"])
+        if issued_at is None:
+            issued_at = row["issued_at"]
+
+    # keep as raw SI (Celsius, m/s, mb) so _fmt_value can apply display conversions uniformly
+    now: dict[str, float | None] = {}
+    if tempest:
+        now = {
+            "temperature": tempest["air_temp"],
+            "dewpoint": tempest["dew_point"],
+            "pressure": tempest["station_pressure"],
+            "wind_speed": tempest["wind_avg"],
+        }
+
+    def _fmt_value(variable, value, spread=None) -> str:
+        """Format a forecast value (SI units) with optional spread as an HTML snippet."""
+        if value is None:
+            return "&mdash;"
+        unit = _UNIT[variable]
+        if variable in ("temperature", "dewpoint"):
+            disp = _to_f(value)
+            s = f"{disp:.0f}{unit}"
+            spread_disp = _diff_to_f(spread) if spread is not None else None
+        elif variable == "wind_speed":
+            disp = _to_mph(value)
+            s = f"{disp:.1f} {unit}"
+            spread_disp = _to_mph(spread) if spread is not None else None
+        else:
+            s = f"{value:.1f} {unit}"
+            spread_disp = spread
+        if spread_disp is not None and spread_disp > 0:
+            s += f'<small class="fcst-spread">&pm;{spread_disp:.1f}</small>'
+        return s
+
+    def _card(label: str, is_now: bool, temp_val, dew_val, pres_val, wind_val,
+              temp_spread=None) -> str:
+        cls = 'forecast-card now-card' if is_now else 'forecast-card'
+        # temperature — always the hero
+        if temp_val is not None:
+            temp_disp = f"{_to_f(temp_val):.0f}\u00b0F"
+            spread_html = ""
+            if temp_spread is not None and temp_spread > 0:
+                spread_disp = _diff_to_f(temp_spread)
+                spread_html = (
+                    f'<div class="fcst-temp-spread">&pm;{spread_disp:.1f}\u00b0</div>'
+                )
+            else:
+                spread_html = '<div class="fcst-temp-spread"></div>'
+            temp_html = f'<div class="fcst-temp">{temp_disp}</div>{spread_html}'
+        else:
+            temp_html = '<div class="fcst-no-data">&mdash;</div><div class="fcst-temp-spread"></div>'
+
+        # secondary details
+        details = []
+        if dew_val is not None:
+            details.append(
+                f'<span class="detail-label">Dew</span> {_to_f(dew_val):.0f}\u00b0F'
+            )
+        if pres_val is not None:
+            details.append(
+                f'<span class="detail-label">Pres</span> {pres_val:.1f} mb'
+            )
+        if wind_val is not None:
+            details.append(
+                f'<span class="detail-label">Wind</span> {_to_mph(wind_val):.0f} mph'
+            )
+        details_html = (
+            '<div class="fcst-details">' + "<br>".join(details) + "</div>"
+            if details else ""
+        )
+
+        return (
+            f'<div class="{cls}">'
+            f'<div class="fcst-label">{label}</div>'
+            f'{temp_html}'
+            f'{details_html}'
+            f'</div>'
+        )
+
+    cards_html = ""
+    # Now card — from live Tempest obs
+    now_temp = now.get("temperature")
+    now_dew = now.get("dewpoint")
+    now_pres = now.get("pressure")
+    now_wind = now.get("wind_speed")
+    cards_html += _card("Now", True, now_temp, now_dew, now_pres, now_wind)
+
+    for lead in [6, 12, 18, 24]:
+        vat = lead_valid_at.get(lead)
+        label = (
+            datetime.fromtimestamp(vat, tz=fmt.CENTRAL).strftime("%-I %p").lstrip("0")
+            if vat else f"+{lead}h"
+        )
+        t_cell = table.get("temperature", {}).get(lead)
+        d_cell = table.get("dewpoint", {}).get(lead)
+        p_cell = table.get("pressure", {}).get(lead)
+        w_cell = table.get("wind_speed", {}).get(lead)
+        t_val = t_cell[0] if t_cell else None
+        t_spread = t_cell[1] if t_cell else None
+        d_val = d_cell[0] if d_cell else None
+        p_val = p_cell[0] if p_cell else None
+        w_val = w_cell[0] if w_cell else None
+        cards_html += _card(label, False, t_val, d_val, p_val, w_val, t_spread)
+
+    issued_str = fmt.ts(issued_at) if issued_at else "&mdash;"
+    return (
+        '<section class="section">\n'
+        '  <h2>Ensemble Forecast</h2>\n'
+        f'  <div class="obs-time">issued {issued_str}</div>\n'
+        f'  <div class="forecast-cards">{cards_html}</div>\n'
+        '</section>\n'
+    )
+
+
 def generate(
     conn_in: sqlite3.Connection,
     conn_out: sqlite3.Connection,
@@ -1919,7 +2067,8 @@ def generate(
     for row in all_rows:
         if row["member_id"] > 0:
             model_member_ids.setdefault(row["model_id"], set()).add(row["member_id"])
-    member_counts = {mid: len(mids) for mid, mids in model_member_ids.items()}
+    # exclude barogram_ensemble (100) — its members are the base models already shown above
+    member_counts = {mid: len(mids) for mid, mids in model_member_ids.items() if mid != 100}
 
     tempest = db.latest_tempest_obs(conn_in)
     nws = db.latest_nws_obs(conn_in)
@@ -1959,6 +2108,7 @@ def generate(
     zambretti_panel = _zambretti_panel_html(zambretti)
     tempest_card = _conditions_card("Tempest", tempest)
     nws_card = _conditions_card("NWS", nws)
+    ensemble_section = _ensemble_forecast_section(mean_rows, tempest)
     model_runs = _model_runs_html(mean_rows, lead_times, member_counts, member_forecast_rows)
     obs_section = _obs_history_section(tempest_history, nws_history)
     tempest_rows = [_tempest_obs_row(r) for r in tempest_history]
@@ -2054,10 +2204,7 @@ def generate(
   {zambretti_panel}
 </section>
 
-<section class="section">
-  <h2>Ensemble Forecast</h2>
-  <p class="muted">Ensemble model not yet available &mdash; in development.</p>
-</section>
+{ensemble_section}
 
 <section class="section">
   <h2>Verification</h2>

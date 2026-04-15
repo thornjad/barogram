@@ -334,7 +334,7 @@ def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """
         select f.model_id, f.model, f.member_id, mem.name as member_name,
-               m.type, f.issued_at, f.variable, f.lead_hours, f.value, f.valid_at
+               m.type, f.issued_at, f.variable, f.lead_hours, f.value, f.spread, f.valid_at
         from forecasts f
         join models m on m.id = f.model_id
         left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
@@ -345,6 +345,19 @@ def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
         )
         order by m.type, f.model, f.member_id, f.variable, f.lead_hours
         """
+    ).fetchall()
+
+
+def ensemble_inputs(conn: sqlite3.Connection, issued_at: int) -> list:
+    """Fetch member_id=0 rows from base models for a given forecast run."""
+    return conn.execute(
+        """
+        select f.model_id, f.variable, f.lead_hours, f.value, f.valid_at
+        from forecasts f
+        join models m on m.id = f.model_id
+        where f.issued_at = ? and f.member_id = 0 and m.type = 'base'
+        """,
+        (issued_at,),
     ).fetchall()
 
 
