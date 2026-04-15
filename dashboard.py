@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -39,6 +40,70 @@ def _diff_to_f(v):
 
 def _to_in(mm):
     return None if mm is None else mm / 25.4
+
+
+
+def _slp_correction(obs, elevation_m: float = 0.0) -> float:
+    """Derive the station→SLP pressure offset (mb) from the latest tempest obs.
+
+    Prefers the stored sea_level_pressure if available; otherwise computes
+    from the barometric formula using station pressure, temperature, and
+    the configured station elevation.
+    """
+    if obs is None:
+        return 0.0
+    sp = obs["station_pressure"]
+    if sp is None:
+        return 0.0
+    slp_stored = obs["sea_level_pressure"]
+    if slp_stored is not None:
+        return slp_stored - sp
+    if elevation_m <= 0.0:
+        return 0.0
+    temp = obs["air_temp"]
+    if temp is None:
+        return 0.0
+    return fmt.to_slp(sp, temp, elevation_m) - sp
+
+
+def _fetch_nws_forecast(lat: float, lon: float) -> dict[int, dict]:
+    """Fetch NWS hourly forecasts keyed by unix timestamp (SI units). Returns {} on failure."""
+    try:
+        req = urllib.request.Request(
+            f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}",
+            headers={"User-Agent": "barogram/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            points = json.loads(resp.read())
+        hourly_url = points["properties"]["forecastHourly"]
+
+        req = urllib.request.Request(hourly_url, headers={"User-Agent": "barogram/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            hourly = json.loads(resp.read())
+
+        result: dict[int, dict] = {}
+        for period in hourly["properties"]["periods"]:
+            ts = int(datetime.fromisoformat(period["startTime"]).timestamp())
+            temp = period.get("temperature")
+            if temp is None:
+                continue
+            unit = period.get("temperatureUnit", "F")
+            temp_c = (temp - 32) * 5 / 9 if unit == "F" else float(temp)
+            dew_c = (period.get("dewpoint") or {}).get("value")  # already °C
+            ws_str = period.get("windSpeed") or ""
+            wind_ms = None
+            if ws_str:
+                nums = [
+                    float(p) for p in ws_str.replace(" to ", " ").split()
+                    if p.replace(".", "").isdigit()
+                ]
+                if nums:
+                    wind_ms = sum(nums) / len(nums) * 0.44704  # avg mph → m/s
+            result[ts] = {"temperature": temp_c, "dewpoint": dew_c, "wind_speed": wind_ms}
+        return result
+    except Exception:
+        return {}
+
 
 _CSS = """\
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -292,7 +357,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     background: #f8f8ff;
     border-top: 1px solid #eee;
 }
-.weights-section { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
+.weights-section { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; margin-top: 12px; align-items: start; }
 .weights-model-block { }
 .weights-model-block h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .weight-table {
@@ -321,15 +386,16 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .fcst-details { font-size:12px; color:#555; line-height:1.8; text-align:left; }
 .fcst-details .detail-label { color:#999; }
 .fcst-no-data { color:#bbb; font-size:13px; }
+.fcst-ref { font-size:11px; color:#999; margin-top:8px; padding-top:6px; border-top:1px solid #f0f0f0; text-align:left; line-height:1.8; }
+.fcst-ref-lbl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#ccc; display:block; line-height:1.4; }
+.fcst-ref .detail-label { color:#bbb; }
 """
 
 
-def _weights_section_html(rows: list) -> str:
-    if not rows:
-        return ""
-
-    # average weight per (model_id, member_id) across all (variable, lead_hours) groups
+def _weights_section_html(rows: list, all_members: list | None = None) -> str:
     from collections import defaultdict
+
+    # build tuned weights: model_id -> member_id -> avg weight across all (var, lead) cells
     sums: dict = defaultdict(lambda: defaultdict(list))
     model_names: dict = {}
     member_names: dict = {}
@@ -342,16 +408,35 @@ def _weights_section_html(rows: list) -> str:
         mid: {mem_id: sum(ws) / len(ws) for mem_id, ws in members.items()}
         for mid, members in sums.items()
     }
+    tuned_ids = set(avg_weights)
+
+    # add models that have members but no tuned weights yet (equal-weight placeholder)
+    if all_members:
+        by_model: dict = defaultdict(list)
+        for r in all_members:
+            by_model[r["model_id"]].append(r)
+        for model_id, members in by_model.items():
+            if model_id not in tuned_ids:
+                n = len(members)
+                avg_weights[model_id] = {r["member_id"]: 1.0 / n for r in members}
+                model_names[model_id] = members[0]["model_name"]
+                for r in members:
+                    member_names[(model_id, r["member_id"])] = (
+                        r["member_name"] or str(r["member_id"])
+                    )
+
+    if not avg_weights:
+        return ""
 
     def _group_label(name: str) -> str:
-        if name.startswith("s-"):
-            return "static"
-        if name.startswith("d03-"):
-            return "decay k=0.03"
-        if name.startswith("d05-"):
-            return "decay k=0.05"
-        if name.startswith("d10-"):
-            return "decay k=0.10"
+        if name.startswith("s-"): return "static"
+        if name.startswith("d03-"): return "decay k=0.03"
+        if name.startswith("d05-"): return "decay k=0.05"
+        if name.startswith("d10-"): return "decay k=0.10"
+        if name.startswith("sine-"): return "sine"
+        if name.startswith("piecewise-"): return "piecewise"
+        if name.startswith("asymmetric-"): return "asymmetric"
+        if name.startswith("solar"): return "solar"
         return ""
 
     blocks = []
@@ -361,6 +446,7 @@ def _weights_section_html(rows: list) -> str:
         equal_w = 1.0 / n
         max_w = max(weights.values())
         spread = max_w - equal_w
+        tuned = model_id in tuned_ids
 
         table_rows = []
         prev_group = None
@@ -368,7 +454,6 @@ def _weights_section_html(rows: list) -> str:
             w = weights[mem_id]
             name = member_names[(model_id, mem_id)]
 
-            # group separator for models with named prefixes (model 4)
             group = _group_label(name)
             if group and group != prev_group:
                 table_rows.append(
@@ -376,7 +461,6 @@ def _weights_section_html(rows: list) -> str:
                 )
                 prev_group = group
 
-            # color: blue tint proportional to how far above equal weight
             if spread > 0 and w > equal_w:
                 opacity = min((w - equal_w) / spread, 1.0) * 0.45
             else:
@@ -391,9 +475,14 @@ def _weights_section_html(rows: list) -> str:
                 f'</tr>'
             )
 
+        untrained_note = (
+            '' if tuned
+            else ' <span style="color:#aaa;font-style:italic;font-weight:400">(not tuned)</span>'
+        )
         blocks.append(
             f'<div class="weights-model-block">'
-            f'<h3>{model_names[model_id]} <span class="model-id-cell">(model {model_id})</span></h3>'
+            f'<h3>{model_names[model_id]}{untrained_note}'
+            f' <span class="model-id-cell">(model {model_id})</span></h3>'
             f'<p class="window-label">equal weight: {equal_w:.1%} per member</p>'
             f'<table class="weight-table">'
             f'<thead><tr><th>Member</th><th>Avg weight</th></tr></thead>'
@@ -455,13 +544,13 @@ def _zambretti_panel_html(z: dict | None) -> str:
         f'Tendency: {cat} &mdash; {rate_str}'
         f'</p>'
         f'<p style="font-size:11px;color:#888;margin-top:4px">'
-        f'Zambretti algorithm &mdash; station pressure, not altitude-corrected'
+        f'Zambretti algorithm &mdash; sea-level pressure'
         f'</p>'
         f'</div>'
     )
 
 
-def _conditions_card(label: str, obs) -> str:
+def _conditions_card(label: str, obs, elevation_m: float = 0.0) -> str:
     if obs is None:
         return (
             f'<div class="card"><h3>{label}</h3>'
@@ -476,10 +565,18 @@ def _conditions_card(label: str, obs) -> str:
         gust = obs["wind_gust"]
         gust_str = f", gusts to {fmt.val(_to_mph(gust), '.1f', ' mph')}" if gust is not None else ""
         lc = obs["lightning_count"]
+        sp = obs["station_pressure"]
+        slp = obs["sea_level_pressure"]
+        if slp is None and sp is not None and elevation_m > 0.0 and obs["air_temp"] is not None:
+            slp = fmt.to_slp(sp, obs["air_temp"], elevation_m)
+        if slp is not None:
+            pres_cell = fmt.val(slp, ".1f", " mb")
+        else:
+            pres_cell = fmt.val(sp, ".1f", " mb") + " (station)"
         rows_html = (
             f'<tr><th>Temperature</th><td>{fmt.temp(obs["air_temp"])}</td></tr>'
             f'<tr><th>Dew Point</th><td>{fmt.temp(obs["dew_point"])}</td></tr>'
-            f'<tr><th>Pressure</th><td>{fmt.val(obs["station_pressure"], ".1f", " mb")} (station)</td></tr>'
+            f'<tr><th>Pressure</th><td>{pres_cell}</td></tr>'
             f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(_to_mph(obs["wind_avg"]), ".1f", " mph")}{gust_str}</td></tr>'
             f'<tr><th>Precip today</th><td>{fmt.val(_to_in(obs["precip_accum_day"]), ".2f", " in")}</td></tr>'
             f'<tr><th>UV Index</th><td>{fmt.val(obs["uv_index"], ".1f")}</td></tr>'
@@ -487,11 +584,17 @@ def _conditions_card(label: str, obs) -> str:
             f'<tr><th>Lightning</th><td>{lc if lc is not None else 0} strikes (3-min count)</td></tr>'
         )
     else:
+        nws_slp = obs["sea_level_pressure"]
+        if nws_slp is None:
+            try:
+                nws_slp = obs["pressure_altimeter"]
+            except (IndexError, KeyError):
+                pass
         rows_html = (
             f'<tr><th>Temperature</th><td>{fmt.temp(obs["air_temp"])}</td></tr>'
             f'<tr><th>Dew Point</th><td>{fmt.temp(obs["dew_point"])}</td></tr>'
             f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(_to_mph(obs["wind_speed"]), ".1f", " mph")}</td></tr>'
-            f'<tr><th>Pressure</th><td>{fmt.val(obs["sea_level_pressure"], ".1f", " mb")}</td></tr>'
+            f'<tr><th>Pressure</th><td>{fmt.val(nws_slp, ".1f", " mb")}</td></tr>'
             f'<tr><th>Sky</th><td>{obs["sky_cover"] or "\u2014"}</td></tr>'
             f'<tr><th>METAR</th><td>{obs["raw_metar"] or "\u2014"}</td></tr>'
         )
@@ -505,12 +608,14 @@ def _conditions_card(label: str, obs) -> str:
     )
 
 
-def _forecast_table_html(table: dict, lead_times: list) -> str:
+def _forecast_table_html(table: dict, lead_times: list, slp_offset: float = 0.0) -> str:
     header_cells = "".join(f"<th>+{h}h</th>" for h in lead_times)
     rows = []
     for var in VARIABLES:
         label = _VARIABLE_LABEL.get(var, var)
         unit = _UNIT.get(var, "")
+        if var == "pressure" and slp_offset != 0.0:
+            label = "Station P"
         cells = []
         for h in lead_times:
             v = table.get(var, {}).get(h)
@@ -520,6 +625,14 @@ def _forecast_table_html(table: dict, lead_times: list) -> str:
                 v = _to_mph(v)
             cells.append(f"<td>{fmt.val(v, '.1f', unit)}</td>")
         rows.append(f'<tr><th>{label}</th>{"".join(cells)}</tr>')
+        if var == "pressure" and slp_offset != 0.0:
+            slp_cells = []
+            for h in lead_times:
+                v = table.get(var, {}).get(h)
+                slp_cells.append(
+                    f"<td>{fmt.val(v + slp_offset if v is not None else None, '.1f', ' mb')}</td>"
+                )
+            rows.append(f'<tr><th>SLP</th>{"".join(slp_cells)}</tr>')
 
     return (
         '<table class="forecast-table">'
@@ -534,6 +647,7 @@ def _model_runs_html(
     lead_times: list,
     member_counts: dict | None = None,
     member_rows: list | None = None,
+    slp_offset: float = 0.0,
 ) -> str:
     by_model: dict = {}
     for row in rows:
@@ -548,7 +662,7 @@ def _model_runs_html(
         type_badge = (
             f'<span class="ensemble-badge">{mtype}</span>' if mtype == "ensemble" else ""
         )
-        table_html = _forecast_table_html(table, lead_times)
+        table_html = _forecast_table_html(table, lead_times, slp_offset)
         n_members = (member_counts or {}).get(model_id, 0)
         member_toggle = (
             f'<button class="mf-btn" data-model-id="{model_id}">'
@@ -574,18 +688,26 @@ def _model_runs_html(
     return "\n".join(cards)
 
 
-def _tempest_obs_row(row) -> str:
+def _tempest_obs_row(row, elevation_m: float = 0.0) -> str:
     gust = row["wind_gust"]
     wind = fmt.wind_dir(row["wind_direction"]) + " " + fmt.val(_to_mph(row["wind_avg"]), ".1f", " mph")
     if gust is not None:
         wind += f" g{fmt.val(_to_mph(gust), '.1f')}"
     lc = row["lightning_count"]
+    sp = row["station_pressure"]
+    slp_cell = ""
+    if elevation_m > 0.0:
+        slp = row["sea_level_pressure"]
+        if slp is None and sp is not None and row["air_temp"] is not None:
+            slp = fmt.to_slp(sp, row["air_temp"], elevation_m)
+        slp_cell = f"<td>{fmt.val(slp, '.1f', ' mb')}</td>"
     return (
         "<tr>"
         f"<td>{fmt.ts(row['timestamp'])}</td>"
         f"<td>{fmt.temp(row['air_temp'])}</td>"
         f"<td>{fmt.temp(row['dew_point'])}</td>"
-        f"<td>{fmt.val(row['station_pressure'], '.1f', ' mb')}</td>"
+        f"<td>{fmt.val(sp, '.1f', ' mb')}</td>"
+        f"{slp_cell}"
         f"<td>{wind}</td>"
         f"<td>{fmt.val(_to_in(row['precip_accum_day']), '.2f', ' in')}</td>"
         f"<td>{lc if lc is not None else 0}</td>"
@@ -606,7 +728,7 @@ def _nws_obs_row(row) -> str:
     )
 
 
-def _obs_history_section(tempest_obs: list, nws_obs: list) -> str:
+def _obs_history_section(tempest_obs: list, nws_obs: list, elevation_m: float = 0.0) -> str:
     def station_heading(label: str, obs_list: list) -> str:
         if not obs_list:
             return label
@@ -632,9 +754,14 @@ def _obs_history_section(tempest_obs: list, nws_obs: list) -> str:
             f'<button class="more-btn" id="{btn_id}">Load more</button>'
         )
 
+    tempest_headers = (
+        ["Time", "Temperature", "Dew Point", "Station P", "SLP", "Wind", "Precip (day)", "Lightning"]
+        if elevation_m > 0.0 else
+        ["Time", "Temperature", "Dew Point", "Pressure", "Wind", "Precip (day)", "Lightning"]
+    )
     tempest_block = table_block(
         "Tempest", tempest_obs, "tempest-obs-tbody", "tempest-more-btn",
-        ["Time", "Temperature", "Dew Point", "Pressure", "Wind", "Precip (day)", "Lightning"],
+        tempest_headers,
     )
     nws_block = table_block(
         "NWS", nws_obs, "nws-obs-tbody", "nws-more-btn",
@@ -1908,7 +2035,9 @@ drawErrorDistChart();
 """
 
 
-def _ensemble_forecast_section(mean_rows: list, tempest) -> str:
+def _ensemble_forecast_section(
+    mean_rows: list, tempest, elevation_m: float = 0.0, nws_forecast: dict | None = None
+) -> str:
     """Render the barogram_ensemble forecast section HTML.
 
     Returns a muted placeholder if no ensemble rows exist yet.
@@ -1937,12 +2066,17 @@ def _ensemble_forecast_section(mean_rows: list, tempest) -> str:
             issued_at = row["issued_at"]
 
     # keep as raw SI (Celsius, m/s, mb) so _fmt_value can apply display conversions uniformly
+    slp_offset = _slp_correction(tempest, elevation_m)
     now: dict[str, float | None] = {}
     if tempest:
+        sp = tempest["station_pressure"]
+        slp = tempest["sea_level_pressure"]
+        if slp is None and sp is not None and elevation_m > 0.0 and tempest["air_temp"] is not None:
+            slp = fmt.to_slp(sp, tempest["air_temp"], elevation_m)
         now = {
             "temperature": tempest["air_temp"],
             "dewpoint": tempest["dew_point"],
-            "pressure": tempest["station_pressure"],
+            "pressure": slp if slp is not None else sp,
             "wind_speed": tempest["wind_avg"],
         }
 
@@ -1966,8 +2100,17 @@ def _ensemble_forecast_section(mean_rows: list, tempest) -> str:
             s += f'<small class="fcst-spread">&pm;{spread_disp:.1f}</small>'
         return s
 
+    def _nws_at(target_ts: int) -> dict | None:
+        """Return NWS forecast entry nearest to target_ts, within 90 min."""
+        if not nws_forecast:
+            return None
+        best = min(nws_forecast, key=lambda t: abs(t - target_ts))
+        if abs(best - target_ts) > 5400:
+            return None
+        return nws_forecast[best]
+
     def _card(label: str, is_now: bool, temp_val, dew_val, pres_val, wind_val,
-              temp_spread=None) -> str:
+              temp_spread=None, nws=None) -> str:
         cls = 'forecast-card now-card' if is_now else 'forecast-card'
         # temperature — always the hero
         if temp_val is not None:
@@ -2003,11 +2146,35 @@ def _ensemble_forecast_section(mean_rows: list, tempest) -> str:
             if details else ""
         )
 
+        nws_html = ""
+        if nws:
+            nws_lines = []
+            if nws.get("temperature") is not None:
+                nws_lines.append(
+                    f'<span class="detail-label">Temp</span> {_to_f(nws["temperature"]):.0f}\u00b0F'
+                )
+            if nws.get("dewpoint") is not None:
+                nws_lines.append(
+                    f'<span class="detail-label">Dew</span> {_to_f(nws["dewpoint"]):.0f}\u00b0F'
+                )
+            if nws.get("wind_speed") is not None:
+                nws_lines.append(
+                    f'<span class="detail-label">Wind</span> {_to_mph(nws["wind_speed"]):.0f} mph'
+                )
+            if nws_lines:
+                nws_html = (
+                    '<div class="fcst-ref">'
+                    '<span class="fcst-ref-lbl">NWS</span>'
+                    + "<br>".join(nws_lines)
+                    + "</div>"
+                )
+
         return (
             f'<div class="{cls}">'
             f'<div class="fcst-label">{label}</div>'
             f'{temp_html}'
             f'{details_html}'
+            f'{nws_html}'
             f'</div>'
         )
 
@@ -2032,9 +2199,11 @@ def _ensemble_forecast_section(mean_rows: list, tempest) -> str:
         t_val = t_cell[0] if t_cell else None
         t_spread = t_cell[1] if t_cell else None
         d_val = d_cell[0] if d_cell else None
-        p_val = p_cell[0] if p_cell else None
+        p_raw = p_cell[0] if p_cell else None
+        p_val = p_raw + slp_offset if p_raw is not None else None
         w_val = w_cell[0] if w_cell else None
-        cards_html += _card(label, False, t_val, d_val, p_val, w_val, t_spread)
+        nws_entry = _nws_at(vat) if vat else None
+        cards_html += _card(label, False, t_val, d_val, p_val, w_val, t_spread, nws_entry)
 
     issued_str = fmt.ts(issued_at) if issued_at else "&mdash;"
     return (
@@ -2051,6 +2220,7 @@ def generate(
     conn_out: sqlite3.Connection,
     output_path: Path,
 ) -> None:
+    elevation_m = db.tempest_station_elevation(conn_in)
     all_rows = db.latest_forecast_per_model(conn_out)
     if not all_rows:
         raise ValueError(
@@ -2075,6 +2245,9 @@ def generate(
     tempest_history = db.recent_tempest_obs(conn_in)
     nws_history = db.recent_nws_obs(conn_in)
 
+    loc = db.tempest_station_location(conn_in)
+    nws_forecast = _fetch_nws_forecast(*loc) if loc else {}
+
     now = int(time.time())
     all_scores_30 = db.score_summary_last_n_runs(conn_out, 30)
     summary_30 = [r for r in all_scores_30 if r["member_id"] == 0]
@@ -2089,6 +2262,7 @@ def generate(
     diurnal_rows = [r for r in db.diurnal_errors(conn_out) if r["member_id"] == 0]
     error_dist_rows = db.error_distribution(conn_out)
     weight_rows = db.all_weights_with_members(conn_out)
+    all_members = db.all_members_for_ensemble_models(conn_out)
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
@@ -2104,21 +2278,22 @@ def generate(
     last_forecast_str = fmt.ts(int(_lf)) if _lf else "\u2014"
     last_tune_str = fmt.ts(int(_lt)) if _lt else "\u2014"
 
-    zambretti = pressure_tendency.zambretti_text(tempest, conn_in) if tempest else None
+    zambretti = pressure_tendency.zambretti_text(tempest, conn_in, elevation_m) if tempest else None
     zambretti_panel = _zambretti_panel_html(zambretti)
-    tempest_card = _conditions_card("Tempest", tempest)
+    tempest_card = _conditions_card("Tempest", tempest, elevation_m)
     nws_card = _conditions_card("NWS", nws)
-    ensemble_section = _ensemble_forecast_section(mean_rows, tempest)
-    model_runs = _model_runs_html(mean_rows, lead_times, member_counts, member_forecast_rows)
-    obs_section = _obs_history_section(tempest_history, nws_history)
-    tempest_rows = [_tempest_obs_row(r) for r in tempest_history]
+    slp_offset = _slp_correction(tempest, elevation_m)
+    ensemble_section = _ensemble_forecast_section(mean_rows, tempest, elevation_m, nws_forecast)
+    model_runs = _model_runs_html(mean_rows, lead_times, member_counts, member_forecast_rows, slp_offset)
+    obs_section = _obs_history_section(tempest_history, nws_history, elevation_m)
+    tempest_rows = [_tempest_obs_row(r, elevation_m) for r in tempest_history]
     nws_rows = [_nws_obs_row(r) for r in nws_history]
 
     all_models = {r["model"]: {"model_id": r["model_id"], "type": r["type"]} for r in mean_rows}
     table_30 = _score_summary_table(summary_30, "last 30 scored runs", member_models, all_models)
     table_10 = _score_summary_table(summary_10, "last 10 scored runs", member_models, all_models)
     table_7d = _score_summary_table(summary_7d, "last 7 days", member_models, all_models)
-    weights_section = _weights_section_html(weight_rows)
+    weights_section = _weights_section_html(weight_rows, all_members)
     filter_btns = "".join(
         f'<button class="mae-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([

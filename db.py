@@ -378,6 +378,19 @@ def ensemble_inputs(conn: sqlite3.Connection, issued_at: int) -> list:
     ).fetchall()
 
 
+def all_members_for_ensemble_models(conn: sqlite3.Connection) -> list:
+    """Return all non-zero members for models that appear in the members table."""
+    return conn.execute(
+        """
+        select mem.model_id, mo.name as model_name, mem.member_id, mem.name as member_name
+        from members mem
+        join models mo on mo.id = mem.model_id
+        where mem.member_id > 0
+        order by mem.model_id, mem.member_id
+        """
+    ).fetchall()
+
+
 def all_weights_with_members(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """
