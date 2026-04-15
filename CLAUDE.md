@@ -22,7 +22,8 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
    - `MODEL_ID: int` — next unused ID
    - `MODEL_NAME: str`
    - `NEEDS_CONN_IN = True` if the model needs historical DB access, else omit
-   - `run(obs, issued_at, *, conn_in=None) -> list[dict]` returning forecast dicts
+   - `NEEDS_WEIGHTS = True` if the model accepts inverse-MAE member weights, else omit
+   - `run(obs, issued_at, *, conn_in=None, weights=None) -> list[dict]` returning forecast dicts
 
 2. Add an `insert or ignore` for the model row to `migrations/001_baseline.sql` (models
    table) and a row for each member to the members table. Single-member models need one
