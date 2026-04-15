@@ -81,6 +81,8 @@ lowercase as well.
 | 3   | weighted_climatological_mean | base     | done   |
 | 4   | climo_deviation              | base     | done   |
 | 5   | pressure_tendency            | base     | done   |
+| 6   | diurnal_curve                | base     | done   |
+| 100 | barogram_ensemble            | ensemble | done   |
 
 ## Playwright / screenshots
 
