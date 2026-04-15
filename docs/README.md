@@ -8,6 +8,7 @@
 | 4 | climo_deviation | [004_climo_deviation.md](004_climo_deviation.md) |
 | 5 | pressure_tendency | [005_pressure_tendency.md](005_pressure_tendency.md) |
 | 6 | diurnal_curve | [006_diurnal_curve.md](006_diurnal_curve.md) |
+| 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
 
 # System
 
