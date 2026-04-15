@@ -16,6 +16,7 @@ import math
 import statistics
 
 import db
+import fmt
 from models._climo_weights import LEAD_HOURS, VARIABLES
 
 MODEL_ID = 5
@@ -258,13 +259,15 @@ def _build_zambretti_conditionals(all_obs, issued_at):
     return {k: sum(v) / len(v) for k, v in accum.items() if len(v) >= 3}
 
 
-def zambretti_text(obs, conn_in):
+def zambretti_text(obs, conn_in, elevation_m: float = 0.0):
     """
     Compute the Zambretti weather description for dashboard display.
     Not scored — display only.
 
-    Uses station pressure (not altitude-corrected to sea level), so letter codes
-    are approximate. Tendency classification is unaffected by this limitation.
+    Pressure is reduced to sea level before computing tendency when
+    elevation_m > 0; otherwise falls back to station pressure.
+    Tendency classification is the same either way since the altitude
+    correction is nearly constant and cancels in the difference.
 
     returns dict with keys: category, rate_hpa_per_h, letter, description.
     """
@@ -279,7 +282,15 @@ def zambretti_text(obs, conn_in):
             "letter": "\u2014",
             "description": "Insufficient pressure history",
         }
-    delta_p = obs["station_pressure"] - row_past["station_pressure"]
+
+    def _slp(sp, temp_c):
+        if elevation_m > 0.0 and temp_c is not None:
+            return fmt.to_slp(sp, temp_c, elevation_m)
+        return sp
+
+    p_now = _slp(obs["station_pressure"], obs["air_temp"])
+    p_past = _slp(row_past["station_pressure"], row_past["air_temp"])
+    delta_p = p_now - p_past
     cat = _zambretti_category(delta_p)
     letter, desc = _ZAMBRETTI_TABLE[cat]
     return {

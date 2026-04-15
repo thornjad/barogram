@@ -29,7 +29,6 @@ def load(path: str | Path) -> Config:
     section = data.get("barogram", {})
     input_db = section.get("input_db")
     output_db = section.get("output_db")
-
     missing = [k for k, v in [("input_db", input_db), ("output_db", output_db)] if not v]
     if missing:
         sys.exit(f"config missing required keys in [barogram]: {', '.join(missing)}")

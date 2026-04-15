@@ -17,7 +17,8 @@ def _make_min_input_db() -> sqlite3.Connection:
     conn.executescript("""
         create table stations (
             station_id text, source text, name text,
-            latitude real, longitude real
+            latitude real, longitude real,
+            elevation real, agl real
         );
         create table tempest_obs (
             station_id text, timestamp integer,

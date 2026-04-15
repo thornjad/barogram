@@ -12,7 +12,7 @@ REQUIRED_COLUMNS: dict[str, set[str]] = {
         "station_id", "timestamp", "air_temp", "dew_point",
         "wind_speed", "wind_direction", "sea_level_pressure", "sky_cover", "raw_metar",
     },
-    "stations": {"station_id", "source", "name", "latitude", "longitude"},
+    "stations": {"station_id", "source", "name", "latitude", "longitude", "elevation", "agl"},
 }
 
 
@@ -138,6 +138,23 @@ def tempest_station_location(conn: sqlite3.Connection) -> tuple[float, float] | 
     if row is None or row["latitude"] is None or row["longitude"] is None:
         return None
     return (row["latitude"], row["longitude"])
+
+
+def tempest_station_elevation(conn: sqlite3.Connection) -> float:
+    """Return the effective elevation (m ASL) of the Tempest station.
+
+    Combines the station's ground elevation with the sensor's height above
+    ground (agl) so that SLP reduction uses the actual sensor altitude.
+    Returns 0.0 if elevation data is unavailable.
+    """
+    row = conn.execute(
+        "select elevation, agl from stations where source = 'tempest' limit 1"
+    ).fetchone()
+    if row is None:
+        return 0.0
+    elev = row["elevation"] or 0.0
+    agl = row["agl"] or 0.0
+    return elev + agl
 
 
 def climo_bucket_means(
