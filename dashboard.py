@@ -171,6 +171,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     gap: 16px;
     margin-bottom: 20px;
 }
+.verification-primary { margin-bottom: 20px; }
 .score-table {
     width: 100%;
     border-collapse: collapse;
@@ -232,6 +233,8 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .mae-better { color: #2a6a2a; font-weight: 600; }
 .mae-baseline-val { color: #bbb; }
 .mae-worse { color: #8b2020; font-weight: 600; }
+.mae-worse-pers { color: #8a4f00; font-weight: 600; }
+.chart-legend-note { font-size: 11px; color: #999; margin: 2px 0 10px; }
 .score-details summary {
     cursor: pointer;
     font-size: 12px;
@@ -733,9 +736,14 @@ def _score_summary_table(
     if not model_summary:
         return f'<div><p class="window-label">{window_label}</p><p class="muted">no scored forecasts</p></div>'
 
+    climo = model_summary.get("climatological_mean", {})
+    c_avg = climo.get("avg_mae")
+    c_24h = climo.get("mae_24h")
     persistence = model_summary.get("persistence", {})
     p_avg = persistence.get("avg_mae")
     p_24h = persistence.get("mae_24h")
+    pers_avg_ratio = (p_avg / c_avg) if (p_avg is not None and c_avg) else None
+    pers_24h_ratio = (p_24h / c_24h) if (p_24h is not None and c_24h) else None
 
     total = sum(row["n"] for row in summary_rows)
     sorted_names = sorted(model_summary.keys(), key=lambda k: model_summary[k]["model_id"])
@@ -744,30 +752,41 @@ def _score_summary_table(
     summary_tbody = []
     for name in sorted_names:
         m = model_summary[name]
-        if name == "persistence":
+        if name == "climatological_mean":
             badge = '<span class="baseline-badge">baseline</span>'
+        elif name == "persistence":
+            badge = ""
         elif m["type"] == "ensemble":
             badge = f'<span class="ensemble-badge">{m["type"]}</span>'
         else:
             badge = ""
 
-        if name == "persistence":
+        is_climo = name == "climatological_mean"
+        if is_climo:
             avg_ratio = 1.0 if m["avg_mae"] is not None else None
             h24_ratio = 1.0 if m["mae_24h"] is not None else None
         else:
-            avg_ratio = m["avg_mae"] / p_avg if (m["avg_mae"] is not None and p_avg) else None
-            h24_ratio = m["mae_24h"] / p_24h if (m["mae_24h"] is not None and p_24h) else None
-        avg_cls = _mae_color_class(avg_ratio, 1.0) if name != "persistence" and avg_ratio is not None else ""
-        h24_cls = _mae_color_class(h24_ratio, 1.0) if name != "persistence" and h24_ratio is not None else ""
+            avg_ratio = m["avg_mae"] / c_avg if (m["avg_mae"] is not None and c_avg) else None
+            h24_ratio = m["mae_24h"] / c_24h if (m["mae_24h"] is not None and c_24h) else None
+        avg_cls = _mae_color_class(avg_ratio, 1.0) if not is_climo and avg_ratio is not None else ""
+        h24_cls = _mae_color_class(h24_ratio, 1.0) if not is_climo and h24_ratio is not None else ""
+        # amber indicator: model is worse than naive persistence baseline
+        if (not is_climo and name != "persistence"
+                and avg_ratio is not None and pers_avg_ratio is not None
+                and avg_ratio > pers_avg_ratio):
+            avg_cls = ' class="mae-worse-pers"'
+        if (not is_climo and name != "persistence"
+                and h24_ratio is not None and pers_24h_ratio is not None
+                and h24_ratio > pers_24h_ratio):
+            h24_cls = ' class="mae-worse-pers"'
         def _cell(ratio, raw, cls, is_baseline=False):
             if ratio is None:
                 return "\u2014"
             raw_str = f"{raw:.2f}" if raw is not None else "\u2014"
             effective_cls = ' class="mae-baseline-val"' if is_baseline else cls
             return f'<span{effective_cls} data-raw="{raw_str}" data-ratio="{ratio:.2f}">{ratio:.2f}</span>'
-        is_baseline = name == "persistence"
-        avg_str = _cell(avg_ratio, m["avg_mae"], avg_cls, is_baseline)
-        h24_str = _cell(h24_ratio, m["mae_24h"], h24_cls, is_baseline)
+        avg_str = _cell(avg_ratio, m["avg_mae"], avg_cls, is_climo)
+        h24_str = _cell(h24_ratio, m["mae_24h"], h24_cls, is_climo)
 
         has_members = bool(member_models) and name in member_models
         safe = name.replace("_", "-").replace(" ", "-")
@@ -781,7 +800,7 @@ def _score_summary_table(
             f'</tr>'
             if has_members else ""
         )
-        row_cls = ' class="baseline-row"' if name == 'persistence' else ''
+        row_cls = ' class="baseline-row"' if name in ('climatological_mean', 'persistence') else ''
         summary_tbody.append(
             f'<tr{row_cls}>'
             f'<td class="model-id-cell">{m["model_id"]}</td>'
@@ -795,7 +814,7 @@ def _score_summary_table(
 
     summary_table = (
         '<table class="mae-summary-table">'
-        '<thead><tr><th>ID</th><th>Model</th><th class="col-avg-hdr">Avg skill ratio</th><th class="col-24h-hdr">+24h skill ratio</th><th></th></tr></thead>'
+        '<thead><tr><th>ID</th><th>Model</th><th class="col-avg-hdr">Avg vs climo</th><th class="col-24h-hdr">+24h vs climo</th><th></th></tr></thead>'
         f'<tbody>{"".join(summary_tbody)}</tbody>'
         '</table>'
     )
@@ -861,12 +880,23 @@ def _score_summary_table(
     )
 
 
-def _mae_timeseries_data(timeseries_rows: list) -> dict:
-    """lead (str) -> model -> {is_persistence, is_ensemble, series: {var|avg -> {x, y_raw, y_ratio}}}
+def _rolling_mean(values: list, window: int = 10) -> list:
+    """Trailing rolling mean of `window` points; None values are skipped."""
+    out = []
+    for i in range(len(values)):
+        chunk = [x for x in values[max(0, i - window + 1): i + 1] if x is not None]
+        out.append(sum(chunk) / len(chunk) if chunk else None)
+    return out
 
-    y_ratio = MAE / persistence_MAE for the same (var, lead, issued_at).
-    Persistence series always has y_ratio = 1.0. Average series ratios are
-    the mean ratio across variables (dimensionless, comparable across vars).
+
+def _mae_timeseries_data(timeseries_rows: list) -> dict:
+    """lead (str) -> model -> {is_baseline, is_persistence, is_ensemble, model_id,
+                               series: {var|avg -> {x, y_raw, y_ratio, y_ratio_rolling}}}
+
+    y_ratio = MAE / climatological_mean_MAE for the same (var, lead, issued_at).
+    climatological_mean always has y_ratio = 1.0; persistence shows its actual
+    ratio vs climo. Average series ratios are the mean ratio across variables
+    (dimensionless, comparable across vars).
     """
     raw: dict = {}
     model_meta: dict = {}
@@ -879,15 +909,16 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
 
     result: dict = {}
     for lead in sorted(raw):
-        # persistence MAE for this lead: var -> issued_at -> mae
-        p_ts: dict = raw[lead].get("persistence", {})
+        # climo MAE for this lead: var -> issued_at -> mae
+        c_ts: dict = raw[lead].get("climatological_mean", {})
         result[str(lead)] = {}
         for model, vars_ in raw[lead].items():
+            is_baseline = model == "climatological_mean"
             is_persistence = model == "persistence"
             is_ensemble = model_meta[model]["is_ensemble"]
             series: dict = {}
             for var, ts in vars_.items():
-                p_var = p_ts.get(var, {})
+                c_var = c_ts.get(var, {})
                 x, y_raw, y_ratio = [], [], []
                 for issued in sorted(ts):
                     mae = ts[issued]
@@ -896,12 +927,16 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
                         else _to_mph(mae) if var == "wind_speed"
                         else mae
                     )
-                    p = p_var.get(issued)
-                    ratio = 1.0 if is_persistence else (mae / p if p else None)
+                    c = c_var.get(issued)
+                    ratio = 1.0 if is_baseline else (mae / c if c else None)
                     x.append(fmt.short_ts(issued))
                     y_raw.append(mae_display)
                     y_ratio.append(ratio)
-                series[var] = {"x": x, "y_raw": y_raw, "y_ratio": y_ratio}
+                series[var] = {
+                    "x": x, "y_raw": y_raw, "y_ratio": y_ratio,
+                    "y_ratio_rolling": _rolling_mean(y_ratio),
+                    "y_raw_rolling": _rolling_mean(y_raw),
+                }
             # average series
             all_issued = sorted(set().union(*[set(ts) for ts in vars_.values()]))
             ax, ay_raw, ay_ratio = [], [], []
@@ -911,17 +946,22 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
                     if issued not in ts:
                         continue
                     mae = ts[issued]
-                    p_var = p_ts.get(var, {})
-                    p = p_var.get(issued)
-                    if is_persistence or p:
-                        ratios.append(1.0 if is_persistence else mae / p)
+                    c_var = c_ts.get(var, {})
+                    c = c_var.get(issued)
+                    if is_baseline or c:
+                        ratios.append(1.0 if is_baseline else mae / c)
                     raws.append(mae)
                 if ratios:
                     ax.append(fmt.short_ts(issued))
                     ay_ratio.append(sum(ratios) / len(ratios))
                     ay_raw.append(sum(raws) / len(raws) if raws else None)
-            series["avg"] = {"x": ax, "y_raw": ay_raw, "y_ratio": ay_ratio}
+            series["avg"] = {
+                "x": ax, "y_raw": ay_raw, "y_ratio": ay_ratio,
+                "y_ratio_rolling": _rolling_mean(ay_ratio),
+                "y_raw_rolling": _rolling_mean(ay_raw),
+            }
             result[str(lead)][model] = {
+                "is_baseline": is_baseline,
                 "is_persistence": is_persistence,
                 "is_ensemble": is_ensemble,
                 "model_id": model_meta[model]["model_id"],
@@ -1143,33 +1183,56 @@ maeAllModels.forEach(function(m, i) {{ maeModelColors[m] = MAE_PALETTE[i % MAE_P
 
 let maeActiveVar = 'avg';
 let verifMode = 'ratio';
+let smoothMode = true;
 
 function drawMaeCharts() {{
     maeLeads.forEach(function(lead) {{
         const leadData = maeLeadData[String(lead)] || {{}};
         const traces = Object.entries(leadData).map(function([model, info]) {{
             const s = (info.series || {{}})[maeActiveVar] || {{}};
-            const y = verifMode === 'ratio' ? (s.y_ratio || []) : (s.y_raw || []);
+            const isBaseline = info.is_baseline;
             const isPersistence = info.is_persistence;
+            const isRef = isBaseline || isPersistence;
             const isEns = info.is_ensemble;
-            const color = isPersistence ? '#aaaaaa' : maeModelColors[model];
+            const color = isRef ? '#aaaaaa' : maeModelColors[model];
+            const dash = isBaseline ? 'longdash' : (isPersistence ? 'dot' : (isEns ? 'dash' : 'solid'));
+            // smooth mode: use rolling avg as primary for non-reference models
+            let y;
+            if (verifMode === 'ratio') {{
+                y = (smoothMode && !isRef) ? (s.y_ratio_rolling || []) : (s.y_ratio || []);
+            }} else {{
+                y = (smoothMode && !isRef) ? (s.y_raw_rolling || []) : (s.y_raw || []);
+            }}
             return {{
                 type: 'scatter',
-                mode: 'lines+markers',
+                mode: isRef ? 'lines' : (smoothMode ? 'lines' : 'lines+markers'),
                 name: String(info.model_id),
                 x: s.x || [],
                 y: y,
-                line: {{
-                    width: 2,
-                    dash: isPersistence ? 'dot' : (isEns ? 'dash' : 'solid'),
-                    color: color
-                }},
-                marker: {{ size: isPersistence ? 5 : 6, color: color }}
+                line: {{ width: isRef ? 1.5 : 2, dash: dash, color: color }},
+                marker: {{ size: 5, color: color }}
             }};
         }});
+        // per-run mode: show rolling avg as secondary overlay in ratio mode
+        if (!smoothMode && verifMode === 'ratio') {{
+            Object.entries(leadData).forEach(function([model, info]) {{
+                if (info.is_baseline || info.is_persistence) return;
+                const s = (info.series || {{}})[maeActiveVar] || {{}};
+                const yr = s.y_ratio_rolling || [];
+                if (!yr.length) return;
+                const color = maeModelColors[model];
+                traces.push({{
+                    type: 'scatter', mode: 'lines',
+                    name: String(info.model_id) + ' (10-run avg)',
+                    x: s.x || [], y: yr,
+                    line: {{ width: 1.5, dash: 'dashdot', color: color }},
+                    showlegend: false
+                }});
+            }});
+        }}
         const isRatio = verifMode === 'ratio';
         const varLabel = isRatio
-            ? (maeActiveVar === 'avg' ? 'average skill ratio' : maeFilterLabels[maeActiveVar].replace(' MAE', ' skill ratio'))
+            ? (maeActiveVar === 'avg' ? 'average skill vs climo' : maeFilterLabels[maeActiveVar].replace(' MAE', ' skill vs climo'))
             : (maeFilterLabels[maeActiveVar] || maeActiveVar);
         const title = '+' + lead + 'h — ' + varLabel;
         const yRange = isRatio ? {{ rangemode: 'tozero' }} : {{ rangemode: 'tozero' }};
@@ -1197,10 +1260,10 @@ function updateTableMode() {{
         el.textContent = isRatio ? el.dataset.ratio : el.dataset.raw;
     }});
     document.querySelectorAll('.col-avg-hdr').forEach(function(el) {{
-        el.textContent = isRatio ? 'Avg skill ratio' : 'Avg MAE';
+        el.textContent = isRatio ? 'Avg vs climo' : 'Avg MAE';
     }});
     document.querySelectorAll('.col-24h-hdr').forEach(function(el) {{
-        el.textContent = isRatio ? '+24h skill ratio' : '+24h MAE';
+        el.textContent = isRatio ? '+24h vs climo' : '+24h MAE';
     }});
 }}
 
@@ -1219,6 +1282,13 @@ document.getElementById('raw-toggle').addEventListener('click', function() {{
     this.textContent = verifMode === 'ratio' ? 'Raw values' : 'Skill ratio';
     drawMaeCharts();
     updateTableMode();
+}});
+
+document.getElementById('smooth-toggle').addEventListener('click', function() {{
+    smoothMode = !smoothMode;
+    this.classList.toggle('active');
+    this.textContent = smoothMode ? 'Per-run detail' : 'Smooth';
+    drawMaeCharts();
 }});
 
 drawMaeCharts();
@@ -1857,6 +1927,8 @@ def generate(
     nws_history = db.recent_nws_obs(conn_in)
 
     now = int(time.time())
+    all_scores_30 = db.score_summary_last_n_runs(conn_out, 30)
+    summary_30 = [r for r in all_scores_30 if r["member_id"] == 0]
     all_scores_10 = db.score_summary_last_n_runs(conn_out, 10)
     summary_10 = [r for r in all_scores_10 if r["member_id"] == 0]
     members_10 = [r for r in all_scores_10 if r["member_id"] > 0]
@@ -1893,6 +1965,7 @@ def generate(
     nws_rows = [_nws_obs_row(r) for r in nws_history]
 
     all_models = {r["model"]: {"model_id": r["model_id"], "type": r["type"]} for r in mean_rows}
+    table_30 = _score_summary_table(summary_30, "last 30 scored runs", member_models, all_models)
     table_10 = _score_summary_table(summary_10, "last 10 scored runs", member_models, all_models)
     table_7d = _score_summary_table(summary_7d, "last 7 days", member_models, all_models)
     weights_section = _weights_section_html(weight_rows)
@@ -1988,13 +2061,17 @@ def generate(
 
 <section class="section">
   <h2>Verification</h2>
+  <div class="verification-primary">
+    {table_30}
+  </div>
   <div class="verification-windows">
     {table_10}
     {table_7d}
   </div>
   {weights_section}
   <h3 class="obs-subhead">MAE over time</h3>
-  <div class="mae-filter-bar">{filter_btns}<button id="raw-toggle" class="mae-raw-btn">Raw values</button></div>
+  <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button><button id="raw-toggle" class="mae-raw-btn">Raw values</button></div>
+  <p class="chart-legend-note">Grey: reference lines (climo = long-dash, persistence = dotted) &nbsp;·&nbsp; Per-run detail: solid with dash-dot rolling avg overlay</p>
   <div class="mae-charts-grid">
     {mae_chart_divs}
   </div>
