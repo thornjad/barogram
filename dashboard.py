@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import time
+from datetime import datetime
 from pathlib import Path
 
 import db
@@ -1856,10 +1857,12 @@ def _ensemble_forecast_section(mean_rows: list, tempest) -> str:
 
     # {variable: {lead_hours: (value, spread)}}
     table: dict[str, dict[int, tuple]] = {v: {} for v in VARIABLES}
+    lead_valid_at: dict[int, int] = {}
     issued_at = None
     for row in ens_rows:
         if row["variable"] in table:
             table[row["variable"]][row["lead_hours"]] = (row["value"], row["spread"])
+        lead_valid_at.setdefault(row["lead_hours"], row["valid_at"])
         if issued_at is None:
             issued_at = row["issued_at"]
 
@@ -1947,6 +1950,11 @@ def _ensemble_forecast_section(mean_rows: list, tempest) -> str:
     cards_html += _card("Now", True, now_temp, now_dew, now_pres, now_wind)
 
     for lead in [6, 12, 18, 24]:
+        vat = lead_valid_at.get(lead)
+        label = (
+            datetime.fromtimestamp(vat, tz=fmt.CENTRAL).strftime("%-I %p").lstrip("0")
+            if vat else f"+{lead}h"
+        )
         t_cell = table.get("temperature", {}).get(lead)
         d_cell = table.get("dewpoint", {}).get(lead)
         p_cell = table.get("pressure", {}).get(lead)
@@ -1956,7 +1964,7 @@ def _ensemble_forecast_section(mean_rows: list, tempest) -> str:
         d_val = d_cell[0] if d_cell else None
         p_val = p_cell[0] if p_cell else None
         w_val = w_cell[0] if w_cell else None
-        cards_html += _card(f"+{lead}h", False, t_val, d_val, p_val, w_val, t_spread)
+        cards_html += _card(label, False, t_val, d_val, p_val, w_val, t_spread)
 
     issued_str = fmt.ts(issued_at) if issued_at else "&mdash;"
     return (
