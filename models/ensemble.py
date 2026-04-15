@@ -1,16 +1,79 @@
-# ensemble model: combined forecast from all base models
-# stub until >= 2 base models exist; run() returns []
+# barogram_ensemble: meta-ensemble combining member_id=0 from all base models
+# members 1-6 correspond to base model IDs 1-6
+
+import math
+
+import db
 
 MODEL_ID = 100
-MODEL_NAME = "ensemble"
+MODEL_NAME = "barogram_ensemble"
 MODEL_TYPE = "ensemble"
+NEEDS_CONN_OUT = True
+NEEDS_WEIGHTS = True
+
+_BASE_MODELS = {1, 2, 3, 4, 5, 6}
 
 
-def run(base_forecast_rows: list[dict], issued_at: int) -> list[dict]:
-    """Combine base model forecasts into a single ensemble forecast.
+def run(obs, issued_at: int, *, conn_out, weights=None) -> list[dict]:
+    """Combine member_id=0 forecasts from all base models into one ensemble.
 
-    Returns [] until multiple base models are available. When implemented,
-    weights each base model by its rolling MAE to produce one combined
-    forecast row per (variable, lead_hours).
+    Each contributing base model becomes one member of this ensemble. weights
+    is a dict keyed by (member_id, variable, lead_hours); absent keys fall back
+    to equal weighting. Produces one member row per base model plus a member_id=0
+    row (weighted mean + spread) per (variable, lead_hours).
     """
-    return []
+    inputs = db.ensemble_inputs(conn_out, issued_at)
+    if not inputs:
+        return []
+
+    # group by (variable, lead_hours) -> {model_id: (value, valid_at)}
+    cells: dict = {}
+    for row in inputs:
+        if row["model_id"] not in _BASE_MODELS or row["value"] is None:
+            continue
+        key = (row["variable"], row["lead_hours"])
+        cells.setdefault(key, {})[row["model_id"]] = (row["value"], row["valid_at"])
+
+    rows = []
+    for (variable, lead_hours), model_values in cells.items():
+        if not model_values:
+            continue
+
+        # one member row per contributing base model (member_id == base model_id)
+        for model_id, (value, valid_at) in model_values.items():
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": model_id,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead_hours,
+                "variable": variable,
+                "value": value,
+            })
+
+        # weighted mean; fall back to equal weight when weights dict is absent/sparse
+        raw_w = {
+            mid: (weights.get((mid, variable, lead_hours), 1.0) if weights else 1.0)
+            for mid in model_values
+        }
+        total_w = sum(raw_w.values())
+        mean = sum(raw_w[mid] * v for mid, (v, _) in model_values.items()) / total_w
+
+        vals = [v for v, _ in model_values.values()]
+        spread = math.sqrt(sum((v - mean) ** 2 for v in vals) / len(vals))
+
+        valid_at = next(iter(model_values.values()))[1]
+        rows.append({
+            "model_id": MODEL_ID,
+            "model": MODEL_NAME,
+            "member_id": 0,
+            "issued_at": issued_at,
+            "valid_at": valid_at,
+            "lead_hours": lead_hours,
+            "variable": variable,
+            "value": mean,
+            "spread": spread,
+        })
+
+    return rows

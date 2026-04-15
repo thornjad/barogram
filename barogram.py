@@ -15,6 +15,7 @@ import fmt
 import models.climatological_mean as climatological_mean
 import models.climo_deviation as climo_deviation
 import models.diurnal_curve as diurnal_curve
+import models.ensemble as barogram_ensemble
 import models.persistence as persistence
 import models.pressure_tendency as pressure_tendency
 import models.weighted_climatological_mean as weighted_climatological_mean
@@ -26,6 +27,7 @@ _MODELS = [
     climo_deviation,
     pressure_tendency,
     diurnal_curve,
+    barogram_ensemble,  # must be last: reads base model rows from current run
 ]
 import score as scorer
 
@@ -101,6 +103,8 @@ def cmd_forecast(args, conf):
         kwargs = {}
         if getattr(model, "NEEDS_CONN_IN", False):
             kwargs["conn_in"] = conn_in
+        if getattr(model, "NEEDS_CONN_OUT", False):
+            kwargs["conn_out"] = conn_out
         if getattr(model, "NEEDS_WEIGHTS", False):
             kwargs["weights"] = db.load_weights(conn_out, model.MODEL_ID)
         rows = model.run(obs, issued_at, **kwargs)
@@ -140,6 +144,8 @@ def cmd_run(args, conf):
         kwargs = {}
         if getattr(model, "NEEDS_CONN_IN", False):
             kwargs["conn_in"] = conn_in
+        if getattr(model, "NEEDS_CONN_OUT", False):
+            kwargs["conn_out"] = conn_out
         if getattr(model, "NEEDS_WEIGHTS", False):
             kwargs["weights"] = db.load_weights(conn_out, model.MODEL_ID)
         rows = model.run(obs, issued_at, **kwargs)
