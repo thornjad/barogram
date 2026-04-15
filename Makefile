@@ -1,4 +1,4 @@
-.PHONY: all forecast score tune dashboard conditions
+.PHONY: all forecast score tune dashboard conditions test
 
 all:
 	uv run barogram run
@@ -18,3 +18,6 @@ dashboard:
 
 conditions:
 	uv run barogram conditions
+
+test:
+	uv run pytest tests/
