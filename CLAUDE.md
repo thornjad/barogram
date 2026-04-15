@@ -81,6 +81,19 @@ lowercase as well.
 | 4   | climo_deviation              | base     | done   |
 | 5   | pressure_tendency            | base     | done   |
 
+## Playwright / screenshots
+
+When using Playwright (MCP tools or the scripts in `screenshots/`) always save screenshots
+to `/tmp/barogram-screenshots/`. Never save PNGs inside the repo directory.
+
+The `screenshots/` directory contains capture scripts (`capture.js`, `capture-states.js`,
+`zoom-*.js`) that are gitignored along with the directory itself. Each script already
+creates `/tmp/barogram-screenshots/` and writes there. Run them with:
+
+```bash
+node screenshots/capture.js
+```
+
 ## Key files
 
 - `barogram.py` — CLI entry point; `_MODELS` list controls which models run
