@@ -471,7 +471,7 @@ def _conditions_card(label: str, obs) -> str:
             f'<tr><th>Precip today</th><td>{fmt.val(_to_in(obs["precip_accum_day"]), ".2f", " in")}</td></tr>'
             f'<tr><th>UV Index</th><td>{fmt.val(obs["uv_index"], ".1f")}</td></tr>'
             f'<tr><th>Solar</th><td>{fmt.val(obs["solar_radiation"], ".0f", " W/m\u00b2")}</td></tr>'
-            f'<tr><th>Lightning</th><td>{lc if lc is not None else 0} strikes</td></tr>'
+            f'<tr><th>Lightning</th><td>{lc if lc is not None else 0} strikes (3-min count)</td></tr>'
         )
     else:
         rows_html = (
