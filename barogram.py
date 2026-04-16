@@ -12,6 +12,7 @@ import config as cfg
 import dashboard as dash
 import db
 import fmt
+import sync as _sync
 import models.climatological_mean as climatological_mean
 import models.climo_deviation as climo_deviation
 import models.diurnal_curve as diurnal_curve
@@ -30,6 +31,16 @@ _MODELS = [
     barogram_ensemble,  # must be last: reads base model rows from current run
 ]
 import score as scorer
+
+_LOCAL_ENV = Path(__file__).parent / "barogram.local.toml"
+
+
+def _sync_check():
+    conf = _sync.load_env(_LOCAL_ENV)
+    if conf is None:
+        return
+    if not _sync.wait_for_idle(conf):
+        print("warning: syncthing not idle or unreachable — proceeding anyway")
 
 
 def cmd_conditions(args, conf):
@@ -80,6 +91,7 @@ def cmd_conditions(args, conf):
 
 
 def cmd_forecast(args, conf):
+    _sync_check()
     issued_at = int(time.time())
     migrations_dir = Path(__file__).parent / "migrations"
 
@@ -115,6 +127,7 @@ def cmd_forecast(args, conf):
 
 
 def cmd_run(args, conf):
+    _sync_check()
     issued_at = int(time.time())
     output = Path(__file__).parent / "dashboard.html"
     migrations_dir = Path(__file__).parent / "migrations"
@@ -182,6 +195,7 @@ def cmd_dashboard(args, conf):
 
 
 def cmd_score(args, conf):
+    _sync_check()
     migrations_dir = Path(__file__).parent / "migrations"
 
     try:
@@ -200,7 +214,52 @@ def cmd_score(args, conf):
     print(f"scored {result['scored']}, skipped {result['skipped']}")
 
 
+def cmd_query(args, conf):
+    import json as json_mod
+
+    if args.input:
+        try:
+            conn = db.open_input_db(conf.input_db)
+        except FileNotFoundError as e:
+            sys.exit(f"error: {e}")
+    else:
+        migrations_dir = Path(__file__).parent / "migrations"
+        conn = db.open_output_db(conf.output_db)
+        db.run_migrations(conn, migrations_dir)
+
+    try:
+        cur = conn.execute(args.sql)
+    except Exception as e:
+        sys.exit(f"error: {e}")
+
+    rows = cur.fetchall()
+    if not rows:
+        print("(no rows)")
+        return
+
+    cols = list(rows[0].keys())
+
+    if args.format == "json":
+        print(json_mod.dumps([dict(r) for r in rows], indent=2))
+        return
+
+    str_rows = [[str(r[c]) if r[c] is not None else "" for c in cols] for r in rows]
+    widths = []
+    for i, c in enumerate(cols):
+        col_vals = [row[i] for row in str_rows]
+        widths.append(max(len(c), max((len(v) for v in col_vals), default=0)))
+
+    def fmt_row(vals):
+        return "  ".join(v.ljust(w) for v, w in zip(vals, widths))
+
+    print(fmt_row(cols))
+    print("  ".join("-" * w for w in widths))
+    for row in str_rows:
+        print(fmt_row(row))
+
+
 def cmd_tune(args, conf):
+    _sync_check()
     migrations_dir = Path(__file__).parent / "migrations"
     conn_out = db.open_output_db(conf.output_db)
     db.run_migrations(conn_out, migrations_dir)
@@ -298,6 +357,18 @@ def main():
         "score", help="score past forecasts against observations"
     )
     p = subparsers.add_parser(
+        "query", help="run a SQL query against the output or input database"
+    )
+    p.add_argument("sql", help="SQL query to execute")
+    p.add_argument(
+        "--input", action="store_true",
+        help="query the input (wxlog) database instead of barogram.db",
+    )
+    p.add_argument(
+        "--format", choices=["table", "json"], default="table",
+        help="output format (default: table)",
+    )
+    p = subparsers.add_parser(
         "tune", help="compute inverse-MAE member weights from scoring history"
     )
     p.add_argument(
@@ -331,6 +402,8 @@ def main():
         cmd_dashboard(args, conf)
     elif args.command == "score":
         cmd_score(args, conf)
+    elif args.command == "query":
+        cmd_query(args, conf)
     elif args.command == "tune":
         cmd_tune(args, conf)
 
