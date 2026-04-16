@@ -9,3 +9,5 @@ __pycache__/
 .playwright-mcp/
 *.png
 screenshots/
+*syncthing*
+docs/plans/
