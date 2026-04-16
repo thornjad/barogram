@@ -1,0 +1,17 @@
+# Machine-local settings — copy to barogram.local.toml and fill in values.
+# This file is committed; barogram.local.toml is gitignored and stignored.
+
+[syncthing]
+# API key from the Syncthing web UI (Actions > Settings > API Key)
+# or from ~/Library/Application Support/Syncthing/config.xml (<apikey>)
+api_key = ""
+
+# Folder ID for the synced directory containing barogram.db.
+# Visible in the Syncthing web UI next to the folder name.
+folder_id = ""
+
+# Syncthing REST API base URL (default works for most installs)
+# url = "http://localhost:8384"
+
+# Seconds to wait for the folder to go idle before proceeding (default: 30)
+# timeout = 30

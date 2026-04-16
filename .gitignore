@@ -1,4 +1,5 @@
 barogram.toml
+barogram.local.toml
 barogram.db
 barogram.db-shm
 barogram.db-wal
@@ -11,3 +12,4 @@ __pycache__/
 screenshots/
 *syncthing*
 docs/plans/
+.stignore
