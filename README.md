@@ -88,6 +88,23 @@ uv run barogram --config /path/to/barogram.toml conditions
 uv run barogram --help
 ```
 
+## Multi-machine sync
+
+If you run barogram on multiple machines with the output database synced via Syncthing,
+write commands (`run`, `forecast`, `score`, `tune`) will check that the local Syncthing
+folder is idle before writing, reducing the chance of sync conflicts.
+
+Create `barogram.local.toml` (gitignored and stignored) from the example:
+
+```bash
+cp barogram.example.local.toml barogram.local.toml
+# edit: add your Syncthing API key and folder ID
+```
+
+The API key is in the Syncthing web UI under Actions > Settings, or in the Syncthing
+config XML (`<apikey>`). Without this file the sync check is skipped entirely, so the
+feature has no effect on single-machine or non-Syncthing setups.
+
 ## License
 
 ISC — see [LICENSE](LICENSE).

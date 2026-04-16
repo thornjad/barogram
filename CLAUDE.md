@@ -15,6 +15,24 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 | `tune`       | Compute inverse-MAE member weights from scoring history |
 | `dashboard`  | Regenerate dashboard.html                            |
 | `conditions` | Print latest Tempest and NWS observations            |
+| `query`      | Run a SQL query against barogram.db or wxlog         |
+
+### Data investigation with `query`
+
+Use `query` to investigate patterns without writing custom Python. DB paths come from `barogram.toml` automatically.
+
+```bash
+# query barogram.db (default)
+uv run barogram query "select model, variable, lead_hours, avg(mae) as avg_mae from forecasts where scored_at is not null group by model, variable, lead_hours order by avg_mae"
+
+# query the wxlog input DB
+uv run barogram query --input "select date(timestamp, 'unixepoch', 'localtime') as day, avg(air_temp) from tempest_obs group by day order by day desc limit 30"
+
+# JSON output for richer analysis
+uv run barogram query --format json "select * from forecasts where scored_at is not null order by issued_at desc limit 20"
+```
+
+Flags: `--input` targets wxlog; `--format json` emits JSON instead of a table.
 
 ## Adding a model
 
@@ -84,6 +102,103 @@ lowercase as well.
 | 6   | diurnal_curve                | base     | done   |
 | 100 | barogram_ensemble            | ensemble | done   |
 
+## Database schemas
+
+### barogram.db (output DB — read/write)
+
+**`models`** — one row per model
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | integer PK | model ID |
+| `name` | text | unique model name |
+| `type` | text | `'base'` or `'ensemble'` |
+
+**`forecasts`** — one row per (model, member, variable, lead, run)
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | integer PK autoincrement | |
+| `model_id` | integer FK → models | |
+| `model` | text | denormalized name |
+| `member_id` | integer | 0 = single/ensemble mean; 1+ = named members |
+| `issued_at` | integer | Unix epoch of forecast run |
+| `valid_at` | integer | Unix epoch of forecast target time |
+| `lead_hours` | integer | one of 6, 12, 18, 24 |
+| `variable` | text | `temperature`, `dewpoint`, `pressure`, `wind_speed` |
+| `value` | real | forecast value (NULL = model abstained) |
+| `spread` | real | std dev across members; non-NULL only on member_id=0 for multi-member models |
+| `observed` | real | filled by scorer; actual observed value |
+| `error` | real | filled by scorer; signed error (forecast − observed) |
+| `mae` | real | filled by scorer; absolute error |
+| `scored_at` | integer | Unix epoch when scored; NULL = not yet scored |
+
+**`members`** — registry of valid (model_id, member_id) pairs
+| Column | Type | Notes |
+|--------|------|-------|
+| `model_id` | integer FK → models | |
+| `member_id` | integer | 0 = ensemble mean / single member |
+| `name` | text | short label (NULL for member_id=0) |
+
+**`weights`** — inverse-MAE weights computed by `tune`
+| Column | Type | Notes |
+|--------|------|-------|
+| `model_id` | integer FK → models | |
+| `member_id` | integer | 1+ only |
+| `variable` | text | |
+| `lead_hours` | integer | |
+| `weight` | real | normalized so members in a group sum to 1 |
+| `updated_at` | integer | Unix epoch of last `tune` run |
+
+**`metadata`** — key/value store
+| Key | Value |
+|-----|-------|
+| `schema_version` | current migration version (integer as string) |
+| `last_forecast` | Unix epoch of most recent `forecast` or `run` |
+| `last_tune` | Unix epoch of most recent `tune` |
+
+### wxlog-read-only.db (input DB — read-only)
+
+**`tempest_obs`** — Tempest PWS observations (~5 min cadence)
+| Column | Type | Notes |
+|--------|------|-------|
+| `station_id` | text | Tempest device ID |
+| `timestamp` | integer | Unix epoch |
+| `air_temp` | real | °C |
+| `dew_point` | real | °C |
+| `station_pressure` | real | hPa (not sea-level adjusted) |
+| `wind_avg` | real | m/s |
+| `wind_gust` | real | m/s |
+| `wind_direction` | real | degrees |
+| `precip_accum_day` | real | mm since midnight local |
+| `solar_radiation` | real | W/m² |
+| `uv_index` | real | |
+| `lightning_count` | integer | |
+
+**`nws_obs`** — NWS ASOS observations (~hourly)
+| Column | Type | Notes |
+|--------|------|-------|
+| `station_id` | text | ICAO station ID |
+| `timestamp` | integer | Unix epoch |
+| `air_temp` | real | °C |
+| `dew_point` | real | °C |
+| `wind_speed` | real | m/s |
+| `wind_direction` | real | degrees |
+| `sea_level_pressure` | real | hPa (SLP) |
+| `sky_cover` | text | e.g. `'CLR'`, `'FEW'`, `'OVC'` |
+| `raw_metar` | text | |
+
+**`stations`** — station metadata
+| Column | Type | Notes |
+|--------|------|-------|
+| `station_id` | text PK | |
+| `source` | text | `'tempest'` or `'nws'` |
+| `name` | text | human-readable name |
+| `latitude` | real | |
+| `longitude` | real | |
+| `elevation` | real | m ASL (ground elevation) |
+| `agl` | real | m above ground level (sensor height) |
+
+All timestamps are Unix epoch integers (seconds since 1970-01-01 UTC). Use `datetime(timestamp, 'unixepoch', 'localtime')` in SQLite queries to convert to local time.
+
 ## Playwright / screenshots
 
 When using Playwright (MCP tools or the scripts in `screenshots/`) always save screenshots
@@ -124,6 +239,12 @@ output_db = "/path/to/barogram.db"
 ```bash
 git clone https://github.com/thornjad/barogram
 uv sync
-cp barogram.example.toml barogram.toml  # then edit paths
-uv run barogram conditions              # verify
+cp barogram.example.toml barogram.toml            # then edit paths
+cp barogram.example.local.toml barogram.local.toml  # then add Syncthing API key + folder ID
+uv run barogram conditions                        # verify
 ```
+
+`barogram.local.toml` is machine-specific and gitignored/stignored. The Syncthing API key
+is at `~/Library/Application Support/Syncthing/config.xml` (`<apikey>`), or in the
+Syncthing web UI under Actions > Settings. The folder ID for the thornlog folder is
+visible next to the folder name in the web UI.
