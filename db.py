@@ -284,33 +284,37 @@ def score_summary_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
     ).fetchall()
 
 
-def score_timeseries(conn: sqlite3.Connection) -> list:
+def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
     """Per-run average MAE by model/member/variable/lead, ordered by run time."""
+    since_clause = "and f.issued_at >= :since" if since is not None else ""
     return conn.execute(
-        """
+        f"""
         select f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at,
                avg(f.mae) as avg_mae
         from forecasts f
         join models m on m.id = f.model_id
-        where f.scored_at is not null
+        where f.scored_at is not null {since_clause}
         group by f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at
         order by f.issued_at
-        """
+        """,
+        {"since": since},
     ).fetchall()
 
 
-def bias_timeseries(conn: sqlite3.Connection) -> list:
+def bias_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
     """Per-run average signed error by model/member/variable/lead, ordered by run time."""
+    since_clause = "and f.issued_at >= :since" if since is not None else ""
     return conn.execute(
-        """
+        f"""
         select f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at,
                avg(f.error) as avg_bias
         from forecasts f
         join models m on m.id = f.model_id
-        where f.scored_at is not null
+        where f.scored_at is not null {since_clause}
         group by f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at
         order by f.issued_at
-        """
+        """,
+        {"since": since},
     ).fetchall()
 
 

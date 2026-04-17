@@ -2,7 +2,7 @@ import json
 import sqlite3
 import time
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import db
@@ -299,7 +299,6 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .mae-better { color: #2a6a2a; font-weight: 600; }
 .mae-baseline-val { color: #bbb; }
 .mae-worse { color: #8b2020; font-weight: 600; }
-.mae-worse-pers { color: #8a4f00; font-weight: 600; }
 .chart-legend-note { font-size: 11px; color: #999; margin: 2px 0 10px; }
 .score-details summary {
     cursor: pointer;
@@ -876,12 +875,6 @@ def _score_summary_table(
     climo = model_summary.get("climatological_mean", {})
     c_avg = climo.get("avg_mae")
     c_24h = climo.get("mae_24h")
-    persistence = model_summary.get("persistence", {})
-    p_avg = persistence.get("avg_mae")
-    p_24h = persistence.get("mae_24h")
-    pers_avg_ratio = (p_avg / c_avg) if (p_avg is not None and c_avg) else None
-    pers_24h_ratio = (p_24h / c_24h) if (p_24h is not None and c_24h) else None
-
     total = sum(row["n"] for row in summary_rows)
     sorted_names = sorted(model_summary.keys(), key=lambda k: model_summary[k]["model_id"])
 
@@ -907,15 +900,6 @@ def _score_summary_table(
             h24_ratio = m["mae_24h"] / c_24h if (m["mae_24h"] is not None and c_24h) else None
         avg_cls = _mae_color_class(avg_ratio, 1.0) if not is_climo and avg_ratio is not None else ""
         h24_cls = _mae_color_class(h24_ratio, 1.0) if not is_climo and h24_ratio is not None else ""
-        # amber indicator: model is worse than naive persistence baseline
-        if (not is_climo and name != "persistence"
-                and avg_ratio is not None and pers_avg_ratio is not None
-                and avg_ratio > pers_avg_ratio):
-            avg_cls = ' class="mae-worse-pers"'
-        if (not is_climo and name != "persistence"
-                and h24_ratio is not None and pers_24h_ratio is not None
-                and h24_ratio > pers_24h_ratio):
-            h24_cls = ' class="mae-worse-pers"'
         def _cell(ratio, raw, cls, is_baseline=False):
             if ratio is None:
                 return "\u2014"
@@ -2249,6 +2233,10 @@ def generate(
     nws_forecast = _fetch_nws_forecast(*loc) if loc else {}
 
     now = int(time.time())
+    today = date.today()
+    midnight_7d_ago = int(
+        datetime(today.year, today.month, today.day, tzinfo=timezone.utc).timestamp()
+    ) - 7 * 86400
     all_scores_30 = db.score_summary_last_n_runs(conn_out, 30)
     summary_30 = [r for r in all_scores_30 if r["member_id"] == 0]
     all_scores_10 = db.score_summary_last_n_runs(conn_out, 10)
@@ -2256,9 +2244,9 @@ def generate(
     members_10 = [r for r in all_scores_10 if r["member_id"] > 0]
     member_models = {r["model"] for r in members_10}
     summary_7d = [r for r in db.score_summary_since(conn_out, now - 7 * 86400) if r["member_id"] == 0]
-    timeseries = [r for r in db.score_timeseries(conn_out) if r["member_id"] == 0]
+    timeseries = [r for r in db.score_timeseries(conn_out, since=midnight_7d_ago) if r["member_id"] == 0]
     all_time_summary = [r for r in db.score_summary(conn_out) if r["member_id"] == 0]
-    bias_ts_rows = [r for r in db.bias_timeseries(conn_out) if r["member_id"] == 0]
+    bias_ts_rows = [r for r in db.bias_timeseries(conn_out, since=midnight_7d_ago) if r["member_id"] == 0]
     diurnal_rows = [r for r in db.diurnal_errors(conn_out) if r["member_id"] == 0]
     error_dist_rows = db.error_distribution(conn_out)
     weight_rows = db.all_weights_with_members(conn_out)
