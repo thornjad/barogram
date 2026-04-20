@@ -78,8 +78,8 @@ def test_run_migrations_applies_all():
     db.run_migrations(conn, _MIGRATIONS_DIR)
     row = conn.execute("select value from metadata where key='schema_version'").fetchone()
     assert row is not None
-    # stored as str(int("011")) = "11", not "011"
-    assert row[0] == "11"
+    # stored as str(int("012")) = "12", not "012"
+    assert row[0] == "12"
 
 
 def test_run_migrations_idempotent():
@@ -87,7 +87,7 @@ def test_run_migrations_idempotent():
     db.run_migrations(conn, _MIGRATIONS_DIR)
     db.run_migrations(conn, _MIGRATIONS_DIR)  # second run should not raise
     row = conn.execute("select value from metadata where key='schema_version'").fetchone()
-    assert row[0] == "11"
+    assert row[0] == "12"
 
 
 # --- nearest_tempest_obs ---

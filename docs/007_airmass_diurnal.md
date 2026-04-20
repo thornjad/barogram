@@ -1,24 +1,15 @@
 # airmass_diurnal (model 7)
 
-Scales the climatological diurnal temperature curve by solar clearness index and
-airmass signals derived entirely from Tempest PWS observations. No NWS ASOS data
-is used as a forecast input (NWS sky cover is used only for dashboard validation).
+Scales the climatological diurnal temperature curve by solar clearness index and airmass signals derived entirely from Tempest PWS observations.
 
 ## Motivation
 
-The existing `diurnal_curve` model fits a good average daily temperature cycle but
-has no way to distinguish a clear-sky day from an overcast one. On a sunny spring
-day with dry southerly flow, the afternoon high can run 10–15°F above the average
-diurnal peak. `airmass_diurnal` attempts to capture this using:
+The existing `diurnal_curve` model fits a good average daily temperature cycle but has no way to distinguish a clear-sky day from an overcast one. On a sunny spring day with dry southerly flow, the afternoon high can run 10–15°F above the average diurnal peak. `airmass_diurnal` attempts to capture this using:
 
-- **Solar clearness index (k)**: ratio of observed solar radiation to theoretical
-  clear-sky irradiance. k ≈ 1 means clear; k ≈ 0 means overcast.
-- **Dewpoint depression (T − Td)**: large gap means dry air, which heats faster
-  under solar radiation.
-- **Wind direction sector**: rough proxy for airmass origin (southerly = warm,
-  northerly = cold, etc.).
-- **Morning warmup rate**: how fast temperature is rising before forecast issuance
-  relative to climatological expectation.
+- **Solar clearness index (k)**: ratio of observed solar radiation to theoretical clear-sky irradiance. k ≈ 1 means clear; k ≈ 0 means overcast.
+- **Dewpoint depression (T − Td)**: large gap means dry air, which heats faster under solar radiation.
+- **Wind direction sector**: rough proxy for airmass origin (southerly = warm, northerly = cold, etc.).
+- **Morning warmup rate**: how fast temperature is rising before forecast issuance relative to climatological expectation.
 
 ## Core mechanism
 
@@ -27,17 +18,14 @@ diurnal peak. `airmass_diurnal` attempts to capture this using:
 3. Anchor to current observations: `T_base = T_climo_valid + (T_obs − T_climo_now)`.
 4. Add a member-specific amplitude adjustment (affects temperature only).
 
-The clearness-based adjustment amplifies or dampens the deviation of the forecast
-hour from the daily mean:
+The clearness-based adjustment amplifies or dampens the deviation of the forecast hour from the daily mean:
 
 ```
 dev = T_climo_valid − T_daily_mean
 T_adj = dev × (k − K_MEAN) × K_SENSITIVITY
 ```
 
-Positive `dev` (afternoon peak): clear sky boosts the forecast upward.
-Negative `dev` (overnight trough): clear sky pulls the forecast downward.
-This preserves the daily mean while stretching the amplitude on clear days.
+Positive `dev` (afternoon peak): clear sky boosts the forecast upward. Negative `dev` (overnight trough): clear sky pulls the forecast downward. This preserves the daily mean while stretching the amplitude on clear days.
 
 ## Members
 
@@ -53,33 +41,8 @@ This preserves the daily mean while stretching the amplitude on clear days.
 | 7 | dewpoint-only | dewpoint depression anomaly, afternoon hours only |
 | 8 | combined-full | k × dewpoint factor + sector offset |
 
-## Hypotheses being tracked
-
-**Hypothesis A (dashboard):** Members 1 vs 3 — does projecting k forward with
-pressure tendency improve on persisting k at issued time? A higher tuning weight
-on member 3 after sufficient data would confirm it.
-
-**Hypothesis B (dashboard):** Does the Tempest-derived clearness index k track
-NWS ASOS sky cover? Systematic divergence would indicate a sensor calibration
-issue or a sheltered station microclimate.
-
-## Constants
-
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `_K_MEAN` | 0.55 | Typical mean clearness across all-weather days |
-| `_K_SENSITIVITY` | 2.0 | Amplitude multiplier per (k − K_MEAN) per unit diurnal deviation |
-| `_TD_SENSITIVITY` | 0.08 | °C adjustment per °C of dewpoint-depression anomaly |
-| `_P_K_SENSITIVITY` | 0.03 | k change per hPa/h per lead hour |
-
-Wind sector offsets (°C): N=−1.5, NE=−1.0, E=−0.5, SE=+0.5, S=+1.5, SW=+2.0, W=+0.5, NW=−0.5.
-
 ## Limitations
 
-- Clearness signal is unavailable when the sun is below the horizon at issued time;
-  members 1–3 and 5 fall back to the anchored diurnal climatology (no amplitude boost).
-- Sector offsets are static empirical constants, not derived from local data. They will
-  likely have systematic bias until enough data accumulates for tuning.
-- The model cannot capture synoptic-scale warm or cold advection beyond what the wind
-  direction sector implies. A 10°F anomaly driven by a warm-sector air mass will still
-  be underforecast.
+- Clearness signal is unavailable when the sun is below the horizon at issued time; members 1–3 and 5 fall back to the anchored diurnal climatology (no amplitude boost).
+- Sector offsets are static empirical constants, not derived from local data. They will likely have systematic bias until enough data accumulates for tuning.
+- The model cannot capture synoptic-scale warm or cold advection beyond what the wind direction sector implies. A 10°F anomaly driven by a warm-sector air mass will still be underforecast.

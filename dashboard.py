@@ -878,6 +878,10 @@ def _score_summary_table(
     total = sum(row["n"] for row in summary_rows)
     sorted_names = sorted(model_summary.keys(), key=lambda k: model_summary[k]["model_id"])
 
+    pers_m = model_summary.get("persistence", {})
+    pers_avg_ratio = pers_m["avg_mae"] / c_avg if (pers_m.get("avg_mae") is not None and c_avg) else None
+    pers_24h_ratio = pers_m["mae_24h"] / c_24h if (pers_m.get("mae_24h") is not None and c_24h) else None
+
     # level 1: at-a-glance summary rows
     summary_tbody = []
     for name in sorted_names:
@@ -892,14 +896,25 @@ def _score_summary_table(
             badge = ""
 
         is_climo = name == "climatological_mean"
+        is_pers = name == "persistence"
         if is_climo:
             avg_ratio = 1.0 if m["avg_mae"] is not None else None
             h24_ratio = 1.0 if m["mae_24h"] is not None else None
         else:
             avg_ratio = m["avg_mae"] / c_avg if (m["avg_mae"] is not None and c_avg) else None
             h24_ratio = m["mae_24h"] / c_24h if (m["mae_24h"] is not None and c_24h) else None
-        avg_cls = _mae_color_class(avg_ratio, 1.0) if not is_climo and avg_ratio is not None else ""
-        h24_cls = _mae_color_class(h24_ratio, 1.0) if not is_climo and h24_ratio is not None else ""
+
+        def _worse_than_pers(ratio, pers_ratio):
+            return (ratio is not None and pers_ratio is not None and ratio > pers_ratio)
+
+        if not is_climo and not is_pers and _worse_than_pers(avg_ratio, pers_avg_ratio):
+            avg_cls = ' class="mae-worse-pers"'
+        else:
+            avg_cls = _mae_color_class(avg_ratio, 1.0) if not is_climo and avg_ratio is not None else ""
+        if not is_climo and not is_pers and _worse_than_pers(h24_ratio, pers_24h_ratio):
+            h24_cls = ' class="mae-worse-pers"'
+        else:
+            h24_cls = _mae_color_class(h24_ratio, 1.0) if not is_climo and h24_ratio is not None else ""
         def _cell(ratio, raw, cls, is_baseline=False):
             if ratio is None:
                 return "\u2014"

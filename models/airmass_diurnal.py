@@ -136,7 +136,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     t_daily_mean = sum(t_hm.values()) / len(t_hm) if t_hm else None
 
     # clearness index at issued time
-    k = clearness_index(obs["solar_radiation"], lat, obs["timestamp"]) if lat else None
+    k = clearness_index(obs.get("solar_radiation"), lat, obs["timestamp"]) if lat else None
     k_adj = (k - _K_MEAN) if k is not None else None
 
     # 3-hour obs window for pressure tendency (member 3) and warmup rate (member 6)
@@ -181,7 +181,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     )
 
     # wind sector for members 4, 5, 8
-    wind_dir = obs["wind_direction"]
+    wind_dir = obs.get("wind_direction")
     sector = int((wind_dir + 22.5) / 45) % 8 if wind_dir is not None else None
     sector_temp_adj = _SECTOR_TEMP.get(sector, 0.0) if sector is not None else 0.0
 
