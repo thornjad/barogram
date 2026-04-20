@@ -469,6 +469,42 @@ def tempest_obs_in_range(conn: sqlite3.Connection, start_ts: int, end_ts: int) -
     ).fetchall()
 
 
+def tempest_solar_history(
+    conn: sqlite3.Connection, start_ts: int, end_ts: int
+) -> list:
+    """Tempest obs with solar_radiation for the clearness index history chart."""
+    return conn.execute(
+        """
+        select t.timestamp, t.solar_radiation
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and t.solar_radiation is not null
+          and t.timestamp >= ? and t.timestamp <= ?
+        order by t.timestamp asc
+        """,
+        (start_ts, end_ts),
+    ).fetchall()
+
+
+def sky_cover_history(
+    conn: sqlite3.Connection, start_ts: int, end_ts: int
+) -> list:
+    """NWS sky_cover observations for comparison with the clearness index."""
+    return conn.execute(
+        """
+        select n.timestamp, n.sky_cover
+        from nws_obs n
+        join stations s on s.station_id = n.station_id
+        where s.source = 'nws'
+          and n.sky_cover is not null
+          and n.timestamp >= ? and n.timestamp <= ?
+        order by n.timestamp asc
+        """,
+        (start_ts, end_ts),
+    ).fetchall()
+
+
 def open_output_db(path: str) -> sqlite3.Connection:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)

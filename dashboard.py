@@ -2199,6 +2199,270 @@ def _ensemble_forecast_section(
     )
 
 
+def _learnings_clearness_index(solar_rad: float | None, lat_deg: float, ts: int) -> float | None:
+    """Clearness index for the dashboard: observed / clear-sky solar radiation."""
+    import math
+    if solar_rad is None:
+        return None
+    d = datetime.fromtimestamp(ts)
+    doy = d.timetuple().tm_yday
+    hour = d.hour + d.minute / 60.0
+    decl = math.radians(-23.45 * math.cos(math.radians(360 / 365 * (doy + 10))))
+    lat = math.radians(lat_deg)
+    ha = math.radians(15 * (hour - 12))
+    sin_alt = (
+        math.sin(lat) * math.sin(decl)
+        + math.cos(lat) * math.cos(decl) * math.cos(ha)
+    )
+    if sin_alt <= 0.05:
+        return None
+    et_irr = 1361 * (1 + 0.033 * math.cos(math.radians(360 * doy / 365)))
+    cs = et_irr * sin_alt * 0.75
+    if cs <= 0:
+        return None
+    return max(0.0, min(1.0, solar_rad / cs))
+
+
+_SKY_FRAC = {"CLR": 0.0, "SKC": 0.0, "FEW": 0.15, "SCT": 0.40, "BKN": 0.70, "OVC": 1.0}
+
+
+def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
+    now = int(time.time())
+    start_30d = now - 30 * 86400
+
+    mae_rows = conn_out.execute(
+        """
+        select f.issued_at, f.member_id, f.lead_hours, f.mae
+        from forecasts f
+        where f.model_id = 7
+          and f.member_id in (0, 1, 3)
+          and f.variable = 'temperature'
+          and f.scored_at is not null
+        order by f.issued_at asc
+        """
+    ).fetchall()
+
+    weight_rows = conn_out.execute(
+        """
+        select w.member_id, mem.name as member_name, w.variable, w.lead_hours, w.weight
+        from weights w
+        join members mem on mem.model_id = w.model_id and mem.member_id = w.member_id
+        where w.model_id = 7
+          and w.member_id in (1, 3)
+        order by w.variable, w.lead_hours, w.member_id
+        """
+    ).fetchall()
+
+    location = db.tempest_station_location(conn_in)
+    lat = location[0] if location else None
+
+    clearness_pts: list[tuple[int, float]] = []
+    if lat:
+        for row in db.tempest_solar_history(conn_in, start_30d, now):
+            k = _learnings_clearness_index(row["solar_radiation"], lat, row["timestamp"])
+            if k is not None:
+                clearness_pts.append((row["timestamp"], k))
+
+    sky_pts: list[tuple[int, float]] = []
+    for row in db.sky_cover_history(conn_in, start_30d, now):
+        sc = row["sky_cover"]
+        if sc:
+            frac = _SKY_FRAC.get(sc[:3].upper())
+            if frac is not None:
+                sky_pts.append((row["timestamp"], frac))
+
+    # structure MAE data by lead then member
+    mae_by_lead: dict[int, dict[int, dict]] = {}
+    for row in mae_rows:
+        lead = row["lead_hours"]
+        mid = row["member_id"]
+        mae_by_lead.setdefault(lead, {}).setdefault(mid, {"x": [], "y": []})
+        mae_by_lead[lead][mid]["x"].append(fmt.short_ts(row["issued_at"]))
+        mae_display = _diff_to_f(row["mae"])
+        mae_by_lead[lead][mid]["y"].append(mae_display)
+
+    return {
+        "mae_by_lead": mae_by_lead,
+        "weight_rows": [
+            {
+                "member_id": r["member_id"],
+                "member_name": r["member_name"],
+                "variable": r["variable"],
+                "lead_hours": r["lead_hours"],
+                "weight": r["weight"],
+            }
+            for r in weight_rows
+        ],
+        "clearness_pts": clearness_pts,
+        "sky_pts": sky_pts,
+    }
+
+
+def _learnings_weights_table_html(weight_rows: list) -> str:
+    if not weight_rows:
+        return (
+            '<p class="no-data">Tuning weights not yet computed for airmass_diurnal'
+            ' &mdash; run <code>barogram tune</code> after sufficient scored forecasts.</p>'
+        )
+    # group by (variable, lead_hours) → {member_id: weight}
+    cells: dict = {}
+    for r in weight_rows:
+        key = (r["variable"], r["lead_hours"])
+        cells.setdefault(key, {})[r["member_id"]] = r["weight"]
+
+    tbody = ""
+    for variable, lead in sorted(cells):
+        w1 = cells[(variable, lead)].get(1)
+        w3 = cells[(variable, lead)].get(3)
+        fmt_w = lambda w: f"{w:.4f}" if w is not None else "&mdash;"
+        tbody += (
+            f"<tr><td>{variable}</td><td>+{lead}h</td>"
+            f"<td>{fmt_w(w1)}</td><td>{fmt_w(w3)}</td></tr>"
+        )
+
+    return (
+        '<div class="learnings-weights">'
+        "<h4>Current tuning weights (members 1 and 3)</h4>"
+        '<table class="score-table"><thead>'
+        "<tr><th>variable</th><th>lead</th>"
+        "<th>member 1<br><small>clearness-only</small></th>"
+        "<th>member 3<br><small>clearness-pressure-projected</small></th>"
+        "</tr></thead>"
+        f"<tbody>{tbody}</tbody></table></div>"
+    )
+
+
+def _learnings_section_html(data: dict) -> str:
+    has_mae = bool(data["mae_by_lead"])
+    has_clearness = bool(data["clearness_pts"])
+    weights_html = _learnings_weights_table_html(data["weight_rows"])
+
+    mae_empty = (
+        '<p class="no-data">No scored data yet for airmass_diurnal.'
+        " Check back after forecasts have been verified.</p>"
+    )
+    clearness_empty = (
+        '<p class="no-data">Solar radiation data not yet available'
+        " to compute clearness index.</p>"
+    )
+
+    return (
+        '<section class="section">\n'
+        "  <h2>Learnings</h2>\n"
+        '  <p class="learnings-intro">Tracked hypotheses from comparing model members over time.</p>\n'
+        "\n"
+        "  <h3>Hypothesis A: Clearness persistence vs. pressure projection</h3>\n"
+        '  <p class="learnings-desc">'
+        "<strong>Question:</strong> Does projecting the solar clearness index forward "
+        "via pressure tendency (member 3) reduce temperature MAE compared to persisting "
+        "the current clearness index (member 1)? The weights table below shows whether "
+        "<code>barogram tune</code> is assigning higher weight to whichever member "
+        "performs better &mdash; weights tracking the better performer would confirm the hypothesis."
+        "</p>\n"
+        + (
+            '  <div class="learnings-hyp-grid">'
+            '<div class="chart-container"><div id="learnings-mae-6h"></div></div>'
+            '<div class="chart-container"><div id="learnings-mae-12h"></div></div>'
+            "</div>\n"
+            if has_mae
+            else mae_empty + "\n"
+        )
+        + f"  {weights_html}\n"
+        "\n"
+        '  <h3 class="obs-subhead">Hypothesis B: Solar clearness index vs. NWS sky cover</h3>\n'
+        '  <p class="learnings-desc">'
+        "<strong>Question:</strong> Does the clearness index calculated from Tempest solar "
+        "radiation track the sky cover reported by NWS ASOS? Persistent divergence would "
+        "suggest a sensor calibration issue or a local microclimate difference. "
+        "NWS sky cover is used here only for validation &mdash; never as a model input."
+        "</p>\n"
+        + (
+            '  <div class="chart-container"><div id="learnings-clearness-chart"></div></div>\n'
+            if has_clearness
+            else clearness_empty + "\n"
+        )
+        + "</section>\n"
+    )
+
+
+def _learnings_js(data: dict) -> str:
+    member_labels = {0: "ensemble mean", 1: "member 1: clearness-only", 3: "member 3: clearness-pressure-projected"}
+    member_colors = {0: "#9467bd", 1: "#1f77b4", 3: "#ff7f0e"}
+    member_dash = {0: "dash", 1: "solid", 3: "dot"}
+
+    mae_js_parts = []
+    for lead in [6, 12]:
+        lead_data = data["mae_by_lead"].get(lead, {})
+        traces = []
+        for mid in [1, 3, 0]:
+            series = lead_data.get(mid, {"x": [], "y": []})
+            x_json = json.dumps(series["x"])
+            y_json = json.dumps(series["y"])
+            label = member_labels[mid]
+            color = member_colors[mid]
+            dash = member_dash[mid]
+            traces.append(
+                f"{{type:'scatter',mode:'lines+markers',name:{json.dumps(label)},"
+                f"x:{x_json},y:{y_json},"
+                f"line:{{color:{json.dumps(color)},dash:{json.dumps(dash)},width:2}},"
+                f"marker:{{size:5,color:{json.dumps(color)}}}}}"
+            )
+        traces_js = "[" + ",".join(traces) + "]"
+        chart_id = f"learnings-mae-{lead}h"
+        mae_js_parts.append(
+            f"Plotly.react({json.dumps(chart_id)},{traces_js},"
+            f"{{title:{{text:'+{lead}h \u2014 Temperature MAE (\u00b0F)',"
+            f"font:{{size:13,family:'-apple-system, sans-serif'}}}},"
+            f"margin:{{t:40,b:60,l:50,r:16}},"
+            f"xaxis:{{tickangle:-30,tickfont:{{size:11}}}},"
+            f"yaxis:{{rangemode:'tozero',tickfont:{{size:11}}}},"
+            f"height:320,showlegend:true,"
+            f"paper_bgcolor:'white',plot_bgcolor:'#fafafa'}},{{responsive:true}});"
+        )
+
+    clearness_traces = []
+    if data["clearness_pts"]:
+        k_x = json.dumps([fmt.short_ts(ts) for ts, _ in data["clearness_pts"]])
+        k_y = json.dumps([round(k, 3) for _, k in data["clearness_pts"]])
+        clearness_traces.append(
+            f"{{type:'scatter',mode:'lines',name:'clearness index (Tempest)',"
+            f"x:{k_x},y:{k_y},"
+            f"line:{{color:'#f6a623',width:1.5}},"
+            f"yaxis:'y'}}"
+        )
+    if data["sky_pts"]:
+        s_x = json.dumps([fmt.short_ts(ts) for ts, _ in data["sky_pts"]])
+        s_y = json.dumps([frac for _, frac in data["sky_pts"]])
+        clearness_traces.append(
+            f"{{type:'scatter',mode:'markers',name:'sky cover fraction (NWS)',"
+            f"x:{s_x},y:{s_y},"
+            f"marker:{{color:'#4a90d9',size:5,opacity:0.7}},"
+            f"yaxis:'y2'}}"
+        )
+    clearness_traces_js = "[" + ",".join(clearness_traces) + "]"
+
+    clearness_layout = (
+        "{"
+        "title:{text:'Solar clearness index vs. NWS sky cover (last 30 days)',"
+        "font:{size:13,family:'-apple-system, sans-serif'}},"
+        "margin:{t:40,b:60,l:50,r:60},"
+        "xaxis:{tickangle:-30,tickfont:{size:11}},"
+        "yaxis:{title:'clearness index k',range:[0,1.05],tickfont:{size:11}},"
+        "yaxis2:{title:'sky cover fraction',range:[0,1.05],"
+        "overlaying:'y',side:'right',tickfont:{size:11}},"
+        "height:360,showlegend:true,"
+        "paper_bgcolor:'white',plot_bgcolor:'#fafafa'}"
+    )
+
+    lines = "\n".join(mae_js_parts)
+    if data["clearness_pts"] or data["sky_pts"]:
+        lines += (
+            f"\nPlotly.react('learnings-clearness-chart',{clearness_traces_js},"
+            f"{clearness_layout},{{responsive:true}});"
+        )
+    return lines
+
+
 def generate(
     conn_in: sqlite3.Connection,
     conn_out: sqlite3.Connection,
@@ -2265,6 +2529,9 @@ def generate(
     _lt = db.get_metadata(conn_out, "last_tune")
     last_forecast_str = fmt.ts(int(_lf)) if _lf else "\u2014"
     last_tune_str = fmt.ts(int(_lt)) if _lt else "\u2014"
+
+    learnings = _learnings_data(conn_in, conn_out)
+    learnings_section = _learnings_section_html(learnings)
 
     zambretti = pressure_tendency.zambretti_text(tempest, conn_in, elevation_m) if tempest else None
     zambretti_panel = _zambretti_panel_html(zambretti)
@@ -2417,6 +2684,8 @@ def generate(
   <div class="chart-container"><div id="error-dist-chart"></div></div>
 </section>
 
+{learnings_section}
+
 <section class="section">
   <h2>Latest Forecast Run</h2>
   <div class="mae-filter-bar">{fcst_filter_btns}</div>
@@ -2441,6 +2710,7 @@ def generate(
 {_heatmap_js(heatmap)}
 {_diurnal_js(diurnal)}
 {_error_dist_js(error_dist)}
+{_learnings_js(learnings)}
 </script>
 </body>
 </html>
