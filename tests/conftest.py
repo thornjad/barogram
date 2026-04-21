@@ -78,4 +78,6 @@ def make_obs(ts: int | None = None) -> dict:
         "dew_point": 12.0,
         "station_pressure": 1013.2,
         "wind_avg": 3.5,
+        "wind_direction": None,
+        "solar_radiation": None,
     }
