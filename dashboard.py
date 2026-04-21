@@ -2874,15 +2874,33 @@ def _learnings_js(data: dict) -> str:
             f"showscale:false,"
             f"zmin:0,zmax:{max(len(all_best_models)-1,1)}}}"
         )
-        # add model name annotations
+        _model_abbrev = {
+            "climo_deviation": "climo_dev",
+            "persistence": "persist",
+            "pressure_tendency": "p_tendency",
+            "diurnal_curve": "diurnal",
+            "weighted_climatological_mean": "wtd_climo",
+            "climatological_mean": "climo_mean",
+            "barogram_ensemble": "ensemble",
+            "airmass_diurnal": "airmass",
+        }
+        # build annotations: model name on line 1, MAE on line 2
         annotations_js = "["
         for ri, lt in enumerate(leads):
             for ci, var in enumerate(variables):
                 key = (var, lt)
                 best = data["hyp_f"].get(key)
-                model_short = best["model"].replace("_", "\u200b_") if best else ""
+                if best:
+                    abbrev = _model_abbrev.get(best["model"], best["model"])
+                    mae_val = best["avg_mae"]
+                    if var in ("temperature", "dewpoint"):
+                        mae_val = _diff_to_f(mae_val)
+                    unit = "\u00b0F" if var in ("temperature", "dewpoint") else ("hPa" if var == "pressure" else "m/s")
+                    ann_text = f"{abbrev}<br><b>{mae_val:.2f}{unit}</b> <i>n={best['n']}</i>"
+                else:
+                    ann_text = ""
                 annotations_js += (
-                    f"{{x:{ci},y:{ri},text:{json.dumps(model_short)},"
+                    f"{{x:{ci},y:{ri},text:{json.dumps(ann_text)},"
                     f"font:{{size:10,color:'white'}},"
                     f"showarrow:false}},"
                 )
@@ -2894,7 +2912,7 @@ def _learnings_js(data: dict) -> str:
             f"xaxis:{{tickfont:{{size:12}}}},"
             f"yaxis:{{tickfont:{{size:12}}}},"
             f"annotations:{annotations_js},"
-            f"height:280,paper_bgcolor:'white',plot_bgcolor:'#fafafa'}}"
+            f"height:320,paper_bgcolor:'white',plot_bgcolor:'#fafafa'}}"
         )
         lines.append(
             f"if(document.getElementById('learnings-hyp-f-chart'))"
