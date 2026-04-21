@@ -2978,6 +2978,7 @@ def generate(
     conn_out: sqlite3.Connection,
     output_path: Path,
 ) -> None:
+    db.sync_ensemble_members(conn_out)
     elevation_m = db.tempest_station_elevation(conn_in)
     all_rows = db.latest_forecast_per_model(conn_out)
     if not all_rows:

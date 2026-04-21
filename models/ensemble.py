@@ -1,5 +1,6 @@
-# barogram_ensemble: meta-ensemble combining member_id=0 from all base models
-# members 1-6 correspond to base model IDs 1-6
+# barogram_ensemble: meta-ensemble combining member_id=0 from all base models.
+# base models are discovered dynamically via the models table (type='base', id<100)
+# so adding a new base model requires no changes here.
 
 import math
 
@@ -11,8 +12,6 @@ MODEL_TYPE = "ensemble"
 NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 
-_BASE_MODELS = {1, 2, 3, 4, 5, 6}
-
 
 def run(obs, issued_at: int, *, conn_out, weights=None) -> list[dict]:
     """Combine member_id=0 forecasts from all base models into one ensemble.
@@ -22,6 +21,8 @@ def run(obs, issued_at: int, *, conn_out, weights=None) -> list[dict]:
     to equal weighting. Produces one member row per base model plus a member_id=0
     row (weighted mean + spread) per (variable, lead_hours).
     """
+    db.sync_ensemble_members(conn_out)
+
     inputs = db.ensemble_inputs(conn_out, issued_at)
     if not inputs:
         return []
@@ -29,7 +30,7 @@ def run(obs, issued_at: int, *, conn_out, weights=None) -> list[dict]:
     # group by (variable, lead_hours) -> {model_id: (value, valid_at)}
     cells: dict = {}
     for row in inputs:
-        if row["model_id"] not in _BASE_MODELS or row["value"] is None:
+        if row["value"] is None:
             continue
         key = (row["variable"], row["lead_hours"])
         cells.setdefault(key, {})[row["model_id"]] = (row["value"], row["valid_at"])

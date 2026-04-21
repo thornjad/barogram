@@ -369,6 +369,22 @@ def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
     ).fetchall()
 
 
+def sync_ensemble_members(conn: sqlite3.Connection) -> None:
+    """Ensure model_id=100 has a member row for every base model (type='base', id < 100).
+
+    Called at forecast time and dashboard generation so the members table stays
+    current without requiring a migration every time a new base model is added.
+    """
+    base_rows = conn.execute(
+        "select id, name from models where type = 'base' and id < 100"
+    ).fetchall()
+    for r in base_rows:
+        conn.execute(
+            "insert or ignore into members (model_id, member_id, name) values (100, ?, ?)",
+            (r["id"], r["name"]),
+        )
+
+
 def ensemble_inputs(conn: sqlite3.Connection, issued_at: int) -> list:
     """Fetch member_id=0 rows from base models for a given forecast run."""
     return conn.execute(
