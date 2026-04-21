@@ -2353,6 +2353,14 @@ def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -
         """
     ).fetchall()
 
+    def _roll(vals, window=12):
+        """Rolling mean over a list, ignoring Nones. Returns same-length list."""
+        result = []
+        for i in range(len(vals)):
+            chunk = [x for x in vals[max(0, i - window + 1):i + 1] if x is not None]
+            result.append(round(sum(chunk) / len(chunk), 2) if chunk else None)
+        return result
+
     # structure Hyp A MAE data by lead then member
     mae_by_lead: dict[int, dict[int, dict]] = {}
     for row in mae_rows:
@@ -2362,37 +2370,67 @@ def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -
         mae_by_lead[lead][mid]["x"].append(fmt.short_ts(row["issued_at"]))
         mae_by_lead[lead][mid]["y"].append(_diff_to_f(row["mae"]))
 
-    # structure Hyp C: per-run MAE keyed by (variable, lead) → {model: {x, y}}
-    hyp_c: dict[tuple, dict[str, dict]] = {}
-    for row in all_model_mae_rows:
-        key = (row["variable"], row["lead_hours"])
-        model = row["model"]
-        hyp_c.setdefault(key, {}).setdefault(model, {"x": [], "y": []})
-        mae_val = row["mae"]
-        if row["variable"] in ("temperature", "dewpoint"):
-            mae_val = _diff_to_f(mae_val)
-        hyp_c[key][model]["x"].append(fmt.short_ts(row["issued_at"]))
-        hyp_c[key][model]["y"].append(mae_val)
+    # structure Hyp B: daily-aggregated clearness and sky cover
+    # raw clearness_pts / sky_pts are 5-min cadence (8k+ points over 30d);
+    # aggregate to daily means so the chart shows ~30 readable points
+    daily_k: dict[str, list[float]] = {}
+    for ts, k in clearness_pts:
+        d = str(date.fromtimestamp(ts))
+        daily_k.setdefault(d, []).append(k)
+    clearness_daily = [(d, round(sum(v) / len(v), 3)) for d, v in sorted(daily_k.items())]
 
-    # structure Hyp D: {(variable, lead): {x, y}}
+    daily_sky_frac: dict[str, list[float]] = {}
+    for ts, frac in sky_pts:
+        d = str(date.fromtimestamp(ts))
+        daily_sky_frac.setdefault(d, []).append(frac)
+    sky_daily = [(d, round(sum(v) / len(v), 3)) for d, v in sorted(daily_sky_frac.items())]
+
+    # structure Hyp C: rolling gap (ensemble − climo_deviation) per run
+    # single line is far clearer than 3 noisy overlapping series
+    hyp_c_gap: dict[tuple, dict] = {}
+    for key in [("temperature", 6), ("temperature", 24)]:
+        var, lead = key
+        ens_by_ts: dict[int, float] = {}
+        climo_by_ts: dict[int, float] = {}
+        for row in all_model_mae_rows:
+            if row["variable"] == var and row["lead_hours"] == lead:
+                if row["model"] == "barogram_ensemble":
+                    ens_by_ts[row["issued_at"]] = row["mae"]
+                elif row["model"] == "climo_deviation":
+                    climo_by_ts[row["issued_at"]] = row["mae"]
+        common = sorted(set(ens_by_ts) & set(climo_by_ts))
+        if not common:
+            continue
+        raw_gaps = [_diff_to_f(ens_by_ts[ts] - climo_by_ts[ts]) for ts in common]
+        hyp_c_gap[key] = {
+            "x": [fmt.short_ts(ts) for ts in common],
+            "y": _roll(raw_gaps, window=10),
+        }
+
+    # structure Hyp D: {(variable, lead): {x, y}} with rolling mean
     hyp_d: dict[tuple, dict] = {}
     for row in pt_mae_rows:
         key = (row["variable"], row["lead_hours"])
-        hyp_d.setdefault(key, {"x": [], "y": []})
+        hyp_d.setdefault(key, {"x": [], "y_raw": []})
         mae_val = row["mae"]
         if row["variable"] in ("temperature", "dewpoint"):
             mae_val = _diff_to_f(mae_val)
         hyp_d[key]["x"].append(fmt.short_ts(row["issued_at"]))
-        hyp_d[key]["y"].append(mae_val)
+        hyp_d[key]["y_raw"].append(mae_val)
+    for key in hyp_d:
+        hyp_d[key]["y"] = _roll(hyp_d[key]["y_raw"], window=10)
 
-    # structure Hyp E: {lead: {model: {x, y}}}
+    # structure Hyp E: {lead: {model: {x, y}}} with rolling mean
     hyp_e: dict[int, dict[str, dict]] = {}
     for row in decay_mae_rows:
         lead = row["lead_hours"]
         model = row["model"]
-        hyp_e.setdefault(lead, {}).setdefault(model, {"x": [], "y": []})
+        hyp_e.setdefault(lead, {}).setdefault(model, {"x": [], "y_raw": []})
         hyp_e[lead][model]["x"].append(fmt.short_ts(row["issued_at"]))
-        hyp_e[lead][model]["y"].append(_diff_to_f(row["mae"]))
+        hyp_e[lead][model]["y_raw"].append(_diff_to_f(row["mae"]))
+    for lead in hyp_e:
+        for model in hyp_e[lead]:
+            hyp_e[lead][model]["y"] = _roll(hyp_e[lead][model]["y_raw"], window=10)
 
     # structure Hyp F: best model per (variable, lead) → {model, avg_mae, n}
     hyp_f: dict[tuple, dict] = {}
@@ -2409,14 +2447,17 @@ def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -
             "model": row["model"], "avg_mae": row["avg_mae"], "n": row["n"]
         })
 
-    # structure Hyp G: {lead: {model: {x, y}}}
+    # structure Hyp G: {lead: {model: {x, y}}} with rolling mean
     hyp_g: dict[int, dict[str, dict]] = {}
     for row in diurnal_climo_rows:
         lead = row["lead_hours"]
         model = row["model"]
-        hyp_g.setdefault(lead, {}).setdefault(model, {"x": [], "y": []})
+        hyp_g.setdefault(lead, {}).setdefault(model, {"x": [], "y_raw": []})
         hyp_g[lead][model]["x"].append(fmt.short_ts(row["issued_at"]))
-        hyp_g[lead][model]["y"].append(_diff_to_f(row["mae"]))
+        hyp_g[lead][model]["y_raw"].append(_diff_to_f(row["mae"]))
+    for lead in hyp_g:
+        for model in hyp_g[lead]:
+            hyp_g[lead][model]["y"] = _roll(hyp_g[lead][model]["y_raw"], window=10)
 
     return {
         "mae_by_lead": mae_by_lead,
@@ -2430,9 +2471,9 @@ def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -
             }
             for r in weight_rows
         ],
-        "clearness_pts": clearness_pts,
-        "sky_pts": sky_pts,
-        "hyp_c": hyp_c,
+        "clearness_daily": clearness_daily,
+        "sky_daily": sky_daily,
+        "hyp_c_gap": hyp_c_gap,
         "hyp_d": hyp_d,
         "hyp_e": hyp_e,
         "hyp_f": hyp_f,
@@ -2477,8 +2518,8 @@ def _learnings_weights_table_html(weight_rows: list) -> str:
 
 def _learnings_section_html(data: dict) -> str:
     has_mae = bool(data["mae_by_lead"])
-    has_clearness = bool(data["clearness_pts"])
-    has_hyp_c = any(data["hyp_c"])
+    has_clearness = bool(data["clearness_daily"]) or bool(data["sky_daily"])
+    has_hyp_c = any(data["hyp_c_gap"])
     has_hyp_d = any(data["hyp_d"])
     has_hyp_e = any(data["hyp_e"])
     has_hyp_f = bool(data["hyp_f"])
@@ -2514,9 +2555,13 @@ def _learnings_section_html(data: dict) -> str:
         # --- Hypothesis B ---
         '  <h3 class="obs-subhead">Hypothesis B: Solar clearness index vs. NWS sky cover</h3>\n'
         '  <p class="learnings-desc">'
-        "<strong>Question:</strong> Does the Tempest-derived clearness index track NWS-reported "
-        "sky cover? Persistent divergence would suggest a sensor calibration issue or a local "
-        "microclimate difference. NWS sky cover is validation only &mdash; never a model input."
+        "<strong>Question:</strong> Does the Tempest station&rsquo;s solar-derived clearness "
+        "index (k) agree with NWS-reported sky cover? Each point is a daily average. "
+        "<strong>What to look for:</strong> the two lines should move inversely "
+        "(clearness drops on cloudy days, sky cover rises). If they move <em>together</em> or "
+        "persistently diverge, there may be a sensor issue or a real local microclimate "
+        "difference between the Tempest site and KMSP. "
+        "NWS sky cover is never used as a model input &mdash; this is validation only."
         "</p>\n"
         + (
             '  <div class="chart-container"><div id="learnings-clearness-chart"></div></div>\n'
@@ -2525,12 +2570,15 @@ def _learnings_section_html(data: dict) -> str:
         )
         + "\n"
         # --- Hypothesis C ---
-        '  <h3 class="obs-subhead">Hypothesis C: Is the ensemble underperforming its best member?</h3>\n'
+        '  <h3 class="obs-subhead">Hypothesis C: Is the ensemble closing the gap on its best member?</h3>\n'
         '  <p class="learnings-desc">'
-        "<strong>Question:</strong> A weighted ensemble should converge toward its best member as "
-        "weights improve. Currently the ensemble is worse than <code>climo_deviation</code> on "
-        "temperature at every lead. These charts track whether the gap is closing over time. "
-        "If it stays wide, the ensemble weighting or composition needs revisiting."
+        "<strong>Question:</strong> The ensemble is currently worse than "
+        "<code>climo_deviation</code> on temperature at every lead. "
+        "The line shows the rolling gap (ensemble MAE &minus; climo_deviation MAE, "
+        "10-run mean) over time. "
+        "<strong>What to look for:</strong> the line trending toward or below zero &mdash; "
+        "that means the ensemble is learning to match or beat its best member. "
+        "A flat or rising line means the weighting is not converging."
         "</p>\n"
         + (
             '  <div class="learnings-hyp-grid">'
@@ -2544,11 +2592,12 @@ def _learnings_section_html(data: dict) -> str:
         # --- Hypothesis D ---
         '  <h3 class="obs-subhead">Hypothesis D: pressure_tendency &mdash; best and worst simultaneously</h3>\n'
         '  <p class="learnings-desc">'
-        "<strong>Question:</strong> <code>pressure_tendency</code> is the best model for dewpoint "
-        "at all leads, but its pressure MAE explodes with lead time (reaching 40+ hPa at 24h vs "
-        "persistence&rsquo;s 5 hPa). Are these two behaviors correlated within individual runs? "
-        "The chart shows both lines on the same axis at 12h lead. If they diverge structurally, "
-        "the model may need a pressure-variable guard."
+        "<strong>Question:</strong> <code>pressure_tendency</code> is the best model for "
+        "dewpoint at all leads, but its pressure MAE climbs steeply (40+ hPa at 24h vs "
+        "persistence&rsquo;s 5 hPa). Both lines are shown at +12h with a 10-run rolling mean. "
+        "<strong>What to look for:</strong> the two lines diverging &mdash; low dewpoint, "
+        "high pressure. That&rsquo;s expected and confirms the model design trade-off. "
+        "If pressure MAE starts dropping back toward dewpoint level, something has changed."
         "</p>\n"
         + (
             '  <div class="chart-container"><div id="learnings-hyp-d-chart"></div></div>\n'
@@ -2557,12 +2606,14 @@ def _learnings_section_html(data: dict) -> str:
         )
         + "\n"
         # --- Hypothesis E ---
-        '  <h3 class="obs-subhead">Hypothesis E: How long does the climo_deviation signal last?</h3>\n'
+        '  <h3 class="obs-subhead">Hypothesis E: How long does the climo_deviation advantage last?</h3>\n'
         '  <p class="learnings-desc">'
-        "<strong>Question:</strong> At 6h lead, <code>climo_deviation</code> beats persistence by "
-        "~1.9&deg;F on temperature. By 24h the gap is ~0.5&deg;F. These charts track "
-        "climo_deviation vs persistence MAE over time at 6h and 24h to show whether the signal "
-        "advantage holds or decays as conditions change seasonally."
+        "At +6h, <code>climo_deviation</code> beats persistence by ~1.9&deg;F; "
+        "by +24h that gap has shrunk to ~0.5&deg;F. Lines are 10-run rolling means. "
+        "<strong>What to look for:</strong> the two lines converging at +24h (gap approaching "
+        "zero) while staying well separated at +6h. If they converge at +6h too, the recency "
+        "signal has lost value. A seasonal shift (gap changes in summer vs winter) would also "
+        "be meaningful."
         "</p>\n"
         + (
             '  <div class="learnings-hyp-grid">'
@@ -2576,9 +2627,10 @@ def _learnings_section_html(data: dict) -> str:
         # --- Hypothesis F ---
         '  <h3 class="obs-subhead">Hypothesis F: Model specialization map</h3>\n'
         '  <p class="learnings-desc">'
-        "<strong>Question:</strong> Which model is best for each variable and lead hour? "
-        "This heatmap shows the best-performing base model (excluding the ensemble) per cell. "
-        "Watch for whether the ensemble weights actually reflect this specialization over time."
+        "Which base model wins each (variable &times; lead) cell? Hover for MAE and sample "
+        "size. <strong>What to look for:</strong> does the ensemble weighting actually "
+        "reflect this map? If the ensemble underperforms for a variable, check whether "
+        "the dominant model here gets high weight in that column."
         "</p>\n"
         + (
             '  <div class="chart-container"><div id="learnings-hyp-f-chart"></div></div>\n'
@@ -2587,13 +2639,15 @@ def _learnings_section_html(data: dict) -> str:
         )
         + "\n"
         # --- Hypothesis G ---
-        '  <h3 class="obs-subhead">Hypothesis G: Does diurnal_curve add skill over climo_deviation?</h3>\n'
+        '  <h3 class="obs-subhead">Hypothesis G: Does diurnal_curve ever beat climo_deviation?</h3>\n'
         '  <p class="learnings-desc">'
-        "<strong>Question:</strong> <code>diurnal_curve</code> was designed to improve on "
-        "<code>climo_deviation</code> by explicitly modeling the daily temperature cycle. "
-        "Currently <code>climo_deviation</code> wins at every temperature lead. These charts "
-        "track whether <code>diurnal_curve</code> closes the gap over time, "
-        "or whether the recency weighting in <code>climo_deviation</code> is the real advantage."
+        "<code>diurnal_curve</code> models the daily temperature cycle explicitly. "
+        "<code>climo_deviation</code> wins at every lead right now by anchoring to recent "
+        "deviations from climatology. Lines are 10-run rolling means. "
+        "<strong>What to look for:</strong> <code>diurnal_curve</code> closing the gap, "
+        "especially at overnight leads (+18h/+24h) where solar effects matter less. "
+        "If it never closes, the recency signal in <code>climo_deviation</code> is the "
+        "explanation &mdash; not the diurnal cycle."
         "</p>\n"
         + (
             '  <div class="learnings-hyp-grid">'
@@ -2655,34 +2709,40 @@ def _learnings_js(data: dict) -> str:
             f"+{lead}h \u2014 airmass_diurnal temperature MAE (\u00b0F)",
         ))
 
-    # --- Hypothesis B: clearness index vs sky cover ---
+    # --- Hypothesis B: clearness index vs sky cover (daily aggregates) ---
     clearness_traces = []
-    if data["clearness_pts"]:
-        k_x = json.dumps([fmt.short_ts(ts) for ts, _ in data["clearness_pts"]])
-        k_y = json.dumps([round(k, 3) for _, k in data["clearness_pts"]])
+    if data["clearness_daily"]:
+        k_x = json.dumps([d for d, _ in data["clearness_daily"]])
+        k_y = json.dumps([k for _, k in data["clearness_daily"]])
         clearness_traces.append(
-            f"{{type:'scatter',mode:'lines',name:'clearness index (Tempest)',"
+            f"{{type:'scatter',mode:'lines+markers',name:'clearness index k (Tempest, daily avg)',"
             f"x:{k_x},y:{k_y},"
-            f"line:{{color:'#f6a623',width:1.5}},yaxis:'y'}}"
+            f"line:{{color:'#f6a623',width:2}},"
+            f"marker:{{size:5,color:'#f6a623'}},"
+            f"yaxis:'y'}}"
         )
-    if data["sky_pts"]:
-        s_x = json.dumps([fmt.short_ts(ts) for ts, _ in data["sky_pts"]])
-        s_y = json.dumps([frac for _, frac in data["sky_pts"]])
+    if data["sky_daily"]:
+        s_x = json.dumps([d for d, _ in data["sky_daily"]])
+        s_y = json.dumps([f for _, f in data["sky_daily"]])
         clearness_traces.append(
-            f"{{type:'scatter',mode:'markers',name:'sky cover fraction (NWS)',"
+            f"{{type:'scatter',mode:'lines+markers',name:'sky cover fraction (NWS, daily avg)',"
             f"x:{s_x},y:{s_y},"
-            f"marker:{{color:'#4a90d9',size:5,opacity:0.7}},yaxis:'y2'}}"
+            f"line:{{color:'#4a90d9',width:2,dash:'dot'}},"
+            f"marker:{{color:'#4a90d9',size:5}},"
+            f"yaxis:'y2'}}"
         )
     if clearness_traces:
         cl_layout = (
-            f"{{title:{{text:'Solar clearness index vs. NWS sky cover (last 30 days)',"
+            f"{{title:{{text:'Daily avg clearness (Tempest) vs sky cover fraction (NWS KMSP)',"
             f"font:{{size:13,family:{_font}}}}},"
-            f"margin:{{t:40,b:60,l:50,r:60}},"
-            f"xaxis:{{tickangle:-30,tickfont:{{size:11}}}},"
-            f"yaxis:{{title:'clearness index k',range:[0,1.05],tickfont:{{size:11}}}},"
-            f"yaxis2:{{title:'sky cover fraction',range:[0,1.05],"
-            f"overlaying:'y',side:'right',tickfont:{{size:11}}}},"
-            f"height:360,showlegend:true,"
+            f"margin:{{t:50,b:70,l:60,r:70}},"
+            f"xaxis:{{tickangle:-30,tickfont:{{size:11}},title:'date'}},"
+            f"yaxis:{{title:'clearness index k (1=clear, 0=overcast)',"
+            f"range:[0,1.05],tickfont:{{size:11}}}},"
+            f"yaxis2:{{title:'sky cover fraction (1=OVC, 0=CLR)',"
+            f"range:[0,1.05],overlaying:'y',side:'right',tickfont:{{size:11}}}},"
+            f"height:380,showlegend:true,"
+            f"legend:{{x:0.01,y:0.99,xanchor:'left',yanchor:'top',bgcolor:'rgba(255,255,255,0.8)'}},"
             f"paper_bgcolor:'white',plot_bgcolor:'#fafafa'}}"
         )
         lines.append(
@@ -2691,40 +2751,31 @@ def _learnings_js(data: dict) -> str:
             f"[{','.join(clearness_traces)}],{cl_layout},{{responsive:true}});}}"
         )
 
-    # --- Hypothesis C: ensemble vs best member over time (temperature, 6h and 24h) ---
-    _model_colors = {
-        "climo_deviation": "#2ca02c",
-        "persistence": "#7f7f7f",
-        "barogram_ensemble": "#9467bd",
-        "diurnal_curve": "#17becf",
-        "pressure_tendency": "#d62728",
-        "weighted_climatological_mean": "#8c564b",
-        "climatological_mean": "#bcbd22",
-        "airmass_diurnal": "#e377c2",
-    }
-    _model_dash = {
-        "barogram_ensemble": "dash",
-        "climo_deviation": "solid",
-        "persistence": "dot",
-    }
+    # --- Hypothesis C: rolling gap (ensemble - climo_deviation) per lead ---
     for lead in [6, 24]:
         key = ("temperature", lead)
-        model_series = data["hyp_c"].get(key, {})
-        traces = []
-        # show ensemble and the two key competitors
-        for m in ["barogram_ensemble", "climo_deviation", "persistence"]:
-            if m in model_series:
-                traces.append(_line_trace(
-                    m, model_series[m],
-                    _model_colors.get(m, "#333"),
-                    _model_dash.get(m, "solid"),
-                ))
-        if traces:
-            lines.append(_react(
-                f"learnings-hyp-c-{lead}h",
-                "[" + ",".join(traces) + "]",
-                f"+{lead}h \u2014 Temperature MAE (\u00b0F): ensemble vs best members",
-            ))
+        gap = data["hyp_c_gap"].get(key, {})
+        if not gap:
+            continue
+        x_json = json.dumps(gap["x"])
+        y_json = json.dumps(gap["y"])
+        # zero reference spanning the full x range
+        x_ends = json.dumps([gap["x"][0], gap["x"][-1]])
+        traces = [
+            f"{{type:'scatter',mode:'lines',name:'ensemble \u2212 climo_deviation (10-run mean)',"
+            f"x:{x_json},y:{y_json},"
+            f"line:{{color:'#d62728',width:2.5}}}}",
+            f"{{type:'scatter',mode:'lines',name:'break even',"
+            f"x:{x_ends},y:[0,0],"
+            f"line:{{color:'#888',dash:'dash',width:1}},showlegend:false}}",
+        ]
+        lines.append(_react(
+            f"learnings-hyp-c-{lead}h",
+            "[" + ",".join(traces) + "]",
+            f"+{lead}h temperature \u2014 ensemble gap over climo_deviation (\u00b0F)",
+            "yaxis:{tickfont:{size:11},zeroline:true,zerolinewidth:2,zerolinecolor:'#bbb',"
+            "title:{text:'gap (+ = ensemble worse)',font:{size:11}}}",
+        ))
 
     # --- Hypothesis D: pressure_tendency paradox at 12h ---
     pt_colors = {"dewpoint": "#1f77b4", "pressure": "#d62728"}
@@ -2733,18 +2784,21 @@ def _learnings_js(data: dict) -> str:
     for var in ["dewpoint", "pressure"]:
         key = (var, 12)
         series = data["hyp_d"].get(key, {})
-        if series.get("x"):
+        if series.get("x") and series.get("y"):
             unit = "\u00b0F" if var == "dewpoint" else "hPa"
-            pt_traces.append(_line_trace(
-                f"{var} MAE ({unit})", series,
-                pt_colors[var], pt_dash_map[var],
-            ))
+            x = json.dumps(series["x"])
+            y = json.dumps(series["y"])
+            pt_traces.append(
+                f"{{type:'scatter',mode:'lines',name:{json.dumps(f'{var} MAE ({unit})')},"
+                f"x:{x},y:{y},"
+                f"line:{{color:{json.dumps(pt_colors[var])},dash:{json.dumps(pt_dash_map[var])},width:2}}}}"
+            )
     if pt_traces:
         lines.append(_react(
             "learnings-hyp-d-chart",
             "[" + ",".join(pt_traces) + "]",
-            "+12h \u2014 pressure_tendency MAE: dewpoint vs pressure",
-            "yaxis:{rangemode:'tozero',tickfont:{size:11},title:'MAE'}",
+            "+12h \u2014 pressure_tendency MAE: dewpoint vs pressure (10-run mean)",
+            "yaxis:{rangemode:'tozero',tickfont:{size:11},title:{text:'MAE (mixed units)',font:{size:11}}}",
         ))
 
     # --- Hypothesis E: climo_deviation vs persistence signal decay at 6h and 24h ---
@@ -2754,15 +2808,21 @@ def _learnings_js(data: dict) -> str:
         lead_data = data["hyp_e"].get(lead, {})
         traces = []
         for m in ["climo_deviation", "persistence"]:
-            if m in lead_data and lead_data[m].get("x"):
-                traces.append(_line_trace(
-                    m, lead_data[m], e_colors[m], e_dash[m],
-                ))
+            s = lead_data.get(m, {})
+            if s.get("x") and s.get("y"):
+                x = json.dumps(s["x"])
+                y = json.dumps(s["y"])
+                traces.append(
+                    f"{{type:'scatter',mode:'lines',name:{json.dumps(m)},"
+                    f"x:{x},y:{y},"
+                    f"line:{{color:{json.dumps(e_colors[m])},dash:{json.dumps(e_dash[m])},width:2}}}}"
+                )
         if traces:
             lines.append(_react(
                 f"learnings-hyp-e-{lead}h",
                 "[" + ",".join(traces) + "]",
-                f"+{lead}h \u2014 Temperature MAE (\u00b0F): signal decay",
+                f"+{lead}h temperature MAE (\u00b0F) \u2014 10-run rolling mean",
+                "yaxis:{rangemode:'tozero',tickfont:{size:11}}",
             ))
 
     # --- Hypothesis F: model specialization heatmap ---
@@ -2848,15 +2908,21 @@ def _learnings_js(data: dict) -> str:
         lead_data = data["hyp_g"].get(lead, {})
         traces = []
         for m in ["climo_deviation", "diurnal_curve"]:
-            if m in lead_data and lead_data[m].get("x"):
-                traces.append(_line_trace(
-                    m, lead_data[m], g_colors[m], g_dash[m],
-                ))
+            s = lead_data.get(m, {})
+            if s.get("x") and s.get("y"):
+                x = json.dumps(s["x"])
+                y = json.dumps(s["y"])
+                traces.append(
+                    f"{{type:'scatter',mode:'lines',name:{json.dumps(m)},"
+                    f"x:{x},y:{y},"
+                    f"line:{{color:{json.dumps(g_colors[m])},dash:{json.dumps(g_dash[m])},width:2}}}}"
+                )
         if traces:
             lines.append(_react(
                 f"learnings-hyp-g-{lead}h",
                 "[" + ",".join(traces) + "]",
-                f"+{lead}h \u2014 Temperature MAE (\u00b0F): diurnal_curve vs climo_deviation",
+                f"+{lead}h temperature MAE (\u00b0F) \u2014 10-run rolling mean",
+                "yaxis:{rangemode:'tozero',tickfont:{size:11}}",
             ))
 
     return "\n".join(lines)
