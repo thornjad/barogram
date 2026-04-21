@@ -126,6 +126,16 @@ header {
 }
 header h1 { font-size: 22px; letter-spacing: -0.5px; }
 .generated { font-size: 12px; color: #666; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.stale-banner {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-left: 4px solid #e6a800;
+    padding: 10px 14px;
+    margin-bottom: 20px;
+    font-size: 13px;
+    border-radius: 3px;
+}
+.stale-banner code { background: #ffeaa0; padding: 1px 4px; border-radius: 2px; font-size: 12px; }
 .section { margin-bottom: 32px; }
 h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
 h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
@@ -2432,6 +2442,20 @@ def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -
         for model in hyp_e[lead]:
             hyp_e[lead][model]["y"] = _roll(hyp_e[lead][model]["y_raw"], window=10)
 
+    # ensemble (model_id=100) weights per base model: {(model_name, variable, lead_hours): weight}
+    ens_wt_rows = conn_out.execute(
+        """
+        select m.name as model_name, w.variable, w.lead_hours, w.weight
+        from weights w
+        join members m on m.model_id = 100 and m.member_id = w.member_id
+        where w.model_id = 100
+        """
+    ).fetchall()
+    ensemble_weights = {
+        (r["model_name"], r["variable"], r["lead_hours"]): r["weight"]
+        for r in ens_wt_rows
+    }
+
     # structure Hyp F: best model per (variable, lead) → {model, avg_mae, n}
     hyp_f: dict[tuple, dict] = {}
     for row in spec_rows:
@@ -2478,6 +2502,7 @@ def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -
         "hyp_e": hyp_e,
         "hyp_f": hyp_f,
         "spec_all": spec_all,
+        "ensemble_weights": ensemble_weights,
         "hyp_g": hyp_g,
     }
 
@@ -2896,7 +2921,9 @@ def _learnings_js(data: dict) -> str:
                     if var in ("temperature", "dewpoint"):
                         mae_val = _diff_to_f(mae_val)
                     unit = "\u00b0F" if var in ("temperature", "dewpoint") else ("hPa" if var == "pressure" else "m/s")
-                    ann_text = f"{abbrev}<br><b>{mae_val:.2f}{unit}</b> <i>n={best['n']}</i>"
+                    wt = data["ensemble_weights"].get((best["model"], var, lt))
+                    wt_str = f"wt:{wt:.0%}" if wt is not None else "not tuned"
+                    ann_text = f"{abbrev}<br><b>{mae_val:.2f}{unit}</b> n={best['n']}<br><i>{wt_str}</i>"
                 else:
                     ann_text = ""
                 annotations_js += (
@@ -3013,6 +3040,27 @@ def generate(
     last_forecast_str = fmt.ts(int(_lf)) if _lf else "\u2014"
     last_tune_str = fmt.ts(int(_lt)) if _lt else "\u2014"
 
+    # staleness check: models whose last issued_at is >2h behind last_forecast
+    stale_models: list[str] = []
+    if _lf:
+        lf_ts = int(_lf)
+        model_last_rows = conn_out.execute(
+            "select model, max(issued_at) as last_run from forecasts group by model"
+        ).fetchall()
+        for r in model_last_rows:
+            if r["last_run"] is not None and lf_ts - r["last_run"] > 7200:
+                stale_models.append(r["model"])
+    staleness_banner = ""
+    if stale_models:
+        model_list = ", ".join(f"<code>{m}</code>" for m in sorted(stale_models))
+        staleness_banner = (
+            f'<div class="stale-banner">'
+            f'<strong>Warning:</strong> the following models did not run in the last forecast cycle '
+            f'and may have crashed: {model_list}. '
+            f'Check stderr output from <code>barogram forecast</code> for details.'
+            f'</div>'
+        )
+
     learnings = _learnings_data(conn_in, conn_out)
     learnings_section = _learnings_section_html(learnings)
 
@@ -3108,6 +3156,7 @@ def generate(
   </div>
 </header>
 
+{staleness_banner}
 <section class="section">
   <h2>Latest Conditions</h2>
   <div class="conditions-grid">

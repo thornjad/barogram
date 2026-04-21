@@ -5,6 +5,7 @@
 import argparse
 import sys
 import time
+import traceback
 from collections import defaultdict
 from pathlib import Path
 
@@ -113,6 +114,7 @@ def cmd_forecast(args, conf):
     if obs is None:
         sys.exit("error: no Tempest observations in input database")
 
+    failed = []
     for model in _MODELS:
         kwargs = {}
         if getattr(model, "NEEDS_CONN_IN", False):
@@ -121,10 +123,18 @@ def cmd_forecast(args, conf):
             kwargs["conn_out"] = conn_out
         if getattr(model, "NEEDS_WEIGHTS", False):
             kwargs["weights"] = db.load_weights(conn_out, model.MODEL_ID)
-        rows = model.run(obs, issued_at, **kwargs)
-        db.insert_forecasts(conn_out, rows)
-        print(f"  {model.MODEL_NAME}: {len(rows)} rows")
+        try:
+            rows = model.run(obs, issued_at, **kwargs)
+            db.insert_forecasts(conn_out, rows)
+            print(f"  {model.MODEL_NAME}: {len(rows)} rows")
+        except Exception as e:
+            print(f"  {model.MODEL_NAME}: ERROR — {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            failed.append(model.MODEL_NAME)
     db.set_metadata(conn_out, "last_forecast", str(issued_at))
+    if failed:
+        print(f"forecast complete with errors: {', '.join(failed)}", file=sys.stderr)
+        sys.exit(1)
     print("forecast complete")
 
 
@@ -155,6 +165,7 @@ def cmd_run(args, conf):
         sys.exit("error: no Tempest observations in input database")
 
     print("forecasting...")
+    failed = []
     for model in _MODELS:
         kwargs = {}
         if getattr(model, "NEEDS_CONN_IN", False):
@@ -163,10 +174,17 @@ def cmd_run(args, conf):
             kwargs["conn_out"] = conn_out
         if getattr(model, "NEEDS_WEIGHTS", False):
             kwargs["weights"] = db.load_weights(conn_out, model.MODEL_ID)
-        rows = model.run(obs, issued_at, **kwargs)
-        db.insert_forecasts(conn_out, rows)
-        print(f"  {model.MODEL_NAME}: {len(rows)} rows")
+        try:
+            rows = model.run(obs, issued_at, **kwargs)
+            db.insert_forecasts(conn_out, rows)
+            print(f"  {model.MODEL_NAME}: {len(rows)} rows")
+        except Exception as e:
+            print(f"  {model.MODEL_NAME}: ERROR — {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            failed.append(model.MODEL_NAME)
     db.set_metadata(conn_out, "last_forecast", str(issued_at))
+    if failed:
+        print(f"forecast errors: {', '.join(failed)}", file=sys.stderr)
 
     print("building dashboard...")
     dash.generate(conn_in, conn_out, output)
