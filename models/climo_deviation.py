@@ -18,13 +18,26 @@ MODEL_NAME = "climo_deviation"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
 
-# (id_offset, decay_k or None for static, member name prefix)
+# (id_offset, decay_k or None, amp_factor or None, member name prefix)
 _GROUPS = [
-    (0,  None, "s"),    # static: member IDs 1-9
-    (9,  0.03, "d03"),  # decay k=0.03: member IDs 10-18
-    (18, 0.05, "d05"),  # decay k=0.05: member IDs 19-27
-    (27, 0.10, "d10"),  # decay k=0.10: member IDs 28-36
+    (0,  None, None, "s"),    # static: member IDs 1-9
+    (9,  0.03, None, "d03"),  # decay k=0.03: member IDs 10-18
+    (18, 0.05, None, "d05"),  # decay k=0.05: member IDs 19-27
+    (27, 0.10, None, "d10"),  # decay k=0.10: member IDs 28-36
+    (36, None, 0.30, "a03"),  # amplifying beta=0.30: member IDs 37-45
+    (45, None, 0.60, "a06"),  # amplifying beta=0.60: member IDs 46-54
 ]
+
+
+def _amp_factor(valid_hour: float, beta: float) -> float:
+    """Diurnal amplification factor for anomaly-amplifying members.
+
+    Peaks at 13:00 local (1+beta), tapers to 1.0 at 06:00 and 20:00,
+    and stays at 1.0 outside the 06:00–20:00 daytime window.
+    """
+    if 6.0 <= valid_hour <= 20.0:
+        return 1.0 + beta * math.sin(math.pi * (valid_hour - 6.0) / 14.0)
+    return 1.0
 
 
 def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
@@ -33,7 +46,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
 
     # compute deviation per (actual_mid, variable) at issue time
     deviations = {}
-    for offset, k, prefix in _GROUPS:
+    for offset, k, amp, prefix in _GROUPS:
         for mid, wname, wfn in _BASE_MEMBERS:
             actual_mid = offset + mid
             devs = {}
@@ -51,7 +64,8 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
 
         member_vals = {}
 
-        for offset, k, prefix in _GROUPS:
+        valid_hour = t.hour + t.minute / 60.0
+        for offset, k, amp, prefix in _GROUPS:
             for mid, wname, wfn in _BASE_MEMBERS:
                 actual_mid = offset + mid
                 vals = {}
@@ -59,7 +73,9 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                     future_base = _weighted_mean(bucket, col, issued_at, wfn) if bucket else None
                     dev = deviations[actual_mid][variable]
                     if future_base is not None and dev is not None:
-                        if k is None:
+                        if amp is not None:
+                            vals[variable] = future_base + dev * _amp_factor(valid_hour, amp)
+                        elif k is None:
                             vals[variable] = future_base + dev
                         else:
                             vals[variable] = future_base + dev * math.exp(-k * lead)
@@ -77,8 +93,8 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                     })
                 member_vals[actual_mid] = vals
 
-        # member_id=0: weighted mean + spread across all 36 members
-        all_member_ids = [offset + mid for offset, k, prefix in _GROUPS for mid, _, _ in _BASE_MEMBERS]
+        # member_id=0: weighted mean + spread across all members
+        all_member_ids = [offset + mid for offset, k, amp, prefix in _GROUPS for mid, _, _ in _BASE_MEMBERS]
         for variable in VARIABLES:
             valid_pairs = [
                 (mid, member_vals[mid][variable])

@@ -12,6 +12,11 @@
 #   6  morning-warmup-rate         recent T rise rate scales afternoon amplitude
 #   7  dewpoint-only               dewpoint depression, afternoon hours only
 #   8  combined-full               k×dewpoint + sector offset
+#   9  clearness-trend             dk/dt projected k (slope over 3h window)
+#  10  clearness-trend+dewpoint    projected k × dewpoint depression factor
+#  11  clearness-trend+press-proj  projected k further adjusted by dP/dt
+#  12  pressure-departure          station pressure departure from 30d mean → T offset
+#  13  pressure-dep+clearness-trend  pressure departure + projected-k clearness
 
 import datetime as dt
 import math
@@ -37,19 +42,25 @@ _K_MEAN = 0.55          # typical mean clearness across all-weather days
 _K_SENSITIVITY = 2.0    # amplitude multiplier per (k − K_MEAN) per unit diurnal dev
 _TD_SENSITIVITY = 0.08  # °C temp adj per °C of dewpoint-depression anomaly
 _P_K_SENSITIVITY = 0.03 # k change per hPa/h per lead hour (pressure→k projection)
+_P_DEP_SENSITIVITY = 0.7  # °C temp adj per hPa below 30d mean pressure (warm sector signal)
 
 # temperature offsets (°C) by 8-point wind sector: 0=N 1=NE 2=E 3=SE 4=S 5=SW 6=W 7=NW
 _SECTOR_TEMP = {0: -1.5, 1: -1.0, 2: -0.5, 3: 0.5, 4: 1.5, 5: 2.0, 6: 0.5, 7: -0.5}
 
 _MEMBER_NAMES = [
-    (1, "clearness-only"),
-    (2, "clearness+dewpoint"),
-    (3, "clearness-pressure-projected"),
-    (4, "wind-sector-only"),
-    (5, "wind+clearness"),
-    (6, "morning-warmup-rate"),
-    (7, "dewpoint-only"),
-    (8, "combined-full"),
+    (1,  "clearness-only"),
+    (2,  "clearness+dewpoint"),
+    (3,  "clearness-pressure-projected"),
+    (4,  "wind-sector-only"),
+    (5,  "wind+clearness"),
+    (6,  "morning-warmup-rate"),
+    (7,  "dewpoint-only"),
+    (8,  "combined-full"),
+    (9,  "clearness-trend"),
+    (10, "clearness-trend+dewpoint"),
+    (11, "clearness-trend+pressure-proj"),
+    (12, "pressure-departure"),
+    (13, "pressure-dep+clearness-trend"),
 ]
 _ALL_MEMBER_IDS = [mid for mid, _ in _MEMBER_NAMES]
 
@@ -120,6 +131,25 @@ def clearness_index(solar_rad: float | None, lat_deg: float, ts: int) -> float |
     return max(0.0, min(1.0, solar_rad / cs))
 
 
+def _compute_dk_dt(solar_obs: list, lat: float) -> float | None:
+    """Linear slope of clearness index (k/hour) from recent daytime obs.
+
+    Filters to obs where clearness_index returns non-None (daytime only).
+    Requires at least 2 qualifying points; returns None otherwise.
+    """
+    k_points = []
+    for r in solar_obs:
+        k = clearness_index(r["solar_radiation"], lat, r["timestamp"])
+        if k is not None:
+            k_points.append((r["timestamp"], k))
+    if len(k_points) < 2:
+        return None
+    elapsed = (k_points[-1][0] - k_points[0][0]) / 3600.0
+    if elapsed <= 0:
+        return None
+    return (k_points[-1][1] - k_points[0][1]) / elapsed
+
+
 def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     location = db.tempest_station_location(conn_in)
     lat = location[0] if location else None
@@ -135,6 +165,15 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     t_hm = hm["temperature"]
     t_daily_mean = sum(t_hm.values()) / len(t_hm) if t_hm else None
 
+    # pressure departure from 30d mean (member 12, 13)
+    p_vals_30d = [r["station_pressure"] for r in raw_30d if r["station_pressure"] is not None]
+    p_30d_mean = sum(p_vals_30d) / len(p_vals_30d) if p_vals_30d else None
+    p_dep = (
+        obs["station_pressure"] - p_30d_mean
+        if obs["station_pressure"] is not None and p_30d_mean is not None
+        else None
+    )
+
     # clearness index at issued time
     k = clearness_index(obs["solar_radiation"], lat, obs["timestamp"]) if lat else None
     k_adj = (k - _K_MEAN) if k is not None else None
@@ -145,6 +184,9 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     )
     p_vals = [r["station_pressure"] for r in recent_3h if r["station_pressure"] is not None]
     dp_dt = (p_vals[-1] - p_vals[0]) / 3.0 if len(p_vals) >= 2 else 0.0
+
+    # clearness slope over 3h window (members 9, 10, 11, 13)
+    dk_dt = _compute_dk_dt(recent_3h, lat) if lat is not None else None
 
     t_vals = [r["air_temp"] for r in recent_3h if r["air_temp"] is not None]
     rise_rate = (t_vals[-1] - t_vals[0]) / 3.0 if len(t_vals) >= 2 else 0.0
@@ -190,12 +232,19 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
         valid_at = obs["timestamp"] + lead * 3600
         t_valid = _local_hour_float(valid_at)
 
-        # projected k for member 3
+        # projected k for member 3 (pressure-tendency adjustment to snapshot k)
         if k is not None:
             kp = max(0.0, min(1.0, k + dp_dt * _P_K_SENSITIVITY * lead))
             k_proj_adj = kp - _K_MEAN
         else:
             k_proj_adj = None
+
+        # trend-projected k for members 9, 10, 11, 13 (dk/dt slope × lead)
+        if dk_dt is not None and k is not None:
+            k_trend = max(0.0, min(1.0, k + dk_dt * lead))
+        else:
+            k_trend = None
+        k_trend_adj = (k_trend - _K_MEAN) if k_trend is not None else None
 
         member_vals: dict[int, dict[str, float | None]] = {}
 
@@ -256,6 +305,24 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                         T_adj = sector_temp_adj
                         if k_adj is not None:
                             T_adj += dev * (k_adj * td_factor) * _K_SENSITIVITY
+                    elif mid == 9:
+                        if k_trend_adj is not None:
+                            T_adj = dev * k_trend_adj * _K_SENSITIVITY
+                    elif mid == 10:
+                        if k_trend_adj is not None:
+                            T_adj = dev * (k_trend_adj * td_factor) * _K_SENSITIVITY
+                    elif mid == 11:
+                        if k_trend is not None:
+                            kp_trend = max(0.0, min(1.0, k_trend + dp_dt * _P_K_SENSITIVITY * lead))
+                            T_adj = dev * (kp_trend - _K_MEAN) * _K_SENSITIVITY
+                    elif mid == 12:
+                        if p_dep is not None:
+                            T_adj = -_P_DEP_SENSITIVITY * p_dep
+                    elif mid == 13:
+                        if p_dep is not None:
+                            T_adj = -_P_DEP_SENSITIVITY * p_dep
+                        if k_trend_adj is not None:
+                            T_adj += dev * k_trend_adj * _K_SENSITIVITY
 
                 value = T_base_valid + anchor + T_adj
                 member_vals[mid][variable] = value
