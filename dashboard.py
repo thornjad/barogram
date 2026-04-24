@@ -215,6 +215,11 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 }
 .muted { color: #888; font-style: italic; font-size: 13px; }
 .obs-subhead { margin-top: 20px; margin-bottom: 6px; }
+.collapsible-section { border: none; }
+.collapsible-section > summary { cursor: pointer; list-style: none; }
+.collapsible-section > summary::-webkit-details-marker { display: none; }
+.collapsible-section > summary::before { content: "▶ "; font-size: 11px; color: #888; }
+.collapsible-section[open] > summary::before { content: "▼ "; }
 .obs-history-table {
     width: 100%;
     border-collapse: collapse;
@@ -3425,9 +3430,11 @@ def generate(
     {table_10}
     {table_7d}
   </div>
-  <h3 class="obs-subhead">Recent Misses (14 days)</h3>
-  <p class="chart-legend-note">Largest forecast errors per source over the last 14 days, sorted biggest miss first within each group.</p>
-  <div class="table-scroll">{recent_misses_html}</div>
+  <details class="collapsible-section">
+    <summary class="obs-subhead">Recent Misses (14 days)</summary>
+    <p class="chart-legend-note">Largest forecast errors per source over the last 14 days, sorted biggest miss first within each group.</p>
+    <div class="table-scroll">{recent_misses_html}</div>
+  </details>
   {weights_section}
   <h3 class="obs-subhead">MAE over time</h3>
   <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button><button id="raw-toggle" class="mae-raw-btn">Raw values</button></div>
