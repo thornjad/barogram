@@ -73,13 +73,18 @@ def test_validate_schema_missing_column():
 
 # --- run_migrations ---
 
+def _highest_migration_version() -> int:
+    files = sorted(_MIGRATIONS_DIR.glob("*.sql"))
+    assert files, "no migration files found"
+    return int(files[-1].stem.split("_")[0])
+
+
 def test_run_migrations_applies_all():
     conn = sqlite3.connect(":memory:")
     db.run_migrations(conn, _MIGRATIONS_DIR)
     row = conn.execute("select value from metadata where key='schema_version'").fetchone()
     assert row is not None
-    # stored as str(int("012")) = "12", not "012"
-    assert row[0] == "15"
+    assert int(row[0]) == _highest_migration_version()
 
 
 def test_run_migrations_idempotent():
@@ -87,7 +92,7 @@ def test_run_migrations_idempotent():
     db.run_migrations(conn, _MIGRATIONS_DIR)
     db.run_migrations(conn, _MIGRATIONS_DIR)  # second run should not raise
     row = conn.execute("select value from metadata where key='schema_version'").fetchone()
-    assert row[0] == "15"
+    assert int(row[0]) == _highest_migration_version()
 
 
 # --- nearest_tempest_obs ---
