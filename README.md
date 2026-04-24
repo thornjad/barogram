@@ -35,6 +35,17 @@ output_db = "/path/to/barogram.db"
 `output_db` is where barogram stores forecasts and verification scores
 (created automatically on first run).
 
+To enable the Tempest forecast model (which fetches WeatherFlow's built-in forecast
+as an external reference), add a `[tempest]` section:
+
+```toml
+[tempest]
+station_id = ""  # numeric WeatherFlow station ID
+token = ""       # API token from swd.weatherflow.com
+```
+
+Without this section the Tempest forecast model silently produces no output.
+
 ## Usage
 
 ```
@@ -50,7 +61,11 @@ score         score past forecasts against observations
 tune          compute inverse-MAE member weights from scoring history
 dashboard     generate dashboard.html from latest forecast run
 conditions    show latest observed conditions from the input database
+query         run a SQL query against barogram.db or the input database
 ```
+
+`query` accepts `--input` to target the wxlog database instead of barogram.db, and
+`--format json` for JSON output instead of a table.
 
 The dashboard requires internet connectivity to load Plotly from CDN.
 
@@ -72,6 +87,7 @@ make score
 make tune     # tune weights, then rebuild dashboard
 make dashboard
 make conditions
+make test
 ```
 
 ### Examples
@@ -84,6 +100,9 @@ uv run barogram score
 uv run barogram tune
 uv run barogram tune --dry-run
 uv run barogram dashboard
+uv run barogram query "select model, avg(mae) from forecasts where scored_at is not null group by model"
+uv run barogram query --input "select date(timestamp, 'unixepoch', 'localtime') as day, avg(air_temp) from tempest_obs group by day order by day desc limit 7"
+uv run barogram query --format json "select * from forecasts order by issued_at desc limit 20"
 uv run barogram --config /path/to/barogram.toml conditions
 uv run barogram --help
 ```
