@@ -19,8 +19,10 @@ import models.climatological_mean as climatological_mean
 import models.climo_deviation as climo_deviation
 import models.diurnal_curve as diurnal_curve
 import models.ensemble as barogram_ensemble
+import models.nws as nws_model
 import models.persistence as persistence
 import models.pressure_tendency as pressure_tendency
+import models.tempest_forecast as tempest_forecast_model
 import models.weighted_climatological_mean as weighted_climatological_mean
 
 _MODELS = [
@@ -31,6 +33,8 @@ _MODELS = [
     pressure_tendency,
     diurnal_curve,
     airmass_diurnal,
+    nws_model,
+    tempest_forecast_model,
     barogram_ensemble,  # must be last: reads base model rows from current run
 ]
 import score as scorer
@@ -117,6 +121,8 @@ def cmd_forecast(args, conf):
     failed = []
     for model in _MODELS:
         kwargs = {}
+        if getattr(model, "NEEDS_CONF", False):
+            kwargs["conf"] = conf
         if getattr(model, "NEEDS_CONN_IN", False):
             kwargs["conn_in"] = conn_in
         if getattr(model, "NEEDS_CONN_OUT", False):
@@ -168,6 +174,8 @@ def cmd_run(args, conf):
     failed = []
     for model in _MODELS:
         kwargs = {}
+        if getattr(model, "NEEDS_CONF", False):
+            kwargs["conf"] = conf
         if getattr(model, "NEEDS_CONN_IN", False):
             kwargs["conn_in"] = conn_in
         if getattr(model, "NEEDS_CONN_OUT", False):
