@@ -39,9 +39,11 @@ Flags: `--input` targets wxlog; `--format json` emits JSON instead of a table.
 1. Create `models/<name>.py` with:
    - `MODEL_ID: int` — next unused ID
    - `MODEL_NAME: str`
-   - `NEEDS_CONN_IN = True` if the model needs historical DB access, else omit
+   - `NEEDS_CONN_IN = True` if the model needs historical input DB access, else omit
+   - `NEEDS_CONN_OUT = True` if the model needs output DB access (ensemble only), else omit
    - `NEEDS_WEIGHTS = True` if the model accepts inverse-MAE member weights, else omit
-   - `run(obs, issued_at, *, conn_in=None, weights=None) -> list[dict]` returning forecast dicts
+   - `NEEDS_CONF = True` if the model needs the barogram config (e.g. external API URLs), else omit
+   - `run(obs, issued_at, *, conn_in=None, conn_out=None, weights=None, conf=None) -> list[dict]` returning forecast dicts
 
 2. Add an `insert or ignore` for the model row to `migrations/001_baseline.sql` (models
    table) and a row for each member to the members table. Single-member models need one
@@ -100,7 +102,11 @@ lowercase as well.
 | 4   | climo_deviation              | base     | done   |
 | 5   | pressure_tendency            | base     | done   |
 | 6   | diurnal_curve                | base     | done   |
+| 7   | airmass_diurnal              | base     | done   |
+| 8   | analog                       | base     | done   |
 | 100 | barogram_ensemble            | ensemble | done   |
+| 200 | nws                          | external | done   |
+| 201 | tempest_forecast             | external | done   |
 
 ## Database schemas
 
@@ -111,7 +117,7 @@ lowercase as well.
 |--------|------|-------|
 | `id` | integer PK | model ID |
 | `name` | text | unique model name |
-| `type` | text | `'base'` or `'ensemble'` |
+| `type` | text | `'base'`, `'ensemble'`, or `'external'` |
 
 **`forecasts`** — one row per (model, member, variable, lead, run)
 | Column | Type | Notes |
@@ -220,6 +226,7 @@ node screenshots/capture.js
 - `score.py` — matches forecasts to observations within ±30 min
 - `dashboard.py` — generates `dashboard.html`
 - `fmt.py` — shared formatting helpers
+- `sync.py` — Syncthing API integration; polls for idle state before each run
 - `migrations/` — numbered SQL files, run automatically at startup
 - `models/` — one file per model
 - `docs/` — one Markdown doc per model plus `README.md` index and `database.md` (schema evolution rules)
