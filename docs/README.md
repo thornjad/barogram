@@ -9,6 +9,7 @@
 | 5 | pressure_tendency | [005_pressure_tendency.md](005_pressure_tendency.md) |
 | 6 | diurnal_curve | [006_diurnal_curve.md](006_diurnal_curve.md) |
 | 7 | airmass_diurnal | [007_airmass_diurnal.md](007_airmass_diurnal.md) |
+| 8 | analog | [008_analog.md](008_analog.md) |
 | 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
 
 # System
