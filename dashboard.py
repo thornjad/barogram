@@ -231,7 +231,8 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .acc-lead-table .baseline-row th.model-name-cell { color: #bbb; }
 .acc-overall-table td { text-align: center; font-size: 15px; font-weight: 600; }
 .obs-history-table {
-    width: 100%;
+    min-width: 100%;
+    width: max-content;
     border-collapse: collapse;
     background: #fff;
     border: 1px solid #ddd;
@@ -261,11 +262,11 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .more-btn:hover { background: #f0f0f0; }
 .verification-windows {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
     gap: 16px;
     margin-bottom: 20px;
 }
-.verification-primary { margin-bottom: 20px; }
+.verification-primary { margin-top: 16px; margin-bottom: 20px; }
 .score-table {
     width: 100%;
     border-collapse: collapse;
@@ -404,8 +405,14 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .weight-table td.wt-pct { text-align: right; font-variant-numeric: tabular-nums; min-width: 52px; }
 .weight-group-hdr th { background: #f5f5f5; font-size: 11px; color: #888; font-weight: 600;
     letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 10px; }
+.learnings-intro { margin-bottom: 14px; color: #555; font-size: 13px; line-height: 1.6; }
+.learnings-desc { margin: 8px 0 14px; font-size: 13px; color: #444; line-height: 1.6; padding: 10px 14px; background: #f9f9f9; border-left: 3px solid #ddd; border-radius: 0 3px 3px 0; }
+.learnings-hyp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; margin-bottom: 14px; }
+.no-data { color: #888; font-style: italic; font-size: 13px; margin: 8px 0 16px; }
+.filter-label { font-size: 11px; color: #888; white-space: nowrap; align-self: center; }
+.filter-sep-left { margin-left: 8px; }
 @media (max-width: 600px) {
-    .conditions-grid, .charts-grid, .verification-windows { grid-template-columns: 1fr; }
+    .conditions-grid, .charts-grid { grid-template-columns: 1fr; }
 }
 .forecast-cards { display:flex; gap:12px; overflow-x:auto; padding-bottom:4px; }
 .forecast-card { flex:0 0 auto; min-width:110px; background:#fff; border:1px solid #ddd; border-radius:8px; padding:14px 16px; text-align:center; }
@@ -541,7 +548,8 @@ def _table_data(rows) -> dict:
 
 
 def _chart_data(rows) -> dict:
-    """variable -> model -> {x: [human timestamps], y: [values]}"""
+    """variable -> model -> {x: [ISO timestamps], y: [values]}"""
+    from datetime import datetime
     data: dict = {}
     for row in rows:
         var = row["variable"]
@@ -555,7 +563,8 @@ def _chart_data(rows) -> dict:
             v = _to_f(v)
         elif var == "wind_speed":
             v = _to_mph(v)
-        data[var][model]["x"].append(fmt.short_ts(row["valid_at"]))
+        ts = datetime.fromtimestamp(row["valid_at"], tz=fmt.CENTRAL).strftime("%Y-%m-%d %H:%M:%S")
+        data[var][model]["x"].append(ts)
         data[var][model]["y"].append(v)
     return data
 
@@ -1420,10 +1429,11 @@ function drawMaeCharts() {{
         Plotly.react('mae-chart-' + lead, traces, {{
             title: {{ text: title, font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
             margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-            xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }} }},
+            xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }}, nticks: 10 }},
             yaxis: Object.assign({{ tickfont: {{ size: 11 }} }}, yRange),
             height: 380,
-            showlegend: false,
+            showlegend: true,
+            legend: {{ x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.8)', font: {{ size: 11 }} }},
             shapes: shapes,
             paper_bgcolor: 'white',
             plot_bgcolor: '#fafafa'
@@ -1679,10 +1689,11 @@ function drawFcstChart() {{
     Plotly.react('chart-forecast', traces, {{
         title: {{ text: fcstVarLabels[fcstActiveVar], font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
         margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-        xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }} }},
+        xaxis: {{ type: 'date', tickformat: '%b %e %H:%M', tickangle: -30, tickfont: {{ size: 11 }}, nticks: 10 }},
         yaxis: {{ tickfont: {{ size: 11 }} }},
         height: 420,
-        showlegend: false,
+        showlegend: true,
+        legend: {{ x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.8)', font: {{ size: 11 }} }},
         paper_bgcolor: 'white',
         plot_bgcolor: '#fafafa'
     }}, {{responsive: true}});
@@ -1752,7 +1763,7 @@ function drawBiasCharts() {{
             title: {{ text: '+' + lead + 'h \u2014 ' + (biasFilterLabels[biasActiveVar] || biasActiveVar),
                       font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
             margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-            xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }} }},
+            xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }}, nticks: 10 }},
             yaxis: {{ tickfont: {{ size: 11 }} }},
             height: 380,
             showlegend: false,
@@ -2591,7 +2602,7 @@ def _learnings_section_html(data: dict) -> str:
         " Thin data is expected early &mdash; the goal is to watch these relationships evolve.</p>\n"
         "\n"
         # --- Hypothesis A ---
-        "  <h3>Hypothesis A: Clearness persistence vs. pressure projection</h3>\n"
+        "  <h3 class=\"obs-subhead\">Hypothesis A: Clearness persistence vs. pressure projection</h3>\n"
         '  <p class="learnings-desc">'
         "<strong>Question:</strong> Does projecting the solar clearness index forward "
         "via pressure tendency (airmass_diurnal member 3) reduce temperature MAE compared to "
@@ -2721,9 +2732,10 @@ def _learnings_js(data: dict) -> str:
     _font = "'-apple-system, sans-serif'"
     _base_layout = (
         f"margin:{{t:40,b:60,l:50,r:16}},"
-        f"xaxis:{{tickangle:-30,tickfont:{{size:11}}}},"
+        f"xaxis:{{tickangle:-30,tickfont:{{size:11}},nticks:10}},"
         f"yaxis:{{rangemode:'tozero',tickfont:{{size:11}}}},"
         f"height:320,showlegend:true,"
+        f"legend:{{x:0.01,y:0.99,xanchor:'left',yanchor:'top',bgcolor:'rgba(255,255,255,0.8)',font:{{size:11}}}},"
         f"paper_bgcolor:'white',plot_bgcolor:'#fafafa'"
     )
 
@@ -2792,7 +2804,7 @@ def _learnings_js(data: dict) -> str:
             f"{{title:{{text:'Daily avg clearness (Tempest) vs sky cover fraction (NWS KMSP)',"
             f"font:{{size:13,family:{_font}}}}},"
             f"margin:{{t:50,b:70,l:60,r:70}},"
-            f"xaxis:{{tickangle:-30,tickfont:{{size:11}},title:'date'}},"
+            f"xaxis:{{tickangle:-30,tickfont:{{size:11}},title:'date',nticks:10}},"
             f"yaxis:{{title:'clearness index k (1=clear, 0=overcast)',"
             f"range:[0,1.05],tickfont:{{size:11}}}},"
             f"yaxis2:{{title:'sky cover fraction (1=OVC, 0=CLR)',"
@@ -3149,7 +3161,7 @@ function drawTrajectoryChart() {{
         yaxis: {{ title: unit, tickfont: {{ size: 11 }} }},
         height: 380,
         showlegend: true,
-        legend: {{ font: {{ size: 11 }}, orientation: 'h', y: -0.2 }},
+        legend: {{ x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.8)', font: {{ size: 11 }} }},
         paper_bgcolor: 'white',
         plot_bgcolor: '#fafafa'
     }}, {{responsive: true}});
@@ -3669,7 +3681,6 @@ def generate(
     <p class="chart-legend-note">Largest forecast errors per source over the last 14 days, sorted biggest miss first within each group.</p>
     <div class="table-scroll">{recent_misses_html}</div>
   </details>
-  {weights_section}
   <h3 class="obs-subhead">MAE over time</h3>
   <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button><button id="raw-toggle" class="mae-raw-btn">Raw values</button></div>
   <p class="chart-legend-note">Grey: reference lines (climo = long-dash, persistence = dotted) &nbsp;·&nbsp; Per-run detail: solid with dash-dot rolling avg overlay</p>
@@ -3681,7 +3692,7 @@ def generate(
 <section class="section">
   <h2>Model Analysis</h2>
 
-  <h3>Bias Over Time</h3>
+  <h3 class="obs-subhead">Bias Over Time</h3>
   <div class="mae-filter-bar">{bias_filter_btns}</div>
   <div class="mae-charts-grid">
     {bias_chart_divs}
@@ -3708,9 +3719,9 @@ def generate(
   <div class="chart-container"><div id="diurnal-chart"></div></div>
 
   <h3 class="obs-subhead">Error Distribution</h3>
-  <div class="mae-filter-bar">{error_dist_var_btns}</div>
-  <div class="mae-filter-bar">{error_dist_lead_btns}</div>
+  <div class="mae-filter-bar"><span class="filter-label">Variable</span>{error_dist_var_btns}<span class="filter-label filter-sep-left">Lead</span>{error_dist_lead_btns}</div>
   <div class="chart-container"><div id="error-dist-chart"></div></div>
+  {weights_section}
 </section>
 
 {learnings_section}
