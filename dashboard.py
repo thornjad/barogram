@@ -2097,6 +2097,12 @@ def _ensemble_forecast_section(
         r for r in mean_rows
         if r["model"] == "barogram_ensemble" and r["member_id"] == 0
     ]
+    # {lead_hours: {variable: value}} for tempest_forecast reference
+    tempest_fcst_by_lead: dict[int, dict[str, float | None]] = {}
+    for row in mean_rows:
+        if row["model"] == "tempest_forecast" and row["member_id"] == 0:
+            tempest_fcst_by_lead.setdefault(row["lead_hours"], {})[row["variable"]] = row["value"]
+
     if not ens_rows:
         return (
             '<section class="section">\n'
@@ -2160,8 +2166,12 @@ def _ensemble_forecast_section(
             return None
         return nws_forecast[best]
 
+    def _tempest_fcst_at(lead: int) -> dict | None:
+        entry = tempest_fcst_by_lead.get(lead)
+        return entry if entry else None
+
     def _card(label: str, is_now: bool, temp_val, dew_val, pres_val, wind_val,
-              temp_spread=None, nws=None) -> str:
+              temp_spread=None, nws=None, tempest_fcst=None) -> str:
         cls = 'forecast-card now-card' if is_now else 'forecast-card'
         # temperature — always the hero
         if temp_val is not None:
@@ -2197,6 +2207,29 @@ def _ensemble_forecast_section(
             if details else ""
         )
 
+        tempest_fcst_html = ""
+        if tempest_fcst:
+            tf_lines = []
+            if tempest_fcst.get("temperature") is not None:
+                tf_lines.append(
+                    f'<span class="detail-label">Temp</span> {_to_f(tempest_fcst["temperature"]):.0f}\u00b0F'
+                )
+            if tempest_fcst.get("dewpoint") is not None:
+                tf_lines.append(
+                    f'<span class="detail-label">Dew</span> {_to_f(tempest_fcst["dewpoint"]):.0f}\u00b0F'
+                )
+            if tempest_fcst.get("wind_speed") is not None:
+                tf_lines.append(
+                    f'<span class="detail-label">Wind</span> {_to_mph(tempest_fcst["wind_speed"]):.0f} mph'
+                )
+            if tf_lines:
+                tempest_fcst_html = (
+                    '<div class="fcst-ref">'
+                    '<span class="fcst-ref-lbl">Tempest</span>'
+                    + "<br>".join(tf_lines)
+                    + "</div>"
+                )
+
         nws_html = ""
         if nws:
             nws_lines = []
@@ -2225,6 +2258,7 @@ def _ensemble_forecast_section(
             f'<div class="fcst-label">{label}</div>'
             f'{temp_html}'
             f'{details_html}'
+            f'{tempest_fcst_html}'
             f'{nws_html}'
             f'</div>'
         )
@@ -2254,7 +2288,8 @@ def _ensemble_forecast_section(
         p_val = p_raw + slp_offset if p_raw is not None else None
         w_val = w_cell[0] if w_cell else None
         nws_entry = _nws_at(vat) if vat else None
-        cards_html += _card(label, False, t_val, d_val, p_val, w_val, t_spread, nws_entry)
+        tf_entry = _tempest_fcst_at(lead)
+        cards_html += _card(label, False, t_val, d_val, p_val, w_val, t_spread, nws_entry, tf_entry)
 
     issued_str = fmt.ts(issued_at) if issued_at else "&mdash;"
     return (
