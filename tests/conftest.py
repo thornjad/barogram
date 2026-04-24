@@ -80,4 +80,7 @@ def make_obs(ts: int | None = None) -> dict:
         "wind_avg": 3.5,
         "wind_direction": None,
         "solar_radiation": None,
+        "wind_gust": None,
+        "lightning_count": None,
+        "precip_accum_day": None,
     }

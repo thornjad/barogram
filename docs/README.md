@@ -10,6 +10,7 @@
 | 6 | diurnal_curve | [006_diurnal_curve.md](006_diurnal_curve.md) |
 | 7 | airmass_diurnal | [007_airmass_diurnal.md](007_airmass_diurnal.md) |
 | 8 | analog | [008_analog.md](008_analog.md) |
+| 9 | surface_signs | [009_surface_signs.md](009_surface_signs.md) |
 | 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
 
 # System
