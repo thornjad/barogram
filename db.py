@@ -555,6 +555,66 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
         )
 
 
+def forecast_trajectory(conn: sqlite3.Connection, since_ts: int) -> list:
+    """All scored member_id=0 rows targeting the most recently completed valid_at.
+
+    Finds the latest valid_at from scored barogram_ensemble rows (within the
+    lookback window defined by since_ts), then returns all scored rows from all
+    models within ±2 hours of that target time. The wide window accommodates
+    slight valid_at differences between internal models (which base valid_at on
+    the live obs timestamp) and external models (which snap to NWS/Tempest hours).
+    """
+    pivot = conn.execute(
+        """
+        select valid_at from forecasts
+        where model_id = 100 and member_id = 0 and scored_at is not null
+          and valid_at >= ?
+        order by valid_at desc
+        limit 1
+        """,
+        (since_ts,),
+    ).fetchone()
+    if pivot is None:
+        return []
+    target = pivot["valid_at"]
+    return conn.execute(
+        """
+        select model_id, model, issued_at, lead_hours, valid_at, variable, value, observed
+        from forecasts
+        where member_id = 0 and scored_at is not null
+          and valid_at between ? and ?
+        order by variable, model_id, issued_at
+        """,
+        (target - 7200, target + 7200),
+    ).fetchall()
+
+
+def recent_misses(conn: sqlite3.Connection, since_ts: int, per_model: int = 10) -> list:
+    """Top per_model largest errors per source within the lookback window.
+
+    Uses a window function to rank rows within each model group, so every model
+    gets representation regardless of alphabetical ordering.
+    """
+    return conn.execute(
+        """
+        select model_id, model, variable, lead_hours, valid_at, value, observed, error, mae
+        from (
+            select f.model_id, f.model, f.variable, f.lead_hours,
+                   f.valid_at, f.value, f.observed, f.error, f.mae,
+                   row_number() over (partition by f.model_id order by f.mae desc) as rn
+            from forecasts f
+            where f.scored_at is not null
+              and f.member_id = 0
+              and f.valid_at >= ?
+              and f.value is not null
+        )
+        where rn <= ?
+        order by model_id, mae desc
+        """,
+        (since_ts, per_model),
+    ).fetchall()
+
+
 def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
     normalized = [
         {**row, "member_id": row.get("member_id", 0), "spread": row.get("spread")}

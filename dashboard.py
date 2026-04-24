@@ -195,13 +195,16 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .mae-filter-bar { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
 .mae-filter-btn, .fcst-filter-btn,
 .bias-filter-btn, .lead-skill-filter-btn, .heatmap-filter-btn,
-.diurnal-filter-btn, .error-dist-var-btn, .error-dist-lead-btn { padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #444; }
+.diurnal-filter-btn, .error-dist-var-btn, .error-dist-lead-btn,
+.trajectory-filter-btn { padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #444; }
 .mae-filter-btn:hover, .fcst-filter-btn:hover,
 .bias-filter-btn:hover, .lead-skill-filter-btn:hover, .heatmap-filter-btn:hover,
-.diurnal-filter-btn:hover, .error-dist-var-btn:hover, .error-dist-lead-btn:hover { background: #f0f0f0; }
+.diurnal-filter-btn:hover, .error-dist-var-btn:hover, .error-dist-lead-btn:hover,
+.trajectory-filter-btn:hover { background: #f0f0f0; }
 .mae-filter-btn.active, .fcst-filter-btn.active,
 .bias-filter-btn.active, .lead-skill-filter-btn.active, .heatmap-filter-btn.active,
-.diurnal-filter-btn.active, .error-dist-var-btn.active, .error-dist-lead-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.diurnal-filter-btn.active, .error-dist-var-btn.active, .error-dist-lead-btn.active,
+.trajectory-filter-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
 .mae-raw-btn { margin-left: auto; padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #666; }
 .mae-raw-btn:hover { background: #f0f0f0; }
 .mae-raw-btn.active { background: #555; color: #fff; border-color: #555; }
@@ -270,15 +273,18 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .window-label { font-size: 12px; color: #666; margin-bottom: 6px; }
 .model-header th { background: #f0f0f0; font-size: 11px; color: #555; padding: 4px 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .ensemble-header th { background: #eff4ff; font-size: 11px; color: #3b5bdb; padding: 4px 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.external-header th { background: #fff3e0; font-size: 11px; color: #b34400; padding: 4px 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .ensemble-row th, .ensemble-row td { background: #f8faff; }
+.external-row th, .external-row td { background: #fffbf6; }
 .model-runs { display: flex; flex-direction: column; gap: 20px; }
 .model-run-card { background: #fff; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
 .model-run-header { display: flex; align-items: baseline; gap: 10px; padding: 10px 16px; background: #f9f9f9; border-bottom: 1px solid #eee; }
 .model-run-header strong { font-size: 14px; }
-.base-badge, .ensemble-badge, .baseline-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.base-badge, .ensemble-badge, .baseline-badge, .external-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .base-badge { background: #e8f4e8; color: #2d6a2d; }
 .ensemble-badge { background: #eff4ff; color: #3b5bdb; }
 .baseline-badge { background: #ece9e0; color: #aaa; }
+.external-badge { background: #fff3e0; color: #b34400; }
 .mae-summary-table .baseline-row th { color: #bbb; }
 .baseline-row td { color: #bbb; }
 .baseline-row .model-id-cell { color: #888; }
@@ -668,9 +674,10 @@ def _model_runs_html(
     for (model_id, model, mtype, issued_at) in sorted_keys:
         model_rows = by_model[(model_id, model, mtype, issued_at)]
         table = _table_data(model_rows)
-        type_badge = (
-            f'<span class="ensemble-badge">{mtype}</span>' if mtype == "ensemble" else ""
-        )
+        type_badge = {
+            "ensemble": f'<span class="ensemble-badge">ensemble</span>',
+            "external": f'<span class="external-badge">external</span>',
+        }.get(mtype, "")
         table_html = _forecast_table_html(table, lead_times, slp_offset)
         n_members = (member_counts or {}).get(model_id, 0)
         member_toggle = (
@@ -901,7 +908,9 @@ def _score_summary_table(
         elif name == "persistence":
             badge = ""
         elif m["type"] == "ensemble":
-            badge = f'<span class="ensemble-badge">{m["type"]}</span>'
+            badge = '<span class="ensemble-badge">ensemble</span>'
+        elif m["type"] == "external":
+            badge = '<span class="external-badge">external</span>'
         else:
             badge = ""
 
@@ -978,12 +987,17 @@ def _score_summary_table(
     sorted_keys = sorted(by_model.keys(), key=lambda k: k[0])
     detail_rows = []
     for model_id, model_name, model_type in sorted_keys:
-        hdr_class = "ensemble-header" if model_type == "ensemble" else "model-header"
+        hdr_class = {"ensemble": "ensemble-header", "external": "external-header"}.get(
+            model_type, "model-header"
+        )
         detail_rows.append(
             f'<tr class="{hdr_class}"><th colspan="{len(leads) + 1}">{model_id} — {model_name}</th></tr>'
         )
         var_data = by_model[(model_id, model_name, model_type)]
-        row_class = ' class="ensemble-row"' if model_type == "ensemble" else ""
+        row_class = {
+            "ensemble": ' class="ensemble-row"',
+            "external": ' class="external-row"',
+        }.get(model_type, "")
         for var in VARIABLES:
             if var not in var_data:
                 continue
@@ -1171,6 +1185,7 @@ def _lead_skill_data(summary_rows: list) -> dict:
                 "model_id": row["model_id"],
                 "is_persistence": model == "persistence",
                 "is_ensemble": row["type"] == "ensemble",
+                "is_external": row["type"] == "external",
                 "points": {},
             }
         mae = row["avg_mae"]
@@ -1236,6 +1251,7 @@ def _diurnal_data(rows: list) -> dict:
                 "model_id": row["model_id"],
                 "is_persistence": model == "persistence",
                 "is_ensemble": row["type"] == "ensemble",
+                "is_external": row["type"] == "external",
             }
         raw.setdefault(var, {}).setdefault(model, {})[row["hour"]] = (
             row["avg_bias"], row["avg_mae"]
@@ -2973,6 +2989,227 @@ def _learnings_js(data: dict) -> str:
     return "\n".join(lines)
 
 
+def _trajectory_data(rows: list) -> dict:
+    """Build trajectory data structure for _trajectory_js.
+
+    Returns {
+        "valid_at_label": str,
+        "variables": {
+            var: {
+                "observed": float | None,  # display units
+                "unit": str,
+                "models": {model_name: {"x": [iso_str, ...], "y": [float, ...]}}
+            }
+        }
+    }
+    """
+    if not rows:
+        return {"valid_at_label": "", "variables": {}}
+
+    # representative valid_at for title (use median of all valid_at values)
+    all_valid_at = [r["valid_at"] for r in rows]
+    target_ts = sorted(all_valid_at)[len(all_valid_at) // 2]
+    valid_at_label = fmt.ts(target_ts)
+
+    obs_by_var: dict[str, list[float]] = {}
+    by_var_model: dict[str, dict[str, list]] = {}
+
+    for row in rows:
+        var = row["variable"]
+        model = row["model"]
+        issued_at = row["issued_at"]
+        value = row["value"]
+        observed = row["observed"]
+
+        if observed is not None:
+            obs_by_var.setdefault(var, []).append(observed)
+        by_var_model.setdefault(var, {}).setdefault(model, []).append((issued_at, value))
+
+    result: dict = {"valid_at_label": valid_at_label, "variables": {}}
+
+    for var in VARIABLES:
+        if var not in by_var_model:
+            continue
+        obs_vals = obs_by_var.get(var, [])
+        obs_mean = sum(obs_vals) / len(obs_vals) if obs_vals else None
+        if var in ("temperature", "dewpoint"):
+            obs_disp = _to_f(obs_mean)
+            unit = "\u00b0F"
+        elif var == "wind_speed":
+            obs_disp = _to_mph(obs_mean)
+            unit = "mph"
+        else:
+            obs_disp = obs_mean
+            unit = "hPa"
+
+        models_data: dict = {}
+        for model, points in by_var_model[var].items():
+            xs, ys = [], []
+            for issued_at, val in sorted(points, key=lambda p: p[0]):
+                if val is None:
+                    continue
+                if var in ("temperature", "dewpoint"):
+                    val_disp = _to_f(val)
+                elif var == "wind_speed":
+                    val_disp = _to_mph(val)
+                else:
+                    val_disp = val
+                dt = datetime.fromtimestamp(issued_at, tz=timezone.utc)
+                xs.append(dt.strftime("%Y-%m-%dT%H:%M:%S"))
+                ys.append(round(val_disp, 2) if val_disp is not None else None)
+            if xs:
+                models_data[model] = {"x": xs, "y": ys}
+
+        result["variables"][var] = {
+            "observed": round(obs_disp, 2) if obs_disp is not None else None,
+            "unit": unit,
+            "models": models_data,
+        }
+
+    return result
+
+
+def _trajectory_js(data: dict) -> str:
+    if not data.get("variables"):
+        return "/* trajectory: no scored data yet */"
+    data_json = json.dumps(data)
+    return f"""const trajectoryData = {data_json};
+
+const TRAJECTORY_PALETTE = [
+    '#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd',
+    '#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'
+];
+const trajectoryVars = Object.keys(trajectoryData.variables);
+const trajectoryAllModels = [...new Set(
+    Object.values(trajectoryData.variables).flatMap(function(v) {{
+        return Object.keys(v.models);
+    }})
+)].sort();
+const trajectoryModelColors = {{}};
+trajectoryAllModels.forEach(function(m, i) {{
+    trajectoryModelColors[m] = TRAJECTORY_PALETTE[i % TRAJECTORY_PALETTE.length];
+}});
+// override well-known models for consistency
+if (trajectoryModelColors['barogram_ensemble'] !== undefined) trajectoryModelColors['barogram_ensemble'] = '#1a47b8';
+if (trajectoryModelColors['nws'] !== undefined) trajectoryModelColors['nws'] = '#d95f02';
+if (trajectoryModelColors['tempest_forecast'] !== undefined) trajectoryModelColors['tempest_forecast'] = '#7570b3';
+if (trajectoryModelColors['persistence'] !== undefined) trajectoryModelColors['persistence'] = '#aaaaaa';
+
+let trajectoryActiveVar = trajectoryVars.includes('temperature') ? 'temperature' : trajectoryVars[0];
+
+function drawTrajectoryChart() {{
+    const vd = trajectoryData.variables[trajectoryActiveVar];
+    if (!vd) {{ Plotly.react('trajectory-chart', [], {{}}); return; }}
+    const unit = vd.unit || '';
+    const traces = Object.entries(vd.models).map(function([model, pts]) {{
+        const color = trajectoryModelColors[model] || '#888888';
+        const isExt = model === 'nws' || model === 'tempest_forecast';
+        return {{
+            type: 'scatter', mode: 'lines+markers',
+            name: model,
+            x: pts.x, y: pts.y,
+            line: {{ width: isExt ? 2.5 : 1.5, dash: isExt ? 'solid' : 'solid', color: color }},
+            marker: {{ size: isExt ? 7 : 5, color: color }},
+            connectgaps: false
+        }};
+    }});
+    if (vd.observed !== null && vd.observed !== undefined) {{
+        const allX = Object.values(vd.models).flatMap(function(m) {{ return m.x; }}).sort();
+        if (allX.length >= 2) {{
+            traces.push({{
+                type: 'scatter', mode: 'lines',
+                name: 'observed',
+                x: [allX[0], allX[allX.length - 1]],
+                y: [vd.observed, vd.observed],
+                line: {{ dash: 'dash', width: 2, color: '#000000' }},
+                showlegend: true
+            }});
+        }}
+    }}
+    Plotly.react('trajectory-chart', traces, {{
+        title: {{ text: 'Forecast trajectory \u2014 valid ' + (trajectoryData.valid_at_label || ''),
+                  font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
+        margin: {{ t: 40, b: 60, l: 55, r: 16 }},
+        xaxis: {{ title: 'Issued at', type: 'date', tickfont: {{ size: 11 }} }},
+        yaxis: {{ title: unit, tickfont: {{ size: 11 }} }},
+        height: 380,
+        showlegend: true,
+        legend: {{ font: {{ size: 11 }}, orientation: 'h', y: -0.2 }},
+        paper_bgcolor: 'white',
+        plot_bgcolor: '#fafafa'
+    }}, {{responsive: true}});
+}}
+
+document.querySelectorAll('.trajectory-filter-btn').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+        document.querySelectorAll('.trajectory-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        btn.classList.add('active');
+        trajectoryActiveVar = btn.dataset.var;
+        drawTrajectoryChart();
+    }});
+}});
+
+drawTrajectoryChart();
+"""
+
+
+def _recent_misses_html(rows: list) -> str:
+    if not rows:
+        return '<p class="muted">No scored forecasts in the last 14 days.</p>'
+
+    # rows are pre-sorted by model then mae desc; emit a group header on model change
+    header = (
+        '<table class="obs-history-table">'
+        '<thead><tr>'
+        '<th>Variable</th><th>Lead</th><th>Valid</th>'
+        '<th>Predicted</th><th>Observed</th><th>Error</th>'
+        '</tr></thead><tbody>'
+    )
+    body_rows = []
+    current_model = None
+    for row in rows:
+        model = row["model"]
+        if model != current_model:
+            current_model = model
+            body_rows.append(
+                f'<tr class="model-header"><th colspan="6">{model}</th></tr>'
+            )
+        var = row["variable"]
+        val = row["value"]
+        obs = row["observed"]
+        err = row["error"]
+        if var in ("temperature", "dewpoint"):
+            pred_str = f"{_to_f(val):.1f}\u00b0F" if val is not None else "\u2014"
+            obs_str = f"{_to_f(obs):.1f}\u00b0F" if obs is not None else "\u2014"
+            err_disp = _diff_to_f(err)
+        elif var == "wind_speed":
+            pred_str = f"{_to_mph(val):.1f} mph" if val is not None else "\u2014"
+            obs_str = f"{_to_mph(obs):.1f} mph" if obs is not None else "\u2014"
+            err_disp = _to_mph(err)
+        else:
+            pred_str = f"{val:.1f} hPa" if val is not None else "\u2014"
+            obs_str = f"{obs:.1f} hPa" if obs is not None else "\u2014"
+            err_disp = err
+        if err_disp is not None:
+            sign = "+" if err_disp >= 0 else ""
+            err_cls = "mae-worse" if abs(err_disp) >= 3 else ""
+            err_str = f'<span class="{err_cls}">{sign}{err_disp:.1f}</span>'
+        else:
+            err_str = "\u2014"
+        valid_label = fmt.short_ts(row["valid_at"])
+        body_rows.append(
+            f'<tr>'
+            f'<td>{_VARIABLE_LABEL.get(var, var)}</td>'
+            f'<td>+{row["lead_hours"]}h</td>'
+            f'<td>{valid_label}</td>'
+            f'<td style="text-align:right">{pred_str}</td>'
+            f'<td style="text-align:right">{obs_str}</td>'
+            f'<td style="text-align:right">{err_str}</td>'
+            f'</tr>'
+        )
+    return header + "".join(body_rows) + "</tbody></table>"
+
+
 def generate(
     conn_in: sqlite3.Connection,
     conn_out: sqlite3.Connection,
@@ -3026,6 +3263,8 @@ def generate(
     error_dist_rows = db.error_distribution(conn_out)
     weight_rows = db.all_weights_with_members(conn_out)
     all_members = db.all_members_for_ensemble_models(conn_out)
+    trajectory_rows = db.forecast_trajectory(conn_out, now - 72 * 3600)
+    misses_rows = db.recent_misses(conn_out, now - 14 * 86400)
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
@@ -3035,6 +3274,8 @@ def generate(
     heatmap = _heatmap_data(all_time_summary)
     diurnal = _diurnal_data(diurnal_rows)
     error_dist = _error_dist_data(error_dist_rows)
+    trajectory = _trajectory_data(trajectory_rows)
+    recent_misses_html = _recent_misses_html(misses_rows)
     generated_at = fmt.ts(now)
     _lf = db.get_metadata(conn_out, "last_forecast")
     _lt = db.get_metadata(conn_out, "last_tune")
@@ -3133,6 +3374,12 @@ def generate(
         f'<button class="error-dist-lead-btn{" active" if i == 0 else ""}" data-lead="{lt}">+{lt}h</button>'
         for i, lt in enumerate(lead_times)
     )
+    _traj_vars = [("temperature", "Temperature"), ("dewpoint", "Dew Point"),
+                  ("pressure", "Pressure"), ("wind_speed", "Wind Speed")]
+    trajectory_filter_btns = "".join(
+        f'<button class="trajectory-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
+        for i, (v, lbl) in enumerate(_traj_vars)
+    )
 
     html = f"""\
 <!DOCTYPE html>
@@ -3178,6 +3425,9 @@ def generate(
     {table_10}
     {table_7d}
   </div>
+  <h3 class="obs-subhead">Recent Misses (14 days)</h3>
+  <p class="chart-legend-note">Largest forecast errors per source over the last 14 days, sorted biggest miss first within each group.</p>
+  <div class="table-scroll">{recent_misses_html}</div>
   {weights_section}
   <h3 class="obs-subhead">MAE over time</h3>
   <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button><button id="raw-toggle" class="mae-raw-btn">Raw values</button></div>
@@ -3203,6 +3453,11 @@ def generate(
   <h3 class="obs-subhead">Score Heatmap</h3>
   <div class="mae-filter-bar">{heatmap_filter_btns}</div>
   <div class="chart-container"><div id="heatmap-chart"></div></div>
+
+  <h3 class="obs-subhead">Forecast Trajectory</h3>
+  <p class="chart-legend-note">How each source's prediction for the most recently scored valid time evolved. Dashed black line = observed.</p>
+  <div class="mae-filter-bar">{trajectory_filter_btns}</div>
+  <div class="chart-container"><div id="trajectory-chart"></div></div>
 
   <h3 class="obs-subhead">Diurnal Stratification</h3>
   <div class="mae-filter-bar">
@@ -3241,6 +3496,7 @@ def generate(
 {_bias_timeseries_js(bias_ts)}
 {_lead_skill_js(lead_skill)}
 {_heatmap_js(heatmap)}
+{_trajectory_js(trajectory)}
 {_diurnal_js(diurnal)}
 {_error_dist_js(error_dist)}
 {_learnings_js(learnings)}
