@@ -17,6 +17,9 @@
 #  11  clearness-trend+press-proj  projected k further adjusted by dP/dt
 #  12  pressure-departure          station pressure departure from 30d mean → T offset
 #  13  pressure-dep+clearness-trend  pressure departure + projected-k clearness
+#  14  wind-veer                   veering/backing rate from 3h direction history
+#  15  clearness-stability         k dampened by solar radiation CV (cloud character)
+#  16  veer+clearness              member 14 + member 15 combined
 
 import datetime as dt
 import math
@@ -43,6 +46,9 @@ _K_SENSITIVITY = 2.0    # amplitude multiplier per (k − K_MEAN) per unit diurn
 _TD_SENSITIVITY = 0.08  # °C temp adj per °C of dewpoint-depression anomaly
 _P_K_SENSITIVITY = 0.03 # k change per hPa/h per lead hour (pressure→k projection)
 _P_DEP_SENSITIVITY = 0.7  # °C temp adj per hPa below 30d mean pressure (warm sector signal)
+_VEER_SENSITIVITY = 0.015 # °C per (°/hour of veer × lead_hours), capped at ±4°C
+_CV_DAMPEN = 0.4          # fraction by which high solar CV reduces k_adj amplitude
+_CV_MIN_OBS = 4           # minimum daytime solar obs to compute CV
 
 # temperature offsets (°C) by 8-point wind sector: 0=N 1=NE 2=E 3=SE 4=S 5=SW 6=W 7=NW
 _SECTOR_TEMP = {0: -1.5, 1: -1.0, 2: -0.5, 3: 0.5, 4: 1.5, 5: 2.0, 6: 0.5, 7: -0.5}
@@ -61,6 +67,9 @@ _MEMBER_NAMES = [
     (11, "clearness-trend+pressure-proj"),
     (12, "pressure-departure"),
     (13, "pressure-dep+clearness-trend"),
+    (14, "wind-veer"),
+    (15, "clearness-stability"),
+    (16, "veer+clearness"),
 ]
 _ALL_MEMBER_IDS = [mid for mid, _ in _MEMBER_NAMES]
 
@@ -150,6 +159,44 @@ def _compute_dk_dt(solar_obs: list, lat: float) -> float | None:
     return (k_points[-1][1] - k_points[0][1]) / elapsed
 
 
+def _angular_diff(a: float, b: float) -> float:
+    """Signed angular difference b − a in [−180, 180]. Positive = CW (veering)."""
+    return ((b - a) + 180) % 360 - 180
+
+
+def _compute_veer_rate(wind_obs: list) -> float | None:
+    """Net veering rate (°/hour) from obs rows with wind_direction.
+    Positive = clockwise = warm advection. None if < 2 valid points."""
+    dirs = [
+        (r["timestamp"], r["wind_direction"])
+        for r in wind_obs
+        if r["wind_direction"] is not None
+    ]
+    if len(dirs) < 2:
+        return None
+    elapsed = (dirs[-1][0] - dirs[0][0]) / 3600.0
+    if elapsed <= 0:
+        return None
+    total = sum(_angular_diff(dirs[i][1], dirs[i + 1][1]) for i in range(len(dirs) - 1))
+    return total / elapsed
+
+
+def _solar_cv(solar_obs: list) -> float | None:
+    """Coefficient of variation of solar radiation from daytime obs (> 10 W/m²).
+    None if fewer than _CV_MIN_OBS qualifying readings."""
+    vals = [
+        r["solar_radiation"]
+        for r in solar_obs
+        if r["solar_radiation"] is not None and r["solar_radiation"] > 10
+    ]
+    if len(vals) < _CV_MIN_OBS:
+        return None
+    mean = sum(vals) / len(vals)
+    if mean <= 0:
+        return None
+    return statistics.pstdev(vals) / mean
+
+
 def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     location = db.tempest_station_location(conn_in)
     lat = location[0] if location else None
@@ -187,6 +234,12 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
 
     # clearness slope over 3h window (members 9, 10, 11, 13)
     dk_dt = _compute_dk_dt(recent_3h, lat) if lat is not None else None
+
+    # veering/backing rate from 3h direction history (member 14, 16)
+    veer_rate = _compute_veer_rate(recent_3h)
+
+    # solar radiation coefficient of variation from 3h window (member 15, 16)
+    solar_cv_val = _solar_cv(recent_3h)
 
     t_vals = [r["air_temp"] for r in recent_3h if r["air_temp"] is not None]
     rise_rate = (t_vals[-1] - t_vals[0]) / 3.0 if len(t_vals) >= 2 else 0.0
@@ -323,6 +376,27 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                             T_adj = -_P_DEP_SENSITIVITY * p_dep
                         if k_trend_adj is not None:
                             T_adj += dev * k_trend_adj * _K_SENSITIVITY
+                    elif mid == 14:
+                        if veer_rate is not None:
+                            capped = max(-60.0, min(60.0, veer_rate))
+                            T_adj = max(-4.0, min(4.0, capped * _VEER_SENSITIVITY * lead))
+                    elif mid == 15:
+                        if k_adj is not None:
+                            if solar_cv_val is not None:
+                                k_eff_adj = k_adj * (1.0 - _CV_DAMPEN * min(1.0, solar_cv_val))
+                            else:
+                                k_eff_adj = k_adj
+                            T_adj = dev * k_eff_adj * _K_SENSITIVITY
+                    elif mid == 16:
+                        if veer_rate is not None:
+                            capped = max(-60.0, min(60.0, veer_rate))
+                            T_adj += max(-4.0, min(4.0, capped * _VEER_SENSITIVITY * lead))
+                        if k_adj is not None:
+                            if solar_cv_val is not None:
+                                k_eff_adj = k_adj * (1.0 - _CV_DAMPEN * min(1.0, solar_cv_val))
+                            else:
+                                k_eff_adj = k_adj
+                            T_adj += dev * k_eff_adj * _K_SENSITIVITY
 
                 value = T_base_valid + anchor + T_adj
                 member_vals[mid][variable] = value

@@ -31,7 +31,7 @@ Positive `dev` (afternoon peak): clear sky boosts the forecast upward. Negative 
 
 | ID | Name | Signal |
 |----|------|--------|
-| 0 | ensemble mean | weighted average of members 1–8 |
+| 0 | ensemble mean | weighted average of members 1–16 |
 | 1 | clearness-only | k persisted at issued time scales diurnal amplitude |
 | 2 | clearness+dewpoint | k × normalized dewpoint depression factor |
 | 3 | clearness-pressure-projected | k adjusted forward via pressure tendency (dP/dt) |
@@ -40,9 +40,18 @@ Positive `dev` (afternoon peak): clear sky boosts the forecast upward. Negative 
 | 6 | morning-warmup-rate | recent T rise rate scales afternoon amplitude |
 | 7 | dewpoint-only | dewpoint depression anomaly, afternoon hours only |
 | 8 | combined-full | k × dewpoint factor + sector offset |
+| 9 | clearness-trend | dk/dt projected k (slope over 3h window) |
+| 10 | clearness-trend+dewpoint | projected k × dewpoint depression factor |
+| 11 | clearness-trend+pressure-proj | projected k further adjusted by dP/dt |
+| 12 | pressure-departure | station pressure departure from 30d mean → T offset |
+| 13 | pressure-dep+clearness-trend | pressure departure + projected-k clearness |
+| 14 | wind-veer | net veering/backing rate (°/hour) from 3h direction history → advection offset |
+| 15 | clearness-stability | k dampened by solar radiation CV — broken cumulus reduces amplitude |
+| 16 | veer+clearness | members 14 + 15 combined |
 
 ## Limitations
 
-- Clearness signal is unavailable when the sun is below the horizon at issued time; members 1–3 and 5 fall back to the anchored diurnal climatology (no amplitude boost).
-- Sector offsets are static empirical constants, not derived from local data. They will likely have systematic bias until enough data accumulates for tuning.
-- The model cannot capture synoptic-scale warm or cold advection beyond what the wind direction sector implies. A 10°F anomaly driven by a warm-sector air mass will still be underforecast.
+- Clearness signal is unavailable when the sun is below the horizon at issued time; members 1–3, 5, 15, and 16 fall back to the anchored diurnal climatology (no amplitude boost).
+- Sector offsets (members 4, 5, 8) are static empirical constants, not derived from local data. They will likely have systematic bias until enough data accumulates for tuning.
+- The veering/backing signal (member 14, 16) uses the net direction change over 3 hours. A single 180° wind shift will appear the same as a gradual 3°/hour drift; rapid synoptic changes may alias the signal.
+- Solar CV (members 15, 16) requires at least 4 daytime observations (> 10 W/m²) in the 3h window; pre-dawn or deeply overcast runs fall back to the raw clearness index.

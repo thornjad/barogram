@@ -154,25 +154,24 @@ def _make_obs_for_integration():
 
 
 def test_member_count_after_new_members():
-    """run() must produce exactly 14 member rows + 1 mean = 14 rows per (lead, var)
-    → 14 × 4 leads × 3 vars = 168 total rows for model 7."""
+    """run() must produce exactly 17 members × 4 leads × 3 vars = 204 total rows."""
     import models.airmass_diurnal as m
 
     conn_in = _make_rich_input_db()
     obs = _make_obs_for_integration()
     rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
-    assert len(rows) == 168, f"expected 168 rows, got {len(rows)}"
+    assert len(rows) == 204, f"expected 204 rows, got {len(rows)}"
 
 
 def test_member_ids_include_new_range():
-    """Member IDs 0-13 must all appear for temperature at +6h."""
+    """Member IDs 0-16 must all appear for temperature at +6h."""
     import models.airmass_diurnal as m
 
     conn_in = _make_rich_input_db()
     obs = _make_obs_for_integration()
     rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
     ids = {r["member_id"] for r in rows if r["variable"] == "temperature" and r["lead_hours"] == 6}
-    assert ids == set(range(14)), f"expected member IDs 0-13, got {sorted(ids)}"
+    assert ids == set(range(17)), f"expected member IDs 0-16, got {sorted(ids)}"
 
 
 def test_pressure_departure_positive_when_below_normal():
@@ -213,7 +212,7 @@ def test_missing_pressure_no_crash():
 
     # must not raise
     rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
-    assert len(rows) == 168, "should still produce all 168 rows when pressure is None"
+    assert len(rows) == 204, "should still produce all 204 rows when pressure is None"
 
 
 def test_clearness_trend_non_none_on_clearing_morning():
@@ -255,7 +254,7 @@ def test_no_crash_all_nighttime_window():
     }
     # must not raise
     rows = m.run(obs, t_predawn, conn_in=conn_in, weights={})
-    assert len(rows) == 168, "should still produce all 168 rows for a pre-dawn run"
+    assert len(rows) == 204, "should still produce all 204 rows for a pre-dawn run"
 
     # at nighttime, member 1 also has no clearness signal;
     # members 9-11 should produce the same values as member 1 (both fall back to baseline)
@@ -273,3 +272,105 @@ def test_no_crash_all_nighttime_window():
                 f"member 9 ({v9:.4f}) should equal member 1 ({v1:.4f}) at lead={lead} "
                 f"when dk/dt is unavailable (pre-dawn)"
             )
+
+
+# --- new signal tests: veering/backing and solar variability ---
+
+def _make_db_with_veering(direction: str = "veer"):
+    """Input DB with wind_direction trending CW (veer) or CCW (back) in the 3h window."""
+    conn = _make_rich_input_db()
+    base_ts = _T11
+    start_dir = 180.0 if direction == "veer" else 270.0
+    for i, mins in enumerate(range(0, 181, 10)):
+        ts = base_ts - 180 * 60 + mins * 60
+        delta = i * 3.0 if direction == "veer" else -i * 3.0
+        wd = (start_dir + delta) % 360
+        conn.execute(
+            "update tempest_obs set wind_direction = ? where timestamp = ?",
+            (wd, ts),
+        )
+    return conn
+
+
+def test_wind_veer_raises_temperature():
+    """Clockwise veer in 3h window: member 14 temperature should exceed member 1 baseline."""
+    import models.airmass_diurnal as m
+
+    conn_in = _make_db_with_veering("veer")
+    obs = _make_obs_for_integration()
+    rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
+
+    def val(mid, lead=12):
+        return next(
+            (r["value"] for r in rows
+             if r["member_id"] == mid and r["lead_hours"] == lead and r["variable"] == "temperature"),
+            None,
+        )
+
+    v14 = val(14)
+    v1 = val(1)
+    assert v14 is not None and v1 is not None
+    assert v14 > v1, f"veering member 14 ({v14:.2f}) should be warmer than baseline ({v1:.2f})"
+
+
+def test_wind_backing_lowers_temperature():
+    """Counter-clockwise backing in 3h window: member 14 should be cooler than member 1."""
+    import models.airmass_diurnal as m
+
+    conn_in = _make_db_with_veering("back")
+    obs = _make_obs_for_integration()
+    rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
+
+    def val(mid, lead=12):
+        return next(
+            (r["value"] for r in rows
+             if r["member_id"] == mid and r["lead_hours"] == lead and r["variable"] == "temperature"),
+            None,
+        )
+
+    v14 = val(14)
+    v1 = val(1)
+    assert v14 is not None and v1 is not None
+    assert v14 < v1, f"backing member 14 ({v14:.2f}) should be cooler than baseline ({v1:.2f})"
+
+
+def test_clearness_stability_damped_under_variable_solar():
+    """High solar CV in 3h window: member 15 amplitude boost should be smaller than member 1."""
+    import models.airmass_diurnal as m
+
+    conn_in = _make_rich_input_db()
+    base_ts = _T11
+    for i, mins in enumerate(range(0, 181, 10)):
+        ts = base_ts - 180 * 60 + mins * 60
+        solar = 800.0 if i % 2 == 0 else 100.0
+        conn_in.execute(
+            "update tempest_obs set solar_radiation = ? where timestamp = ?",
+            (solar, ts),
+        )
+    obs = _make_obs_for_integration()
+    rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
+
+    def val(mid, lead=12):
+        return next(
+            (r["value"] for r in rows
+             if r["member_id"] == mid and r["lead_hours"] == lead and r["variable"] == "temperature"),
+            None,
+        )
+
+    v1 = val(1)
+    v15 = val(15)
+    if v1 is not None and v15 is not None:
+        assert abs(v15 - obs["air_temp"]) <= abs(v1 - obs["air_temp"]) + 0.1, (
+            f"member 15 ({v15:.2f}) should not exceed member 1 ({v1:.2f}) amplitude "
+            "under high solar variability"
+        )
+
+
+def test_no_crash_no_wind_direction_in_historical():
+    """All historical obs have wind_direction=NULL: members 14/16 fall back to T_adj=0."""
+    import models.airmass_diurnal as m
+
+    conn_in = _make_rich_input_db()
+    obs = _make_obs_for_integration()
+    rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
+    assert len(rows) == 204
