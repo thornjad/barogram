@@ -3288,7 +3288,7 @@ def _overall_accuracy_html(rows: list) -> str:
     for r in rows:
         name = r["model"]
         var = r["variable"]
-        if var not in _ACC_VARIABLES:
+        if var not in _ACC_VARIABLES or var == "wind_speed":
             continue
         ref = climo_mae.get((var, r["lead_hours"]))
         skill = _skill_score(r["avg_mae"], ref)
