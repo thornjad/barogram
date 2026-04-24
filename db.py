@@ -284,6 +284,34 @@ def score_summary_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
     ).fetchall()
 
 
+def accuracy_by_lead(conn: sqlite3.Connection, n: int) -> list:
+    """Per-(model, variable, lead_hours) avg MAE from the last n scored runs.
+
+    Uses any scored issued_at (not just those with 24h data) so that external
+    models that only produce 6/12/18h forecasts are included.
+    """
+    return conn.execute(
+        """
+        with recent as (
+            select distinct issued_at
+            from forecasts
+            where scored_at is not null
+            order by issued_at desc
+            limit ?
+        )
+        select f.model_id, f.model, m.type, f.variable, f.lead_hours,
+               avg(f.mae) as avg_mae
+        from forecasts f
+        join models m on m.id = f.model_id
+        join recent r on r.issued_at = f.issued_at
+        where f.scored_at is not null and f.member_id = 0
+        group by f.model_id, f.model, m.type, f.variable, f.lead_hours
+        order by f.model_id, f.variable, f.lead_hours
+        """,
+        (n,),
+    ).fetchall()
+
+
 def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
     """Per-run average MAE by model/member/variable/lead, ordered by run time."""
     since_clause = "and f.issued_at >= :since" if since is not None else ""

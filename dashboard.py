@@ -196,15 +196,15 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .mae-filter-btn, .fcst-filter-btn,
 .bias-filter-btn, .lead-skill-filter-btn, .heatmap-filter-btn,
 .diurnal-filter-btn, .error-dist-var-btn, .error-dist-lead-btn,
-.trajectory-filter-btn { padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #444; }
+.trajectory-filter-btn, .acc-filter-btn { padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #444; }
 .mae-filter-btn:hover, .fcst-filter-btn:hover,
 .bias-filter-btn:hover, .lead-skill-filter-btn:hover, .heatmap-filter-btn:hover,
 .diurnal-filter-btn:hover, .error-dist-var-btn:hover, .error-dist-lead-btn:hover,
-.trajectory-filter-btn:hover { background: #f0f0f0; }
+.trajectory-filter-btn:hover, .acc-filter-btn:hover { background: #f0f0f0; }
 .mae-filter-btn.active, .fcst-filter-btn.active,
 .bias-filter-btn.active, .lead-skill-filter-btn.active, .heatmap-filter-btn.active,
 .diurnal-filter-btn.active, .error-dist-var-btn.active, .error-dist-lead-btn.active,
-.trajectory-filter-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.trajectory-filter-btn.active, .acc-filter-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
 .mae-raw-btn { margin-left: auto; padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #666; }
 .mae-raw-btn:hover { background: #f0f0f0; }
 .mae-raw-btn.active { background: #555; color: #fff; border-color: #555; }
@@ -220,6 +220,16 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .collapsible-section > summary::-webkit-details-marker { display: none; }
 .collapsible-section > summary::before { content: "▶ "; font-size: 11px; color: #888; }
 .collapsible-section[open] > summary::before { content: "▼ "; }
+.acc-cell { text-align: center; min-width: 58px; }
+.acc-excellent { color: #0a5c0a; font-weight: 700; }
+.acc-high { color: #1a6b1a; font-weight: 600; }
+.acc-mid { color: #5a7a00; }
+.acc-ok { color: #555; }
+.acc-low { color: #8b4400; }
+.acc-poor { color: #8b2020; }
+.acc-lead-table th.model-name-cell { text-align: left; font-weight: 500; padding-right: 16px; }
+.acc-lead-table .baseline-row th.model-name-cell { color: #bbb; }
+.acc-overall-table td { text-align: center; font-size: 15px; font-weight: 600; }
 .obs-history-table {
     width: 100%;
     border-collapse: collapse;
@@ -3158,6 +3168,212 @@ drawTrajectoryChart();
 """
 
 
+_ACC_VARIABLES = ["temperature", "dewpoint", "pressure", "wind_speed"]
+
+
+def _skill_score(mae: float | None, climo_mae: float | None) -> float | None:
+    """Skill score relative to climatological_mean. 100%=perfect, 0%=matches climo."""
+    if mae is None or climo_mae is None or climo_mae == 0:
+        return None
+    return (1.0 - mae / climo_mae) * 100.0
+
+
+def _acc_cls(pct: float | None) -> str:
+    """Color suffix class for skill score cells. Negatives = worse than climo."""
+    if pct is None:
+        return ""
+    if pct >= 80:
+        return " acc-excellent"
+    if pct >= 50:
+        return " acc-high"
+    if pct >= 20:
+        return " acc-mid"
+    if pct >= 0:
+        return " acc-ok"
+    if pct >= -50:
+        return " acc-low"
+    return " acc-poor"
+
+
+def _accuracy_lead_table_html(rows: list, lead_times: list) -> str:
+    """Forecast skill table: rows=models, cols=lead times, filterable by variable."""
+    if not rows:
+        return '<p class="muted">no scored forecasts</p>'
+
+    # extract climatological_mean MAE as the reference for skill scores
+    climo_mae: dict = {}
+    for r in rows:
+        if r["model"] == "climatological_mean" and r["variable"] in _ACC_VARIABLES:
+            climo_mae[(r["variable"], r["lead_hours"])] = r["avg_mae"]
+
+    model_data: dict = {}
+    model_meta: dict = {}
+    for r in rows:
+        name = r["model"]
+        if name not in model_data:
+            model_data[name] = {v: {} for v in _ACC_VARIABLES}
+            model_meta[name] = {"model_id": r["model_id"], "type": r["type"]}
+        var = r["variable"]
+        if var in _ACC_VARIABLES:
+            ref = climo_mae.get((var, r["lead_hours"]))
+            model_data[name][var][r["lead_hours"]] = _skill_score(r["avg_mae"], ref)
+
+    def _sort_key(k):
+        t = model_meta[k]["type"]
+        mid = model_meta[k]["model_id"]
+        if t == "ensemble":
+            return (0, mid)
+        if t == "external":
+            return (1, -mid)   # 201 before 200
+        return (2, mid)
+
+    model_order = sorted(model_data.keys(), key=_sort_key)
+    lts = sorted(lead_times)
+
+    header = "<th>Model</th>" + "".join(f"<th>+{lt}h</th>" for lt in lts)
+    body_rows = []
+    for name in model_order:
+        meta = model_meta[name]
+        if name == "climatological_mean":
+            badge = '<span class="baseline-badge">baseline</span>'
+            row_cls = ' class="baseline-row"'
+        elif name == "persistence":
+            badge = ""
+            row_cls = ' class="baseline-row"'
+        elif meta["type"] == "ensemble":
+            badge = '<span class="ensemble-badge">ensemble</span>'
+            row_cls = ""
+        elif meta["type"] == "external":
+            badge = '<span class="external-badge">external</span>'
+            row_cls = ""
+        else:
+            badge = ""
+            row_cls = ""
+        cells = ""
+        for lt in lts:
+            data_attrs = "".join(
+                f' data-{var}="{model_data[name][var].get(lt):.0f}"'
+                if model_data[name][var].get(lt) is not None
+                else f' data-{var}=""'
+                for var in _ACC_VARIABLES
+            )
+            def_skill = model_data[name]["temperature"].get(lt)
+            display = f"{def_skill:.0f}%" if def_skill is not None else "—"
+            cls = _acc_cls(def_skill)
+            cells += f'<td class="acc-cell{cls}"{data_attrs}>{display}</td>'
+        body_rows.append(
+            f'<tr{row_cls}><th class="model-name-cell">{name} {badge}</th>{cells}</tr>'
+        )
+
+    return (
+        f'<table class="obs-history-table acc-lead-table">'
+        f'<thead><tr>{header}</tr></thead>'
+        f'<tbody>{"".join(body_rows)}</tbody>'
+        f'</table>'
+    )
+
+
+def _overall_accuracy_html(rows: list) -> str:
+    """Avg forecast skill per model across all variables and lead times."""
+    if not rows:
+        return '<p class="muted">no scored forecasts</p>'
+
+    climo_mae: dict = {}
+    for r in rows:
+        if r["model"] == "climatological_mean" and r["variable"] in _ACC_VARIABLES:
+            climo_mae[(r["variable"], r["lead_hours"])] = r["avg_mae"]
+
+    model_skills: dict[str, list] = {}
+    model_meta: dict = {}
+    for r in rows:
+        name = r["model"]
+        var = r["variable"]
+        if var not in _ACC_VARIABLES:
+            continue
+        ref = climo_mae.get((var, r["lead_hours"]))
+        skill = _skill_score(r["avg_mae"], ref)
+        if skill is None:
+            continue
+        if name not in model_skills:
+            model_skills[name] = []
+            model_meta[name] = {"model_id": r["model_id"], "type": r["type"]}
+        model_skills[name].append(skill)
+
+    if not model_skills:
+        return '<p class="muted">no scored forecasts</p>'
+
+    def _sort_key(k):
+        t = model_meta[k]["type"]
+        mid = model_meta[k]["model_id"]
+        if t == "ensemble":
+            return (0, mid)
+        if t == "external":
+            return (1, -mid)
+        return (2, mid)
+
+    model_order = sorted(model_skills.keys(), key=_sort_key)
+    body_rows = []
+    for name in model_order:
+        avg_skill = sum(model_skills[name]) / len(model_skills[name])
+        meta = model_meta[name]
+        if name == "climatological_mean":
+            badge = '<span class="baseline-badge">baseline</span>'
+            row_cls = ' class="baseline-row"'
+        elif name == "persistence":
+            badge = ""
+            row_cls = ' class="baseline-row"'
+        elif meta["type"] == "ensemble":
+            badge = '<span class="ensemble-badge">ensemble</span>'
+            row_cls = ""
+        elif meta["type"] == "external":
+            badge = '<span class="external-badge">external</span>'
+            row_cls = ""
+        else:
+            badge = ""
+            row_cls = ""
+        cls = _acc_cls(avg_skill)
+        body_rows.append(
+            f'<tr{row_cls}>'
+            f'<td class="model-name-cell" style="text-align:left;font-weight:500">{name} {badge}</td>'
+            f'<td class="acc-cell{cls}" style="font-size:15px;font-weight:600">{avg_skill:.0f}%</td>'
+            f'</tr>'
+        )
+
+    return (
+        f'<table class="obs-history-table acc-overall-table">'
+        f'<thead><tr><th>Model</th><th>Forecast Skill</th></tr></thead>'
+        f'<tbody>{"".join(body_rows)}</tbody>'
+        f'</table>'
+    )
+
+
+def _accuracy_table_js() -> str:
+    return """\
+function updateAccTable(varName) {
+    document.querySelectorAll('.acc-lead-table .acc-cell').forEach(function(cell) {
+        var raw = cell.getAttribute('data-' + varName);
+        if (!raw && raw !== '0') {
+            cell.textContent = '\u2014';
+            cell.className = 'acc-cell';
+        } else {
+            var pct = parseFloat(raw);
+            cell.textContent = pct.toFixed(0) + '%';
+            var suffix = pct >= 80 ? ' acc-excellent' : pct >= 50 ? ' acc-high' : pct >= 20 ? ' acc-mid' : pct >= 0 ? ' acc-ok' : pct >= -50 ? ' acc-low' : ' acc-poor';
+            cell.className = 'acc-cell' + suffix;
+        }
+    });
+}
+
+document.querySelectorAll('.acc-filter-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.acc-filter-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        updateAccTable(btn.dataset.var);
+    });
+});
+"""
+
+
 def _recent_misses_html(rows: list) -> str:
     if not rows:
         return '<p class="muted">No scored forecasts in the last 14 days.</p>'
@@ -3270,6 +3486,7 @@ def generate(
     all_members = db.all_members_for_ensemble_models(conn_out)
     trajectory_rows = db.forecast_trajectory(conn_out, now - 72 * 3600)
     misses_rows = db.recent_misses(conn_out, now - 14 * 86400)
+    acc_lead_rows = db.accuracy_by_lead(conn_out, 30)
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
@@ -3281,6 +3498,9 @@ def generate(
     error_dist = _error_dist_data(error_dist_rows)
     trajectory = _trajectory_data(trajectory_rows)
     recent_misses_html = _recent_misses_html(misses_rows)
+    acc_lead_times = sorted({r["lead_hours"] for r in acc_lead_rows}) or lead_times
+    overall_accuracy_html = _overall_accuracy_html(acc_lead_rows)
+    acc_lead_table_html = _accuracy_lead_table_html(acc_lead_rows, acc_lead_times)
     generated_at = fmt.ts(now)
     _lf = db.get_metadata(conn_out, "last_forecast")
     _lt = db.get_metadata(conn_out, "last_tune")
@@ -3341,6 +3561,13 @@ def generate(
 
     fcst_filter_btns = "".join(
         f'<button class="fcst-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
+        for i, (v, lbl) in enumerate([
+            ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
+            ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
+        ])
+    )
+    acc_filter_btns = "".join(
+        f'<button class="acc-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
             ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
             ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
@@ -3423,6 +3650,13 @@ def generate(
 
 <section class="section">
   <h2>Verification</h2>
+  <h3 class="obs-subhead">Overall Forecast Skill (last 30 runs)</h3>
+  <p class="chart-legend-note">Skill score vs. climatological mean, averaged across all variables and lead times. 100% = perfect · 0% = matches climatological mean · negative = worse than climatological mean.</p>
+  <div class="table-scroll">{overall_accuracy_html}</div>
+  <h3 class="obs-subhead">Forecast Skill by Lead Time (last 30 runs)</h3>
+  <p class="chart-legend-note">Skill score vs. climatological mean at each lead time for the selected variable. Negative = worse than climatology.</p>
+  <div class="mae-filter-bar">{acc_filter_btns}</div>
+  <div class="table-scroll">{acc_lead_table_html}</div>
   <div class="verification-primary">
     {table_30}
   </div>
@@ -3507,6 +3741,7 @@ def generate(
 {_diurnal_js(diurnal)}
 {_error_dist_js(error_dist)}
 {_learnings_js(learnings)}
+{_accuracy_table_js()}
 </script>
 </body>
 </html>
