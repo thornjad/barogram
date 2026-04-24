@@ -1,3 +1,7 @@
+import importlib
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import barogram
 from tests.conftest import make_input_db, make_obs, make_output_db
 
@@ -50,7 +54,21 @@ def test_all_models_satisfy_contract():
         if getattr(model, "NEEDS_WEIGHTS", False):
             kwargs["weights"] = {}
 
-        rows = model.run(obs, issued_at, **kwargs)
+        if getattr(model, "NEEDS_CONF", False):
+            # models requiring external API credentials are tested with a
+            # mock fetch so CI doesn't need real credentials
+            kwargs["conf"] = SimpleNamespace(
+                tempest_station_id="99999", tempest_token="fake-token"
+            )
+            canned = {
+                issued_at + h * 3600: {"temperature": 20.0, "dewpoint": 14.0, "wind_speed": 3.0}
+                for h in [6, 12, 18, 24]
+            }
+            mod = importlib.import_module(f"models.{model.MODEL_NAME}")
+            with patch.object(mod, "_fetch", return_value=canned):
+                rows = model.run(obs, issued_at, **kwargs)
+        else:
+            rows = model.run(obs, issued_at, **kwargs)
 
         assert len(rows) > 0, f"{model.MODEL_NAME}: run() returned no rows"
 
