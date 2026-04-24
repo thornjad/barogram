@@ -2,12 +2,15 @@
 
 Fetches the WeatherFlow/Tempest better_forecast hourly data and snaps it to the
 standard 6/12/18/24h lead times. Covers temperature, dewpoint, and wind speed.
+Dewpoint is derived from forecasted air_temperature and relative_humidity via the
+August-Roche-Magnus formula, matching how wxlog derives it from sensor data.
 
 Requires [tempest] station_id and token in barogram.toml. Returns [] silently if
 not configured, so forecast runs succeed on machines without Tempest credentials.
 """
 
 import json
+import math
 import urllib.request
 
 MODEL_ID = 201
@@ -25,6 +28,17 @@ _API = (
 )
 
 
+def _dewpoint_from_rh(temp_c: float, rh: float) -> float | None:
+    """Compute dewpoint (°C) from temperature (°C) and relative humidity (%).
+    Uses the August-Roche-Magnus approximation."""
+    if rh is None or rh <= 0 or temp_c is None:
+        return None
+    lnrh = math.log(rh / 100.0)
+    return (243.04 * (lnrh + (17.625 * temp_c) / (243.04 + temp_c))) / (
+        17.625 - lnrh - (17.625 * temp_c) / (243.04 + temp_c)
+    )
+
+
 def _fetch(station_id: str, token: str) -> dict[int, dict]:
     """Fetch Tempest hourly forecast keyed by unix timestamp. Returns {} on failure."""
     try:
@@ -37,9 +51,11 @@ def _fetch(station_id: str, token: str) -> dict[int, dict]:
             ts = entry.get("time")
             if ts is None:
                 continue
+            temp = entry.get("air_temperature")
+            rh = entry.get("relative_humidity")
             result[int(ts)] = {
-                "temperature": entry.get("air_temperature"),
-                "dewpoint": entry.get("dew_point"),
+                "temperature": temp,
+                "dewpoint": _dewpoint_from_rh(temp, rh),
                 "wind_speed": entry.get("wind_avg"),
             }
         return result
