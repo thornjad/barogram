@@ -8,6 +8,8 @@ from pathlib import Path
 class Config:
     input_db: str
     output_db: str
+    tempest_station_id: str | None = None
+    tempest_token: str | None = None
 
 
 def load(path: str | Path) -> Config:
@@ -33,4 +35,13 @@ def load(path: str | Path) -> Config:
     if missing:
         sys.exit(f"config missing required keys in [barogram]: {', '.join(missing)}")
 
-    return Config(input_db=input_db, output_db=output_db)
+    ts = data.get("tempest", {})
+    tempest_station_id = ts.get("station_id") or None
+    tempest_token = ts.get("token") or None
+
+    return Config(
+        input_db=input_db,
+        output_db=output_db,
+        tempest_station_id=tempest_station_id,
+        tempest_token=tempest_token,
+    )

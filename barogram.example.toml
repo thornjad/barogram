@@ -1,3 +1,7 @@
 [barogram]
 input_db = "/path/to/wxlog-read-only.db"
 output_db = "/path/to/barogram.db"
+
+[tempest]
+station_id = ""  # WeatherFlow station ID (numeric, visible in the app or API)
+token = ""       # API token from swd.weatherflow.com
