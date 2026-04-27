@@ -19,6 +19,7 @@ MODEL_ID = 6
 MODEL_NAME = "diurnal_curve"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
+NEEDS_LOCATION = True
 
 LEAD_HOURS = [6, 12, 18, 24]
 
@@ -173,8 +174,9 @@ def _eval(curve: str, label: str, variable: str, t: float,
     return None
 
 
-def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
-    location = db.tempest_station_location(conn_in)
+def run(obs, issued_at: int, *, conn_in, weights=None, location=None) -> list[dict]:
+    if location is None:
+        location = db.tempest_station_location(conn_in)
 
     t_now = _local_hour_float(obs["timestamp"])
     midnight_ts = _local_midnight_ts(obs["timestamp"])

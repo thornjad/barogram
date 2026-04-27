@@ -31,6 +31,7 @@ MODEL_ID = 7
 MODEL_NAME = "airmass_diurnal"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
+NEEDS_LOCATION = True
 
 LEAD_HOURS = [6, 12, 18, 24]
 
@@ -197,8 +198,9 @@ def _solar_cv(solar_obs: list) -> float | None:
     return statistics.pstdev(vals) / mean
 
 
-def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
-    location = db.tempest_station_location(conn_in)
+def run(obs, issued_at: int, *, conn_in, weights=None, location=None) -> list[dict]:
+    if location is None:
+        location = db.tempest_station_location(conn_in)
     lat = location[0] if location else None
 
     t_now = _local_hour_float(obs["timestamp"])

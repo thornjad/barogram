@@ -23,6 +23,7 @@ MODEL_ID = 5
 MODEL_NAME = "pressure_tendency"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
+NEEDS_ALL_OBS = True
 
 # 3h tendency thresholds in hPa
 _RAPID = 1.6
@@ -301,9 +302,10 @@ def zambretti_text(obs, conn_in, elevation_m: float = 0.0):
     }
 
 
-def run(obs, issued_at, *, conn_in, weights=None):
+def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
     # fetch full observation history for transfer functions and zambretti conditionals
-    all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
+    if all_obs is None:
+        all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
 
     transfer_fns = _build_transfer_fns(all_obs, issued_at)
     zambretti_conds = _build_zambretti_conditionals(all_obs, issued_at)

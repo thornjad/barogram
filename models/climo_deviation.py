@@ -41,8 +41,16 @@ def _amp_factor(valid_hour: float, beta: float) -> float:
 
 
 def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
+    climo_cache: dict[tuple[int, int], list] = {}
+
+    def _get_bucket(month: int, hour: int) -> list:
+        key = (month, hour)
+        if key not in climo_cache:
+            climo_cache[key] = db.climo_bucket_obs(conn_in, month, hour)
+        return climo_cache[key]
+
     now = dt.datetime.fromtimestamp(obs["timestamp"])
-    now_bucket = db.climo_bucket_obs(conn_in, now.month, now.hour)
+    now_bucket = _get_bucket(now.month, now.hour)
 
     # compute deviation per (actual_mid, variable) at issue time
     deviations = {}
@@ -60,7 +68,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     for lead in LEAD_HOURS:
         valid_at = obs["timestamp"] + lead * 3600
         t = dt.datetime.fromtimestamp(valid_at)
-        bucket = db.climo_bucket_obs(conn_in, t.month, t.hour)
+        bucket = _get_bucket(t.month, t.hour)
 
         member_vals = {}
 

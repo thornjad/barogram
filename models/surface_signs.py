@@ -17,6 +17,7 @@ MODEL_ID = 9
 MODEL_NAME = "surface_signs"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
+NEEDS_ALL_OBS = True
 
 _SIGNAL_WINDOW_SEC  = 3 * 3600  # 3h lookback for all signals
 _LOOKUP_SEC         = 600       # ±10 min for historical ts matching
@@ -191,8 +192,9 @@ def _build_signal_conditionals(signal_fn, sorted_ts, by_ts):
     return {k: sum(v) / len(v) for k, v in accum.items() if len(v) >= _MIN_SAMPLES}
 
 
-def run(obs, issued_at, *, conn_in, weights=None):
-    all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
+def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
+    if all_obs is None:
+        all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
     by_ts = {row["timestamp"]: row for row in all_obs}
     sorted_ts = sorted(by_ts)
     solar_climo = _build_solar_climo(all_obs)

@@ -17,10 +17,14 @@ NEEDS_WEIGHTS = True
 
 def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     rows = []
+    climo_cache: dict[tuple[int, int], list] = {}
     for lead in LEAD_HOURS:
         valid_at = obs["timestamp"] + lead * 3600
         t = dt.datetime.fromtimestamp(valid_at)
-        bucket = db.climo_bucket_obs(conn_in, t.month, t.hour)
+        key = (t.month, t.hour)
+        if key not in climo_cache:
+            climo_cache[key] = db.climo_bucket_obs(conn_in, t.month, t.hour)
+        bucket = climo_cache[key]
 
         member_vals = {}  # member_id -> {variable: value | None}
 

@@ -17,6 +17,7 @@ import db
 MODEL_ID = 200
 MODEL_NAME = "nws"
 NEEDS_CONN_IN = True
+NEEDS_LOCATION = True
 
 LEAD_HOURS = [6, 12, 18, 24]
 # hourly NWS data — snap to nearest within ±90 min
@@ -74,8 +75,8 @@ def _nearest(hourly: dict[int, dict], target: int) -> dict | None:
     return hourly[best]
 
 
-def run(obs, issued_at: int, *, conn_in=None) -> list[dict]:
-    loc = db.tempest_station_location(conn_in)
+def run(obs, issued_at: int, *, conn_in=None, location=None) -> list[dict]:
+    loc = location if location is not None else db.tempest_station_location(conn_in)
     if loc is None:
         return []
     hourly = _fetch(loc[0], loc[1])
