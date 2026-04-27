@@ -122,6 +122,17 @@ def cmd_forecast(args, conf):
     if obs is None:
         sys.exit("error: no Tempest observations in input database")
 
+    shared_all_obs = (
+        db.tempest_obs_in_range(conn_in, 0, issued_at)
+        if any(getattr(m, "NEEDS_ALL_OBS", False) for m in _MODELS)
+        else None
+    )
+    shared_location = (
+        db.tempest_station_location(conn_in)
+        if any(getattr(m, "NEEDS_LOCATION", False) for m in _MODELS)
+        else None
+    )
+
     failed = []
     for model in _MODELS:
         kwargs = {}
@@ -133,6 +144,10 @@ def cmd_forecast(args, conf):
             kwargs["conn_out"] = conn_out
         if getattr(model, "NEEDS_WEIGHTS", False):
             kwargs["weights"] = db.load_weights(conn_out, model.MODEL_ID)
+        if getattr(model, "NEEDS_ALL_OBS", False):
+            kwargs["all_obs"] = shared_all_obs
+        if getattr(model, "NEEDS_LOCATION", False):
+            kwargs["location"] = shared_location
         try:
             rows = model.run(obs, issued_at, **kwargs)
             db.insert_forecasts(conn_out, rows)
@@ -174,6 +189,17 @@ def cmd_run(args, conf):
     if obs is None:
         sys.exit("error: no Tempest observations in input database")
 
+    shared_all_obs = (
+        db.tempest_obs_in_range(conn_in, 0, issued_at)
+        if any(getattr(m, "NEEDS_ALL_OBS", False) for m in _MODELS)
+        else None
+    )
+    shared_location = (
+        db.tempest_station_location(conn_in)
+        if any(getattr(m, "NEEDS_LOCATION", False) for m in _MODELS)
+        else None
+    )
+
     print("forecasting...")
     failed = []
     for model in _MODELS:
@@ -186,6 +212,10 @@ def cmd_run(args, conf):
             kwargs["conn_out"] = conn_out
         if getattr(model, "NEEDS_WEIGHTS", False):
             kwargs["weights"] = db.load_weights(conn_out, model.MODEL_ID)
+        if getattr(model, "NEEDS_ALL_OBS", False):
+            kwargs["all_obs"] = shared_all_obs
+        if getattr(model, "NEEDS_LOCATION", False):
+            kwargs["location"] = shared_location
         try:
             rows = model.run(obs, issued_at, **kwargs)
             db.insert_forecasts(conn_out, rows)
