@@ -196,15 +196,15 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .mae-filter-btn, .fcst-filter-btn,
 .bias-filter-btn, .lead-skill-filter-btn, .heatmap-filter-btn,
 .diurnal-filter-btn, .error-dist-var-btn, .error-dist-lead-btn,
-.trajectory-filter-btn, .acc-filter-btn { padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #444; }
+.trajectory-filter-btn, .acc-filter-btn, .acc-window-btn { padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #444; }
 .mae-filter-btn:hover, .fcst-filter-btn:hover,
 .bias-filter-btn:hover, .lead-skill-filter-btn:hover, .heatmap-filter-btn:hover,
 .diurnal-filter-btn:hover, .error-dist-var-btn:hover, .error-dist-lead-btn:hover,
-.trajectory-filter-btn:hover, .acc-filter-btn:hover { background: #f0f0f0; }
+.trajectory-filter-btn:hover, .acc-filter-btn:hover, .acc-window-btn:hover { background: #f0f0f0; }
 .mae-filter-btn.active, .fcst-filter-btn.active,
 .bias-filter-btn.active, .lead-skill-filter-btn.active, .heatmap-filter-btn.active,
 .diurnal-filter-btn.active, .error-dist-var-btn.active, .error-dist-lead-btn.active,
-.trajectory-filter-btn.active, .acc-filter-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.trajectory-filter-btn.active, .acc-filter-btn.active, .acc-window-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
 .mae-raw-btn { margin-left: auto; padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #666; }
 .mae-raw-btn:hover { background: #f0f0f0; }
 .mae-raw-btn.active { background: #555; color: #fff; border-color: #555; }
@@ -3418,6 +3418,25 @@ document.querySelectorAll('.acc-filter-btn').forEach(function(btn) {
         updateAccTable(btn.dataset.var);
     });
 });
+
+function updateAccWindow(win) {
+    ['14d', '120d', 'alltime'].forEach(function(w) {
+        var oel = document.getElementById('acc-overall-' + w);
+        var lel = document.getElementById('acc-lead-' + w);
+        if (oel) oel.style.display = (w === win) ? '' : 'none';
+        if (lel) lel.style.display = (w === win) ? '' : 'none';
+    });
+    var activeBtn = document.querySelector('.acc-filter-btn.active');
+    if (activeBtn) updateAccTable(activeBtn.dataset.var);
+}
+
+document.querySelectorAll('.acc-window-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.acc-window-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        updateAccWindow(btn.dataset.window);
+    });
+});
 """
 
 
@@ -3533,7 +3552,14 @@ def generate(
     all_members = db.all_members_for_ensemble_models(conn_out)
     trajectory_rows = db.forecast_trajectory(conn_out, now - 72 * 3600)
     misses_rows = db.recent_misses(conn_out, now - 14 * 86400)
-    acc_lead_rows = db.accuracy_by_lead(conn_out, 30)
+    _14d = now - 14 * 86400
+    _120d = now - 120 * 86400
+    acc_rows_14d = db.accuracy_since(conn_out, _14d)
+    acc_rows_120d = db.accuracy_since(conn_out, _120d)
+    acc_rows_alltime = db.accuracy_since(conn_out, 0)
+    acc_count_14d = db.accuracy_run_count(conn_out, _14d)
+    acc_count_120d = db.accuracy_run_count(conn_out, _120d)
+    acc_count_alltime = db.accuracy_run_count(conn_out, 0)
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
@@ -3545,9 +3571,30 @@ def generate(
     error_dist = _error_dist_data(error_dist_rows)
     trajectory = _trajectory_data(trajectory_rows)
     recent_misses_html = _recent_misses_html(misses_rows)
-    acc_lead_times = sorted({r["lead_hours"] for r in acc_lead_rows}) or lead_times
-    overall_accuracy_html = _overall_accuracy_html(acc_lead_rows)
-    acc_lead_table_html = _accuracy_lead_table_html(acc_lead_rows, acc_lead_times)
+    acc_lead_times = sorted({r["lead_hours"] for r in acc_rows_14d}) or lead_times
+    _acc_windows = [
+        ("14d", acc_rows_14d, acc_count_14d, "14 days"),
+        ("120d", acc_rows_120d, acc_count_120d, "120 days"),
+        ("alltime", acc_rows_alltime, acc_count_alltime, "all time"),
+    ]
+    overall_parts, lead_parts = [], []
+    for wid, rows, n_runs, label in _acc_windows:
+        hidden = ' style="display:none"' if wid != "14d" else ""
+        run_note = f'<p class="chart-legend-note acc-run-note">{label} \u00b7 {n_runs} runs</p>'
+        overall_parts.append(
+            f'<div id="acc-overall-{wid}"{hidden}>'
+            f'{run_note}'
+            f'{_overall_accuracy_html(rows)}'
+            f'</div>'
+        )
+        lead_parts.append(
+            f'<div id="acc-lead-{wid}"{hidden}>'
+            f'{run_note}'
+            f'{_accuracy_lead_table_html(rows, acc_lead_times)}'
+            f'</div>'
+        )
+    overall_accuracy_html = "".join(overall_parts)
+    acc_lead_table_html = "".join(lead_parts)
     generated_at = fmt.ts(now)
     _lf = db.get_metadata(conn_out, "last_forecast")
     _lt = db.get_metadata(conn_out, "last_tune")
@@ -3619,6 +3666,10 @@ def generate(
             ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
             ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
         ])
+    )
+    acc_window_btns = "".join(
+        f'<button class="acc-window-btn{" active" if i == 0 else ""}" data-window="{wid}">{lbl}</button>'
+        for i, (wid, _, _, lbl) in enumerate(_acc_windows)
     )
 
     _var_btns = [
@@ -3697,10 +3748,11 @@ def generate(
 
 <section class="section">
   <h2>Verification</h2>
-  <h3 class="obs-subhead">Overall Forecast Skill (last 30 runs)</h3>
+  <div class="mae-filter-bar">{acc_window_btns}</div>
+  <h3 class="obs-subhead">Overall Forecast Skill</h3>
   <p class="chart-legend-note">Skill score vs. climatological mean, averaged across all variables and lead times. 100% = perfect · 0% = matches climatological mean · negative = worse than climatological mean.</p>
   <div class="table-scroll">{overall_accuracy_html}</div>
-  <h3 class="obs-subhead">Forecast Skill by Lead Time (last 30 runs)</h3>
+  <h3 class="obs-subhead">Forecast Skill by Lead Time</h3>
   <p class="chart-legend-note">Skill score vs. climatological mean at each lead time for the selected variable. Negative = worse than climatology.</p>
   <div class="mae-filter-bar">{acc_filter_btns}</div>
   <div class="table-scroll">{acc_lead_table_html}</div>
