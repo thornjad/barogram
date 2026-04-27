@@ -134,6 +134,29 @@ def nearest_tempest_obs(
     ).fetchone()
 
 
+def tempest_obs_range_for_scoring(
+    conn: sqlite3.Connection, earliest: int, latest: int, window_sec: int = 1800
+) -> list:
+    """Fetch all Tempest obs that could match forecasts with valid_at in [earliest, latest].
+
+    Returns rows ordered by timestamp asc. Includes t.timestamp so callers can
+    build an in-memory index for O(log n) nearest-neighbor lookup.
+    """
+    return conn.execute(
+        """
+        select t.timestamp, t.air_temp, t.dew_point, t.station_pressure, t.wind_avg,
+               t.wind_direction, t.solar_radiation, t.wind_gust,
+               t.lightning_count, t.precip_accum_day
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and t.timestamp between ? and ?
+        order by t.timestamp asc
+        """,
+        (earliest - window_sec, latest + window_sec),
+    ).fetchall()
+
+
 def tempest_station_location(conn: sqlite3.Connection) -> tuple[float, float] | None:
     row = conn.execute(
         "select latitude, longitude from stations where source = 'tempest' limit 1"
