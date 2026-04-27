@@ -290,6 +290,172 @@ def cmd_query(args, conf):
         print(fmt_row(row))
 
 
+def _convert_forecast_value(var: str, val: float | None) -> float | None:
+    if val is None:
+        return None
+    if var in ("temperature", "dewpoint"):
+        return val * 9 / 5 + 32
+    if var == "wind_speed":
+        return val * 2.23694
+    return val
+
+
+def _convert_error_value(var: str, val: float | None) -> float | None:
+    if val is None:
+        return None
+    if var in ("temperature", "dewpoint"):
+        return val * 1.8
+    if var == "wind_speed":
+        return val * 2.23694
+    return val
+
+
+def _print_insights_table(result: dict) -> None:
+    print(f"generated:    {fmt.ts(result['generated_at'])}")
+    print(f"scored runs:  {result['n_scored_runs']}")
+
+    ef = result.get("ensemble_forecast")
+    if ef:
+        print(f"\nensemble forecast  (issued {fmt.ts(ef['issued_at'])})")
+        header = f"  {'lead':>4}  {'temp (F)':>10}  {'dewpt (F)':>10}  {'pres (hPa)':>11}  {'wind (mph)':>11}"
+        print(header)
+        print("  " + "-" * (len(header) - 2))
+        for lead in sorted(ef["leads"], key=int):
+            lv = ef["leads"][lead]
+            t = fmt.val(lv.get("temperature"), ".1f")
+            d = fmt.val(lv.get("dewpoint"), ".1f")
+            p = fmt.val(lv.get("pressure"), ".1f")
+            w = fmt.val(lv.get("wind_speed"), ".1f")
+            print(f"  {lead+'h':>4}  {t:>10}  {d:>10}  {p:>11}  {w:>11}")
+
+    accuracy = result.get("model_accuracy", {})
+    if accuracy:
+        print("\nmodel accuracy  (last 10 scored runs, converted units)")
+        for model_name, variables in sorted(accuracy.items()):
+            print(f"\n  {model_name}")
+            print(f"    {'variable':14}  {'6h MAE':>8}  {'12h MAE':>8}  {'18h MAE':>8}  {'24h MAE':>8}"
+                  f"  {'6h bias':>8}  {'12h bias':>8}  {'18h bias':>8}  {'24h bias':>8}")
+            print("    " + "-" * 102)
+            for var, stats in sorted(variables.items()):
+                def _f(k):
+                    v = stats.get(k)
+                    return f"{v:.3f}" if v is not None else "—"
+                row = (f"    {var:14}"
+                       f"  {_f('mae_6h'):>8}  {_f('mae_12h'):>8}  {_f('mae_18h'):>8}  {_f('mae_24h'):>8}"
+                       f"  {_f('bias_6h'):>8}  {_f('bias_12h'):>8}  {_f('bias_18h'):>8}  {_f('bias_24h'):>8}")
+                print(row)
+
+
+def _compute_slp_offset(conf) -> float:
+    """Return the station→SLP pressure offset (hPa) from the latest Tempest obs.
+
+    Mirrors dashboard._slp_correction. Returns 0.0 on any failure so callers
+    can proceed with station pressure unchanged.
+    """
+    try:
+        conn_in = db.open_input_db(conf.input_db)
+    except (FileNotFoundError, Exception):
+        return 0.0
+    try:
+        obs = db.latest_tempest_obs(conn_in)
+        if obs is None:
+            return 0.0
+        sp = obs["station_pressure"]
+        if sp is None:
+            return 0.0
+        try:
+            slp_stored = obs["sea_level_pressure"]
+            if slp_stored is not None:
+                return slp_stored - sp
+        except (IndexError, KeyError):
+            pass
+        elevation_m = db.tempest_station_elevation(conn_in)
+        if elevation_m <= 0.0:
+            return 0.0
+        temp = obs["air_temp"]
+        if temp is None:
+            return 0.0
+        return fmt.to_slp(sp, temp, elevation_m) - sp
+    except Exception:
+        return 0.0
+
+
+def cmd_insights(args, conf):
+    import json as json_mod
+
+    output_db_path = Path(conf.output_db)
+    if not output_db_path.exists():
+        print("{}")
+        return
+
+    migrations_dir = Path(__file__).parent / "migrations"
+    conn_out = db.open_output_db(conf.output_db)
+    db.run_migrations(conn_out, migrations_dir)
+
+    count_row = conn_out.execute("select count(*) as n from forecasts").fetchone()
+    if count_row["n"] == 0:
+        print("{}")
+        return
+
+    generated_at = int(time.time())
+    n_scored_runs = db.accuracy_run_count(conn_out, 0)
+    slp_offset = _compute_slp_offset(conf)
+
+    all_latest = db.latest_forecast_per_model(conn_out)
+    ens_rows = [r for r in all_latest
+                if r["model"] == "barogram_ensemble" and r["member_id"] == 0]
+
+    ens_issued_at = ens_rows[0]["issued_at"] if ens_rows else None
+    leads: dict = {}
+    for r in ens_rows:
+        lead = str(r["lead_hours"])
+        if lead not in leads:
+            leads[lead] = {}
+        var = r["variable"]
+        raw_val = r["value"]
+        if var == "pressure" and raw_val is not None:
+            raw_val = raw_val + slp_offset
+        val = _convert_forecast_value(var, raw_val)
+        spread = _convert_error_value(var, r["spread"])
+        leads[lead][var] = round(val, 2) if val is not None else None
+        if spread is not None:
+            leads[lead][f"{var}_spread"] = round(spread, 2)
+
+    ensemble_forecast = {"issued_at": ens_issued_at, "leads": leads} if ens_issued_at else None
+
+    _TARGET_MODELS = {"nws", "tempest_forecast", "barogram_ensemble"}
+    _ALL_LEADS = [6, 12, 18, 24]
+    summary = db.score_summary_last_n_runs(conn_out, 10)
+    summary = [r for r in summary if r["member_id"] == 0 and r["model"] in _TARGET_MODELS]
+
+    accuracy: dict = {}
+    for r in summary:
+        model_name = r["model"]
+        var = r["variable"]
+        lead = r["lead_hours"]
+        mae = _convert_error_value(var, r["avg_mae"])
+        bias = _convert_error_value(var, r["avg_bias"])
+        accuracy.setdefault(model_name, {})
+        if var not in accuracy[model_name]:
+            accuracy[model_name][var] = {f"mae_{l}h": None for l in _ALL_LEADS}
+            accuracy[model_name][var].update({f"bias_{l}h": None for l in _ALL_LEADS})
+        accuracy[model_name][var][f"mae_{lead}h"] = round(mae, 3) if mae is not None else None
+        accuracy[model_name][var][f"bias_{lead}h"] = round(bias, 3) if bias is not None else None
+
+    result: dict = {
+        "generated_at": generated_at,
+        "n_scored_runs": n_scored_runs,
+    }
+    if ensemble_forecast:
+        result["ensemble_forecast"] = ensemble_forecast
+    result["model_accuracy"] = accuracy
+
+    if args.format == "json":
+        print(json_mod.dumps(result, indent=2))
+    else:
+        _print_insights_table(result)
+
+
 def cmd_tune(args, conf):
     _sync_check()
     migrations_dir = Path(__file__).parent / "migrations"
@@ -401,6 +567,13 @@ def main():
         help="output format (default: table)",
     )
     p = subparsers.add_parser(
+        "insights", help="emit forecast and accuracy summary as JSON"
+    )
+    p.add_argument(
+        "--format", choices=["json", "table"], default="json",
+        help="output format (default: json)",
+    )
+    p = subparsers.add_parser(
         "tune", help="compute inverse-MAE member weights from scoring history"
     )
     p.add_argument(
@@ -436,6 +609,8 @@ def main():
         cmd_score(args, conf)
     elif args.command == "query":
         cmd_query(args, conf)
+    elif args.command == "insights":
+        cmd_insights(args, conf)
     elif args.command == "tune":
         cmd_tune(args, conf)
 
