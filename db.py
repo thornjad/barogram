@@ -315,6 +315,36 @@ def accuracy_by_lead(conn: sqlite3.Connection, n: int) -> list:
     ).fetchall()
 
 
+def accuracy_since(conn: sqlite3.Connection, since: int) -> list:
+    """Per-(model, variable, lead_hours) avg MAE for forecasts issued since `since`."""
+    return conn.execute(
+        """
+        select f.model_id, f.model, m.type, f.variable, f.lead_hours,
+               avg(f.mae) as avg_mae
+        from forecasts f
+        join models m on m.id = f.model_id
+        where f.scored_at is not null and f.member_id = 0
+          and f.issued_at >= ?
+        group by f.model_id, f.model, m.type, f.variable, f.lead_hours
+        order by f.model_id, f.variable, f.lead_hours
+        """,
+        (since,),
+    ).fetchall()
+
+
+def accuracy_run_count(conn: sqlite3.Connection, since: int) -> int:
+    """Count of distinct scored forecast runs issued since `since` epoch."""
+    row = conn.execute(
+        """
+        select count(distinct issued_at) as n
+        from forecasts
+        where scored_at is not null and issued_at >= ?
+        """,
+        (since,),
+    ).fetchone()
+    return row["n"] if row else 0
+
+
 def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
     """Per-run average MAE by model/member/variable/lead, ordered by run time."""
     since_clause = "and f.issued_at >= :since" if since is not None else ""
