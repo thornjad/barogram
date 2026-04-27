@@ -277,7 +277,7 @@ def score_summary_since(conn: sqlite3.Connection, since: int) -> list:
         from forecasts f
         join models m on m.id = f.model_id
         left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
-        where f.scored_at is not null and f.issued_at >= ?
+        where f.scored_at is not null and f.member_id = 0 and f.issued_at >= ?
         group by f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours
         order by f.model_id, f.member_id, f.variable, f.lead_hours
         """,
@@ -368,8 +368,92 @@ def accuracy_run_count(conn: sqlite3.Connection, since: int) -> int:
     return row["n"] if row else 0
 
 
+def score_summary_last_n_runs_multi(conn: sqlite3.Connection, ns: list[int]) -> dict[int, list]:
+    """score_summary_last_n_runs for multiple N values in a single query.
+
+    Returns {n: rows} where rows has the same shape as score_summary_last_n_runs.
+    Each N value gets its own CTE and aggregation branch, merged via UNION ALL.
+    n values must be positive integers (they are interpolated into SQL identifiers).
+    """
+    cte_parts = []
+    select_parts = []
+    for n in ns:
+        cte_name = f"runs_{n}"
+        cte_parts.append(
+            f"{cte_name} as ("
+            f"select distinct issued_at from forecasts "
+            f"where scored_at is not null and lead_hours = 24 "
+            f"order by issued_at desc limit {n})"
+        )
+        select_parts.append(
+            f"select {n} as n_runs, f.model_id as model_id, f.model as model, "
+            f"m.type as type, f.member_id as member_id, mem.name as member_name, "
+            f"f.variable as variable, f.lead_hours as lead_hours, "
+            f"count(*) as n, avg(f.mae) as avg_mae, avg(f.error) as avg_bias "
+            f"from forecasts f "
+            f"join models m on m.id = f.model_id "
+            f"left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id "
+            f"join {cte_name} r on r.issued_at = f.issued_at "
+            f"where f.scored_at is not null "
+            f"group by f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours"
+        )
+    sql = (
+        "with " + ", ".join(cte_parts) + " "
+        + " union all ".join(select_parts)
+        + " order by n_runs desc, model_id, member_id, variable, lead_hours"
+    )
+    result: dict[int, list] = {n: [] for n in ns}
+    for r in conn.execute(sql).fetchall():
+        result[r["n_runs"]].append(r)
+    return result
+
+
+def accuracy_windows(conn: sqlite3.Connection, since_epochs: list[int]) -> dict[int, list]:
+    """accuracy_since for multiple since-epoch values in a single query.
+
+    Returns {since_epoch: rows} where rows has the same shape as accuracy_since.
+    Each epoch value appears twice in the parameter list (SELECT tag + WHERE filter).
+    """
+    branches = []
+    params: list = []
+    for epoch in since_epochs:
+        branches.append(
+            "select ? as since_epoch, f.model_id, f.model, m.type, f.variable, f.lead_hours, "
+            "avg(f.mae) as avg_mae "
+            "from forecasts f join models m on m.id = f.model_id "
+            "where f.scored_at is not null and f.member_id = 0 and f.issued_at >= ? "
+            "group by f.model_id, f.model, m.type, f.variable, f.lead_hours"
+        )
+        params.extend([epoch, epoch])
+    sql = " union all ".join(branches)
+    result: dict[int, list] = {epoch: [] for epoch in since_epochs}
+    for r in conn.execute(sql, params).fetchall():
+        result[r["since_epoch"]].append(r)
+    return result
+
+
+def accuracy_run_count_multi(conn: sqlite3.Connection, since_epochs: list[int]) -> dict[int, int]:
+    """accuracy_run_count for multiple since-epoch values in a single query.
+
+    Returns {since_epoch: count}.
+    """
+    branches = []
+    params: list = []
+    for epoch in since_epochs:
+        branches.append(
+            "select ? as since_epoch, count(distinct issued_at) as n "
+            "from forecasts where scored_at is not null and issued_at >= ?"
+        )
+        params.extend([epoch, epoch])
+    sql = " union all ".join(branches)
+    result = {epoch: 0 for epoch in since_epochs}
+    for r in conn.execute(sql, params).fetchall():
+        result[r["since_epoch"]] = r["n"]
+    return result
+
+
 def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
-    """Per-run average MAE by model/member/variable/lead, ordered by run time."""
+    """Per-run average MAE by model/variable/lead for member_id=0, ordered by run time."""
     since_clause = "and f.issued_at >= :since" if since is not None else ""
     return conn.execute(
         f"""
@@ -377,7 +461,7 @@ def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list
                avg(f.mae) as avg_mae
         from forecasts f
         join models m on m.id = f.model_id
-        where f.scored_at is not null {since_clause}
+        where f.scored_at is not null and f.member_id = 0 {since_clause}
         group by f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at
         order by f.issued_at
         """,
@@ -386,7 +470,7 @@ def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list
 
 
 def bias_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
-    """Per-run average signed error by model/member/variable/lead, ordered by run time."""
+    """Per-run average signed error by model/variable/lead for member_id=0, ordered by run time."""
     since_clause = "and f.issued_at >= :since" if since is not None else ""
     return conn.execute(
         f"""
@@ -394,7 +478,7 @@ def bias_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
                avg(f.error) as avg_bias
         from forecasts f
         join models m on m.id = f.model_id
-        where f.scored_at is not null {since_clause}
+        where f.scored_at is not null and f.member_id = 0 {since_clause}
         group by f.model_id, f.model, m.type, f.member_id, f.variable, f.lead_hours, f.issued_at
         order by f.issued_at
         """,
@@ -403,7 +487,7 @@ def bias_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
 
 
 def diurnal_errors(conn: sqlite3.Connection) -> list:
-    """Average bias and MAE grouped by hour of valid_at (local time), model, and variable."""
+    """Average bias and MAE by hour of valid_at (local time), model, and variable, member_id=0 only."""
     return conn.execute(
         """
         select
@@ -412,7 +496,7 @@ def diurnal_errors(conn: sqlite3.Connection) -> list:
             count(*) as n, avg(f.error) as avg_bias, avg(f.mae) as avg_mae
         from forecasts f
         join models m on m.id = f.model_id
-        where f.scored_at is not null
+        where f.scored_at is not null and f.member_id = 0
         group by hour, f.model_id, f.model, m.type, f.member_id, f.variable
         order by f.model_id, f.member_id, f.variable, hour
         """

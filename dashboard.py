@@ -3536,17 +3536,18 @@ def generate(
     midnight_7d_ago = int(
         datetime(today.year, today.month, today.day, tzinfo=timezone.utc).timestamp()
     ) - 7 * 86400
-    all_scores_30 = db.score_summary_last_n_runs(conn_out, 30)
+    _scores_multi = db.score_summary_last_n_runs_multi(conn_out, [30, 10])
+    all_scores_30 = _scores_multi[30]
+    all_scores_10 = _scores_multi[10]
     summary_30 = [r for r in all_scores_30 if r["member_id"] == 0]
-    all_scores_10 = db.score_summary_last_n_runs(conn_out, 10)
     summary_10 = [r for r in all_scores_10 if r["member_id"] == 0]
     members_10 = [r for r in all_scores_10 if r["member_id"] > 0]
     member_models = {r["model"] for r in members_10}
-    summary_7d = [r for r in db.score_summary_since(conn_out, now - 7 * 86400) if r["member_id"] == 0]
-    timeseries = [r for r in db.score_timeseries(conn_out, since=midnight_7d_ago) if r["member_id"] == 0]
+    summary_7d = db.score_summary_since(conn_out, now - 7 * 86400)
+    timeseries = db.score_timeseries(conn_out, since=midnight_7d_ago)
     all_time_summary = [r for r in db.score_summary(conn_out) if r["member_id"] == 0]
-    bias_ts_rows = [r for r in db.bias_timeseries(conn_out, since=midnight_7d_ago) if r["member_id"] == 0]
-    diurnal_rows = [r for r in db.diurnal_errors(conn_out) if r["member_id"] == 0]
+    bias_ts_rows = db.bias_timeseries(conn_out, since=midnight_7d_ago)
+    diurnal_rows = db.diurnal_errors(conn_out)
     error_dist_rows = db.error_distribution(conn_out)
     weight_rows = db.all_weights_with_members(conn_out)
     all_members = db.all_members_for_ensemble_models(conn_out)
@@ -3554,12 +3555,14 @@ def generate(
     misses_rows = db.recent_misses(conn_out, now - 14 * 86400)
     _14d = now - 14 * 86400
     _120d = now - 120 * 86400
-    acc_rows_14d = db.accuracy_since(conn_out, _14d)
-    acc_rows_120d = db.accuracy_since(conn_out, _120d)
-    acc_rows_alltime = db.accuracy_since(conn_out, 0)
-    acc_count_14d = db.accuracy_run_count(conn_out, _14d)
-    acc_count_120d = db.accuracy_run_count(conn_out, _120d)
-    acc_count_alltime = db.accuracy_run_count(conn_out, 0)
+    _acc = db.accuracy_windows(conn_out, [_14d, _120d, 0])
+    acc_rows_14d = _acc[_14d]
+    acc_rows_120d = _acc[_120d]
+    acc_rows_alltime = _acc[0]
+    _counts = db.accuracy_run_count_multi(conn_out, [_14d, _120d, 0])
+    acc_count_14d = _counts[_14d]
+    acc_count_120d = _counts[_120d]
+    acc_count_alltime = _counts[0]
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
