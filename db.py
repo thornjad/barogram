@@ -604,7 +604,13 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
     ).fetchone()
     current = int(row[0]) if row else 0
 
-    for f in sorted(migrations_dir.glob("[0-9][0-9][0-9]_*.sql")):
+    migration_files = sorted(migrations_dir.glob("[0-9][0-9][0-9]_*.sql"))
+    if not migration_files:
+        return
+    if current >= int(migration_files[-1].name[:3]):
+        return
+
+    for f in migration_files:
         version = int(f.name[:3])
         if version <= current:
             continue
