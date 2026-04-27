@@ -9,6 +9,7 @@ No API key required. The station lat/lon is derived from the wxlog stations tabl
 """
 
 import json
+import sys
 import urllib.request
 
 import db
@@ -58,7 +59,8 @@ def _fetch(lat: float, lon: float) -> dict[int, dict]:
                     wind_ms = sum(nums) / len(nums) * 0.44704  # avg mph → m/s
             result[ts] = {"temperature": temp_c, "dewpoint": dew_c, "wind_speed": wind_ms}
         return result
-    except Exception:
+    except Exception as e:
+        print(f"nws: fetch failed: {e}", file=sys.stderr)
         return {}
 
 
