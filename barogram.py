@@ -312,7 +312,8 @@ def _convert_error_value(var: str, val: float | None) -> float | None:
 
 def _print_insights_table(result: dict) -> None:
     print(f"generated:    {fmt.ts(result['generated_at'])}")
-    print(f"scored runs:  {result['n_scored_runs']}")
+    print(f"scored runs (alltime):  {result['n_scored_runs_alltime']}")
+    print(f"accuracy window:        {result['accuracy_window_runs']} runs")
 
     ef = result.get("ensemble_forecast")
     if ef:
@@ -425,7 +426,8 @@ def cmd_insights(args, conf):
 
     _TARGET_MODELS = {"nws", "tempest_forecast", "barogram_ensemble"}
     _ALL_LEADS = [6, 12, 18, 24]
-    summary = db.score_summary_last_n_runs(conn_out, 10)
+    _ACCURACY_WINDOW = 10
+    summary = db.score_summary_last_n_runs(conn_out, _ACCURACY_WINDOW)
     summary = [r for r in summary if r["member_id"] == 0 and r["model"] in _TARGET_MODELS]
 
     accuracy: dict = {}
@@ -444,7 +446,8 @@ def cmd_insights(args, conf):
 
     result: dict = {
         "generated_at": generated_at,
-        "n_scored_runs": n_scored_runs,
+        "n_scored_runs_alltime": n_scored_runs,
+        "accuracy_window_runs": _ACCURACY_WINDOW,
     }
     if ensemble_forecast:
         result["ensemble_forecast"] = ensemble_forecast

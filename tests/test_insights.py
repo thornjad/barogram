@@ -93,7 +93,9 @@ def test_top_level_keys_present(tmp_path):
     out = _run_insights(conn, tmp_path)
     data = json.loads(out)
     assert "generated_at" in data
-    assert "n_scored_runs" in data
+    assert "n_scored_runs_alltime" in data
+    assert "accuracy_window_runs" in data
+    assert data["accuracy_window_runs"] == 10
     assert "ensemble_forecast" in data
     assert "model_accuracy" in data
 
