@@ -11,6 +11,10 @@ Caution: this project is open-source in hopes that is of interest to a few peopl
 
 Another caution: this is a pet project being built by a hobbyist, the author has a degree in computer science, not meteorology, and there is no claim that the models produce good results. That said, the author is also always looking to learn, so if you see something that could be improved, opening an issue or PR is more than welcome, especially with helpful explanation.
 
+<p align="center">
+<img width="911" height="1003" alt="image" src="https://github.com/user-attachments/assets/9f9471d7-59aa-405c-90df-18aed2c6e2f7" />
+</p>
+
 ## Requirements
 
 Python 3.11+, managed with [uv](https://github.com/astral-sh/uv).
