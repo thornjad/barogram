@@ -9,6 +9,8 @@
 #   3  wind-moisture        (wind_rot, dp_trend) — 9 cells
 #   4  moisture-convective  (dp_trend, conv) — 9 cells
 #   5  coarse-4             coarsened binary × conv — 24 cells; more data per cell
+#   6  full-4+ptend         (wind_rot, dp_trend, cloud, conv, p_tend) — 243 cells; abstains at night
+#   7  no-cloud+ptend       (wind_rot, dp_trend, conv, p_tend) — 81 cells; works at night
 
 import statistics
 import time
@@ -42,7 +44,8 @@ VARIABLES = {
 }
 
 _MIN_SAMPLES = 3
-_ALL_MEMBER_IDS = [1, 2, 3, 4, 5]
+_ALL_MEMBER_IDS = [1, 2, 3, 4, 5, 6, 7]
+_PTEND_THRESHOLD = 0.5
 
 
 def _sector(ts: int) -> int:
@@ -65,8 +68,21 @@ def _cc(cat: str) -> str:
     return "cloudy" if cat in ("partial_cloud", "heavy_cloud") else "clear"
 
 
-def _member_states(rot, dp, cloud, conv) -> dict:
-    """Build {member_id: state_tuple_or_None} from the four raw signal categories."""
+def _pressure_tendency_cat(obs_now, obs_3h) -> str | None:
+    if obs_now is None or obs_3h is None:
+        return None
+    p_now = obs_now["station_pressure"]
+    p_3h  = obs_3h["station_pressure"]
+    if p_now is None or p_3h is None:
+        return None
+    delta = p_now - p_3h
+    if delta > _PTEND_THRESHOLD:   return "rising"
+    if delta < -_PTEND_THRESHOLD:  return "falling"
+    return "steady"
+
+
+def _member_states(rot, dp, cloud, conv, p_tend) -> dict:
+    """Build {member_id: state_tuple_or_None} from the five raw signal categories."""
     return {
         1: (rot, dp, cloud, conv) if None not in (rot, dp, cloud) else None,
         2: (rot, dp, conv)        if None not in (rot, dp) else None,
@@ -74,6 +90,8 @@ def _member_states(rot, dp, cloud, conv) -> dict:
         4: (dp, conv)             if dp is not None else None,
         5: (_cw(rot), _cdp(dp), _cc(cloud), conv)
            if None not in (rot, dp, cloud) else None,
+        6: (rot, dp, cloud, conv, p_tend) if None not in (rot, dp, cloud, p_tend) else None,
+        7: (rot, dp, conv, p_tend)        if None not in (rot, dp, p_tend) else None,
     }
 
 
@@ -97,12 +115,13 @@ def _build_conditionals(all_obs: list, solar_climo: dict) -> tuple[dict, dict, l
         obs_3h = by_ts[ts_3h] if ts_3h is not None else None
         obs_1h = by_ts[ts_1h] if ts_1h is not None else None
 
-        rot   = _wind_rotation_category(window)
-        dp    = _dp_trend_category(by_ts[ts], obs_3h)
-        cloud = _solar_cloud_category(by_ts[ts], solar_climo)
-        conv  = _convective_category(window, obs_1h, by_ts[ts])
+        rot    = _wind_rotation_category(window)
+        dp     = _dp_trend_category(by_ts[ts], obs_3h)
+        cloud  = _solar_cloud_category(by_ts[ts], solar_climo)
+        conv   = _convective_category(window, obs_1h, by_ts[ts])
+        p_tend = _pressure_tendency_cat(by_ts[ts], obs_3h)
 
-        states = _member_states(rot, dp, cloud, conv)
+        states = _member_states(rot, dp, cloud, conv, p_tend)
 
         for lead in LEAD_HOURS:
             ts_fut = _find_nearest_ts(sorted_ts, ts + lead * 3600, _FUTURE_LOOKUP_SEC)
@@ -140,12 +159,13 @@ def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None) -> list[dic
     obs_3h = db.nearest_tempest_obs(conn_in, obs_ts - _SIGNAL_WINDOW_SEC, window_sec=_LOOKUP_SEC)
     obs_1h = db.nearest_tempest_obs(conn_in, obs_ts - 3600, window_sec=_LOOKUP_SEC)
 
-    rot   = _wind_rotation_category(window_obs)
-    dp    = _dp_trend_category(obs, obs_3h)
-    cloud = _solar_cloud_category(obs, solar_climo)
-    conv  = _convective_category(window_obs, obs_1h, obs)
+    rot    = _wind_rotation_category(window_obs)
+    dp     = _dp_trend_category(obs, obs_3h)
+    cloud  = _solar_cloud_category(obs, solar_climo)
+    conv   = _convective_category(window_obs, obs_1h, obs)
+    p_tend = _pressure_tendency_cat(obs, obs_3h)
 
-    live_states = _member_states(rot, dp, cloud, conv)
+    live_states = _member_states(rot, dp, cloud, conv, p_tend)
 
     rows = []
 

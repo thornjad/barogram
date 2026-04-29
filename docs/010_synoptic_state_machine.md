@@ -1,8 +1,8 @@
 # synoptic_state_machine (model 10)
 
-A forecast model that classifies current atmospheric conditions using the same four
-observable signals as `surface_signs` — wind rotation, dewpoint spread trend, solar cloud
-cover, and convective state — but treats them as a single combined state rather than four
+A forecast model that classifies current atmospheric conditions using up to five
+observable signals — wind rotation, dewpoint spread trend, solar cloud cover, convective
+state, and pressure tendency — and treats them as a single combined state rather than
 independent ones.
 
 ## Motivation
@@ -22,13 +22,13 @@ but take longer to accumulate reliable history.
 
 ## Algorithm
 
-The model scans all historical observations in a single pass, computing all five member
+The model scans all historical observations in a single pass, computing all seven member
 state tuples simultaneously per timestamp. For each historical moment, it records the
 observed change in each variable at each lead time and accumulates those deltas by
 (member, state tuple, variable, lead). Cells with fewer than 3 historical pairs are
 excluded; the model abstains for those combinations rather than guessing.
 
-At forecast time, the four live signal categories are computed from the current
+At forecast time, the five live signal categories are computed from the current
 observation window, assembled into each member's state tuple, and matched against the
 accumulated conditional mean delta table:
 
@@ -50,6 +50,8 @@ produced non-None values.
 | 3 | wind-moisture | wind, dp | 3×3 = 9 | the two most synoptically stable signals |
 | 4 | moisture-convective | dp, convective | 3×3 = 9 | moisture trend and active precip |
 | 5 | coarse-4 | coarsened wind, dp, cloud, convective | 2×2×2×3 = 24 | abstains at night; more data per cell |
+| 6 | full-4+ptend | wind, dp, cloud, convective, pressure tendency | 3×3×3×3×3 = 243 | abstains at night; adds pressure trend |
+| 7 | no-cloud+ptend | wind, dp, convective, pressure tendency | 3×3×3×3 = 81 | works at night; adds pressure trend |
 
 Member 5 coarsens the first three signals to binary categories to increase sample counts:
 
@@ -57,6 +59,11 @@ Member 5 coarsens the first three signals to binary categories to increase sampl
 - dewpoint trend: **moistening** (narrowing) or **drying** (steady or widening)
 - cloud cover: **cloudy** (partial or heavy) or **clear**
 - convective: unchanged (dry / precip / lightning)
+
+Members 6 and 7 extend their base members (1 and 2) with a pressure tendency signal,
+allowing the model to distinguish, for example, rising-pressure veering winds from
+falling-pressure veering winds. Both require pressure data from 3h ago and abstain when
+that observation is unavailable.
 
 ## Signal definitions
 
@@ -91,16 +98,23 @@ Lightning takes priority. If the 3h observation window contains any lightning st
 the state is **lightning**. If the 1h precipitation accumulation rate exceeds 0.5 mm/h,
 the state is **precip**. Otherwise **dry**. Always returns a non-None category.
 
+### pressure tendency
+
+Change in `station_pressure` between now and 3h ago. A rise greater than 0.5 hPa is
+**rising**, a fall greater than 0.5 hPa is **falling**, otherwise **steady**. Returns
+None when the 3h prior observation is unavailable. Used by members 6 and 7 only.
+
 ## Limitations
 
-- **full-4 and coarse-4** are blind at night because the cloud signal is unavailable.
-  Members 2, 3, and 4 provide coverage during overnight hours.
-- **full-4** has 81 possible states. In the first year of data, many cells will have
-  fewer than 3 samples and the member will abstain frequently. Performance improves as
-  history accumulates; member 5 provides a denser alternative in the interim.
+- **full-4, coarse-4, and full-4+ptend** are blind at night because the cloud signal is
+  unavailable. Members 2, 3, 4, and no-cloud+ptend provide coverage during overnight
+  hours.
+- **full-4** has 81 possible states and **full-4+ptend** has 243. Both will abstain
+  frequently in the first year of data. Performance improves as history accumulates;
+  members 3, 4, and 5 provide denser alternatives in the interim.
 - The model cannot distinguish between states that have identical signal categories but
-  different magnitudes. Two slow-rise pressure events both map to the same state
-  regardless of their rates.
+  different magnitudes. Two slow-rise pressure events both map to **rising** regardless
+  of their rates.
 - All members degrade gracefully to `None` rather than guessing. The ensemble mean
   reflects only the members with sufficient historical backing for each (variable, lead)
   combination.
@@ -112,3 +126,5 @@ the state is **precip**. Otherwise **dry**. Always returns a non-None category.
   non-None forecast; denser members (3, 4, 5) accumulate this threshold faster
 - Solar climo requires ≥10 daytime obs per (month, hour) bucket before the cloud signal
   activates; this accumulates over the first few weeks of deployment
+- Members 6 and 7 require a 3h-prior observation with valid `station_pressure`; they
+  abstain whenever that observation is missing
