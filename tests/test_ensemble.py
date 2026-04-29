@@ -42,8 +42,9 @@ def test_weighted_mean():
     _seed(conn, 1, "persistence", "temperature", 10.0)
     _seed(conn, 2, "climatological_mean", "temperature", 20.0)
     obs = make_obs()
+    s = ens._sector(_VALID_AT)
     # weight model 1 at 0.25, model 2 at 0.75 -> expected mean = 17.5
-    weights = {(1, "temperature", 6): 0.25, (2, "temperature", 6): 0.75}
+    weights = {(1, "temperature", 6, s): 0.25, (2, "temperature", 6, s): 0.75}
 
     rows = ens.run(obs, _ISSUED_AT, conn_out=conn, weights=weights)
 
