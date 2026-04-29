@@ -152,6 +152,7 @@ lowercase as well.
 | `member_id` | integer | 1+ only |
 | `variable` | text | |
 | `lead_hours` | integer | |
+| `sector` | integer | 0=night(00-05), 1=morning(06-11), 2=afternoon(12-17), 3=evening(18-23) |
 | `weight` | real | normalized so members in a group sum to 1 |
 | `updated_at` | integer | Unix epoch of last `tune` run |
 

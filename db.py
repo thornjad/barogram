@@ -268,6 +268,28 @@ def score_summary(conn: sqlite3.Connection) -> list:
     ).fetchall()
 
 
+def score_summary_by_sector(conn: sqlite3.Connection) -> list:
+    return conn.execute(
+        """
+        select f.model_id, f.model, m.type, f.member_id, mem.name as member_name,
+               f.variable, f.lead_hours,
+               case
+                   when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 6  then 0
+                   when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 12 then 1
+                   when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 18 then 2
+                   else 3
+               end as sector,
+               count(*) as n, avg(f.mae) as avg_mae, avg(f.error) as avg_bias
+        from forecasts f
+        join models m on m.id = f.model_id
+        left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
+        where f.scored_at is not null
+        group by f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours, sector
+        order by f.model_id, f.member_id, f.variable, f.lead_hours, sector
+        """
+    ).fetchall()
+
+
 def score_summary_since(conn: sqlite3.Connection, since: int) -> list:
     return conn.execute(
         """
@@ -469,6 +491,67 @@ def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list
     ).fetchall()
 
 
+def skill_timeseries_multi(conn: sqlite3.Connection, since_epochs: list) -> dict:
+    """Per-day avg skill for ensemble/nws/tempest vs climo, across multiple time windows.
+
+    Skill is computed per (variable, lead_hours) pair first, then averaged — matching
+    the table calculation exactly. Mixing MAE across variables before computing skill
+    is wrong because temperature (°C) and pressure (hPa) are on different scales.
+
+    Returns {since_epoch: list of row dicts with keys day, model_id, model, avg_skill}.
+    Since = 0 is the all-time sentinel; issued_at >= 0 is always true for any valid epoch.
+    """
+    result = {}
+    for since in since_epochs:
+        rows = conn.execute(
+            """
+            with climo_ref as (
+                -- window-wide average climo MAE; stable denominator matching the table
+                select
+                    variable,
+                    lead_hours,
+                    avg(mae) as climo_mae
+                from forecasts
+                where scored_at is not null
+                  and member_id = 0
+                  and model_id = 2
+                  and variable in ('temperature', 'dewpoint', 'pressure')
+                  and issued_at >= ?
+                group by variable, lead_hours
+            ),
+            model_daily as (
+                select
+                    date(issued_at, 'unixepoch', 'localtime') as day,
+                    model_id,
+                    model,
+                    variable,
+                    lead_hours,
+                    avg(mae) as avg_mae
+                from forecasts
+                where scored_at is not null
+                  and member_id = 0
+                  and model_id in (100, 200, 201)
+                  and variable in ('temperature', 'dewpoint', 'pressure')
+                  and issued_at >= ?
+                group by day, model_id, model, variable, lead_hours
+            )
+            select
+                m.day,
+                m.model_id,
+                m.model,
+                avg((1.0 - m.avg_mae / c.climo_mae) * 100.0) as avg_skill
+            from model_daily m
+            join climo_ref c on c.variable = m.variable and c.lead_hours = m.lead_hours
+            where c.climo_mae > 0
+            group by m.day, m.model_id, m.model
+            order by m.day
+            """,
+            (since, since),
+        ).fetchall()
+        result[since] = [dict(r) for r in rows]
+    return result
+
+
 def bias_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
     """Per-run average signed error by model/variable/lead for member_id=0, ordered by run time."""
     since_clause = "and f.issued_at >= :since" if since is not None else ""
@@ -583,11 +666,11 @@ def all_weights_with_members(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """
         select w.model_id, m.name as model_name, w.member_id,
-               mem.name as member_name, w.variable, w.lead_hours, w.weight
+               mem.name as member_name, w.variable, w.lead_hours, w.sector, w.weight
         from weights w
         join models m on m.id = w.model_id
         left join members mem on mem.model_id = w.model_id and mem.member_id = w.member_id
-        order by w.model_id, w.member_id, w.variable, w.lead_hours
+        order by w.model_id, w.member_id, w.variable, w.lead_hours, w.sector
         """
     ).fetchall()
 
@@ -595,13 +678,13 @@ def all_weights_with_members(conn: sqlite3.Connection) -> list:
 def load_weights(conn: sqlite3.Connection, model_id: int) -> dict:
     rows = conn.execute(
         """
-        select member_id, variable, lead_hours, weight
+        select member_id, variable, lead_hours, sector, weight
         from weights
         where model_id = ?
         """,
         (model_id,),
     ).fetchall()
-    return {(row["member_id"], row["variable"], row["lead_hours"]): row["weight"]
+    return {(row["member_id"], row["variable"], row["lead_hours"], row["sector"]): row["weight"]
             for row in rows}
 
 
@@ -617,19 +700,20 @@ def save_weights(
             "member_id": member_id,
             "variable": variable,
             "lead_hours": lead_hours,
+            "sector": sector,
             "weight": weight,
             "updated_at": updated_at,
         }
-        for (member_id, variable, lead_hours), weight in weights_by_key.items()
+        for (member_id, variable, lead_hours, sector), weight in weights_by_key.items()
     ]
     conn.execute("begin")
     try:
         conn.executemany(
             """
             insert or replace into weights
-                (model_id, member_id, variable, lead_hours, weight, updated_at)
+                (model_id, member_id, variable, lead_hours, sector, weight, updated_at)
             values
-                (:model_id, :member_id, :variable, :lead_hours, :weight, :updated_at)
+                (:model_id, :member_id, :variable, :lead_hours, :sector, :weight, :updated_at)
             """,
             rows,
         )

@@ -3,8 +3,17 @@
 # so adding a new base model requires no changes here.
 
 import math
+import time
 
 import db
+
+
+def _sector(valid_at: int) -> int:
+    h = time.localtime(valid_at).tm_hour
+    if h < 6:  return 0
+    if h < 12: return 1
+    if h < 18: return 2
+    return 3
 
 MODEL_ID = 100
 MODEL_NAME = "barogram_ensemble"
@@ -17,9 +26,10 @@ def run(obs, issued_at: int, *, conn_out, weights=None) -> list[dict]:
     """Combine member_id=0 forecasts from all base models into one ensemble.
 
     Each contributing base model becomes one member of this ensemble. weights
-    is a dict keyed by (member_id, variable, lead_hours); absent keys fall back
-    to equal weighting. Produces one member row per base model plus a member_id=0
-    row (weighted mean + spread) per (variable, lead_hours).
+    is a dict keyed by (member_id, variable, lead_hours, sector); sector is
+    derived from valid_at hour. Absent keys fall back to equal weighting.
+    Produces one member row per base model plus a member_id=0 row (weighted
+    mean + spread) per (variable, lead_hours).
     """
     db.sync_ensemble_members(conn_out)
 
@@ -54,8 +64,10 @@ def run(obs, issued_at: int, *, conn_out, weights=None) -> list[dict]:
             })
 
         # weighted mean; fall back to equal weight when weights dict is absent/sparse
+        cell_valid_at = next(iter(model_values.values()))[1]
+        sector = _sector(cell_valid_at)
         raw_w = {
-            mid: (weights.get((mid, variable, lead_hours), 1.0) if weights else 1.0)
+            mid: (weights.get((mid, variable, lead_hours, sector), 1.0) if weights else 1.0)
             for mid in model_values
         }
         total_w = sum(raw_w.values())

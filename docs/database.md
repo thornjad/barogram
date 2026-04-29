@@ -64,16 +64,18 @@ CREATE TABLE weights (
     member_id  INTEGER NOT NULL,
     variable   TEXT    NOT NULL,
     lead_hours INTEGER NOT NULL,
+    sector     INTEGER NOT NULL,
     weight     REAL    NOT NULL,
     updated_at INTEGER NOT NULL,
-    PRIMARY KEY (model_id, member_id, variable, lead_hours)
+    PRIMARY KEY (model_id, member_id, variable, lead_hours, sector)
 );
 ```
 
-Weights are keyed on `(model_id, member_id, variable, lead_hours)` so each
-variable and lead time can independently favor different members. `insert or replace`
-makes repeated `tune` runs idempotent. See [tune.md](tune.md) for the weighting
-algorithm.
+Weights are keyed on `(model_id, member_id, variable, lead_hours, sector)` where
+`sector` is derived from the valid_at hour: 0=night (00-05), 1=morning (06-11),
+2=afternoon (12-17), 3=evening (18-23). This lets each time-of-day regime favor
+different members independently. `insert or replace` makes repeated `tune` runs
+idempotent. See [tune.md](tune.md) for the weighting algorithm.
 
 ## Members
 
