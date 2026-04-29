@@ -117,12 +117,21 @@ body {
 }
 .container { max-width: 960px; margin: 0 auto; }
 header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: #f5f5f5;
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
+    align-items: flex-end;
     margin-bottom: 24px;
-    padding-bottom: 12px;
+    padding: 12px 0;
     border-bottom: 2px solid #1a1a1a;
+}
+.header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 header h1 { font-size: 22px; letter-spacing: -0.5px; }
 .generated { font-size: 12px; color: #666; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
@@ -136,7 +145,6 @@ header h1 { font-size: 22px; letter-spacing: -0.5px; }
     border-radius: 3px;
 }
 .stale-banner code { background: #ffeaa0; padding: 1px 4px; border-radius: 2px; font-size: 12px; }
-.section { margin-bottom: 32px; }
 h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
 h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .conditions-grid {
@@ -388,7 +396,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     background: #f8f8ff;
     border-top: 1px solid #eee;
 }
-.weights-section { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; margin-top: 12px; align-items: start; }
+.weights-section { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 16px; margin-top: 12px; align-items: start; }
 .weights-model-block { }
 .weights-model-block h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .weight-table {
@@ -426,23 +434,65 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .fcst-ref { font-size:11px; color:#999; margin-top:8px; padding-top:6px; border-top:1px solid #f0f0f0; text-align:left; line-height:1.8; }
 .fcst-ref-lbl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#ccc; display:block; line-height:1.4; }
 .fcst-ref .detail-label { color:#bbb; }
+.fcst-delta { font-size:10px; color:#999; margin-left:3px; }
+.jump-nav {
+    display: flex;
+    gap: 6px;
+    flex-wrap: nowrap;
+}
+.jump-nav a {
+    font-size: 12px;
+    color: #444;
+    text-decoration: none;
+    padding: 4px 10px;
+    border-radius: 3px;
+    border: 1px solid #ddd;
+    background: #fff;
+    white-space: nowrap;
+}
+.jump-nav a:hover { background: #f0f0f0; color: #1a1a1a; }
+.section { margin-bottom: 32px; scroll-margin-top: 115px; }
+.section-dig-deeper {
+    border-top: 1px solid #ddd;
+    padding-top: 14px;
+    margin-top: 8px;
+    color: #888;
+    font-weight: 500;
+}
+.analysis-section {
+    border-top: 3px solid #ddd;
+    padding-top: 24px;
+    margin-top: 8px;
+}
+.analysis-section > h2 { color: #555; }
 """
 
 
 def _weights_section_html(rows: list, all_members: list | None = None) -> str:
     from collections import defaultdict
 
-    # build tuned weights: model_id -> member_id -> avg weight across all (var, lead) cells
-    sums: dict = defaultdict(lambda: defaultdict(list))
+    _SECTOR_LABELS = ["night", "morning", "afternoon", "evening"]
+    _SECTOR_HOURS = ["00-05", "06-11", "12-17", "18-23"]
+
+    # build tuned weights: model_id -> member_id -> sector -> avg weight across (var, lead)
+    sums: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     model_names: dict = {}
     member_names: dict = {}
+    has_sectors: dict = {}
     for r in rows:
-        sums[r["model_id"]][r["member_id"]].append(r["weight"])
+        sector = r["sector"] if "sector" in r.keys() else None
+        sums[r["model_id"]][r["member_id"]][sector].append(r["weight"])
         model_names[r["model_id"]] = r["model_name"]
         member_names[(r["model_id"], r["member_id"])] = r["member_name"] or str(r["member_id"])
+        if sector is not None:
+            has_sectors[r["model_id"]] = True
 
+    # avg_weights: model_id -> member_id -> sector -> avg weight
     avg_weights: dict = {
-        mid: {mem_id: sum(ws) / len(ws) for mem_id, ws in members.items()}
+        mid: {
+            mem_id: {s: sum(ws) / len(ws) for s, ws in sectors.items()}
+            for mem_id, sectors in members.items()
+        }
         for mid, members in sums.items()
     }
     tuned_ids = set(avg_weights)
@@ -455,7 +505,9 @@ def _weights_section_html(rows: list, all_members: list | None = None) -> str:
         for model_id, members in by_model.items():
             if model_id not in tuned_ids:
                 n = len(members)
-                avg_weights[model_id] = {r["member_id"]: 1.0 / n for r in members}
+                avg_weights[model_id] = {
+                    r["member_id"]: {None: 1.0 / n} for r in members
+                }
                 model_names[model_id] = members[0]["model_name"]
                 for r in members:
                     member_names[(model_id, r["member_id"])] = (
@@ -478,39 +530,86 @@ def _weights_section_html(rows: list, all_members: list | None = None) -> str:
 
     blocks = []
     for model_id in sorted(avg_weights):
-        weights = avg_weights[model_id]
-        n = len(weights)
+        members_data = avg_weights[model_id]
+        sectored = has_sectors.get(model_id, False)
+        n = len(members_data)
         equal_w = 1.0 / n
-        max_w = max(weights.values())
-        spread = max_w - equal_w
         tuned = model_id in tuned_ids
 
-        table_rows = []
-        prev_group = None
-        for mem_id in sorted(weights):
-            w = weights[mem_id]
-            name = member_names[(model_id, mem_id)]
+        if sectored:
+            # per-sector columns: compute max weight per sector for coloring
+            sector_max = {}
+            for sector in range(4):
+                vals = [sectors.get(sector, equal_w) for sectors in members_data.values()]
+                sector_max[sector] = max(vals)
 
-            group = _group_label(name)
-            if group and group != prev_group:
-                table_rows.append(
-                    f'<tr class="weight-group-hdr"><th colspan="2">{group}</th></tr>'
-                )
-                prev_group = group
-
-            if spread > 0 and w > equal_w:
-                opacity = min((w - equal_w) / spread, 1.0) * 0.45
-            else:
-                opacity = 0.0
-            color = f'background:rgba(59,91,219,{opacity:.3f})' if opacity > 0.01 else ''
-            cell_style = f' style="{color}"' if color else ''
-
-            table_rows.append(
-                f'<tr>'
-                f'<th><span class="model-id-cell">{mem_id}</span> {name}</th>'
-                f'<td class="wt-pct"{cell_style}>{w:.1%}</td>'
-                f'</tr>'
+            header_cells = "".join(
+                f'<th class="wt-pct">{_SECTOR_LABELS[s]}<br>'
+                f'<span style="font-weight:400;color:#999">{_SECTOR_HOURS[s]}</span></th>'
+                for s in range(4)
             )
+            table_rows = []
+            prev_group = None
+            for mem_id in sorted(members_data):
+                sectors = members_data[mem_id]
+                name = member_names[(model_id, mem_id)]
+                group = _group_label(name)
+                if group and group != prev_group:
+                    table_rows.append(
+                        f'<tr class="weight-group-hdr">'
+                        f'<th colspan="5">{group}</th></tr>'
+                    )
+                    prev_group = group
+                cells = []
+                for sector in range(4):
+                    w = sectors.get(sector, equal_w)
+                    spread = sector_max[sector] - equal_w
+                    if spread > 0 and w > equal_w:
+                        opacity = min((w - equal_w) / spread, 1.0) * 0.45
+                    else:
+                        opacity = 0.0
+                    color = f'background:rgba(59,91,219,{opacity:.3f})' if opacity > 0.01 else ''
+                    style = f' style="{color}"' if color else ''
+                    cells.append(f'<td class="wt-pct"{style}>{w:.1%}</td>')
+                table_rows.append(
+                    f'<tr>'
+                    f'<th><span class="model-id-cell">{mem_id}</span> {name}</th>'
+                    f'{"".join(cells)}'
+                    f'</tr>'
+                )
+            thead = f'<thead><tr><th>Member</th>{header_cells}</tr></thead>'
+        else:
+            # no sector data — single avg weight column (legacy / untuned fallback)
+            all_weights_flat = [
+                list(sectors.values())[0]
+                for sectors in members_data.values()
+            ]
+            max_w = max(all_weights_flat)
+            spread = max_w - equal_w
+            table_rows = []
+            prev_group = None
+            for mem_id in sorted(members_data):
+                w = list(members_data[mem_id].values())[0]
+                name = member_names[(model_id, mem_id)]
+                group = _group_label(name)
+                if group and group != prev_group:
+                    table_rows.append(
+                        f'<tr class="weight-group-hdr"><th colspan="2">{group}</th></tr>'
+                    )
+                    prev_group = group
+                if spread > 0 and w > equal_w:
+                    opacity = min((w - equal_w) / spread, 1.0) * 0.45
+                else:
+                    opacity = 0.0
+                color = f'background:rgba(59,91,219,{opacity:.3f})' if opacity > 0.01 else ''
+                cell_style = f' style="{color}"' if color else ''
+                table_rows.append(
+                    f'<tr>'
+                    f'<th><span class="model-id-cell">{mem_id}</span> {name}</th>'
+                    f'<td class="wt-pct"{cell_style}>{w:.1%}</td>'
+                    f'</tr>'
+                )
+            thead = '<thead><tr><th>Member</th><th>Avg weight</th></tr></thead>'
 
         untrained_note = (
             '' if tuned
@@ -522,7 +621,7 @@ def _weights_section_html(rows: list, all_members: list | None = None) -> str:
             f' <span class="model-id-cell">(model {model_id})</span></h3>'
             f'<p class="window-label">equal weight: {equal_w:.1%} per member</p>'
             f'<table class="weight-table">'
-            f'<thead><tr><th>Member</th><th>Avg weight</th></tr></thead>'
+            f'{thead}'
             f'<tbody>{"".join(table_rows)}</tbody>'
             f'</table>'
             f'</div>'
@@ -2211,8 +2310,14 @@ def _ensemble_forecast_section(
         if tempest_fcst:
             tf_lines = []
             if tempest_fcst.get("temperature") is not None:
+                tf_temp_f = _to_f(tempest_fcst["temperature"])
+                delta_f = tf_temp_f - _to_f(temp_val) if temp_val is not None else None
+                delta_html = ""
+                if delta_f is not None:
+                    sign = "+" if delta_f >= 0 else ""
+                    delta_html = f' <span class="fcst-delta">{sign}{delta_f:.0f}\u00b0</span>'
                 tf_lines.append(
-                    f'<span class="detail-label">Temp</span> {_to_f(tempest_fcst["temperature"]):.0f}\u00b0F'
+                    f'<span class="detail-label">Temp</span> {tf_temp_f:.0f}\u00b0F{delta_html}'
                 )
             if tempest_fcst.get("dewpoint") is not None:
                 tf_lines.append(
@@ -2234,8 +2339,14 @@ def _ensemble_forecast_section(
         if nws:
             nws_lines = []
             if nws.get("temperature") is not None:
+                nws_temp_f = _to_f(nws["temperature"])
+                delta_f = nws_temp_f - _to_f(temp_val) if temp_val is not None else None
+                delta_html = ""
+                if delta_f is not None:
+                    sign = "+" if delta_f >= 0 else ""
+                    delta_html = f' <span class="fcst-delta">{sign}{delta_f:.0f}\u00b0</span>'
                 nws_lines.append(
-                    f'<span class="detail-label">Temp</span> {_to_f(nws["temperature"]):.0f}\u00b0F'
+                    f'<span class="detail-label">Temp</span> {nws_temp_f:.0f}\u00b0F{delta_html}'
                 )
             if nws.get("dewpoint") is not None:
                 nws_lines.append(
@@ -2293,7 +2404,7 @@ def _ensemble_forecast_section(
 
     issued_str = fmt.ts(issued_at) if issued_at else "&mdash;"
     return (
-        '<section class="section">\n'
+        '<section class="section" id="forecast">\n'
         '  <h2>Ensemble Forecast</h2>\n'
         f'  <div class="obs-time">issued {issued_str}</div>\n'
         f'  <div class="forecast-cards">{cards_html}</div>\n'
@@ -2631,7 +2742,7 @@ def _learnings_section_html(data: dict) -> str:
     no_data = '<p class="no-data">Not enough scored data yet. Check back after several forecast cycles.</p>'
 
     return (
-        '<section class="section">\n'
+        '<section class="section" id="learnings">\n'
         "  <h2>Learnings</h2>\n"
         '  <p class="learnings-intro">Tracked hypotheses that accumulate evidence over time.'
         " Thin data is expected early &mdash; the goal is to watch these relationships evolve.</p>\n"
@@ -2645,15 +2756,20 @@ def _learnings_section_html(data: dict) -> str:
         "<code>barogram tune</code> tracks the better performer over time."
         "</p>\n"
         + (
-            '  <div class="learnings-hyp-grid">'
-            '<div class="chart-container"><div id="learnings-mae-6h"></div></div>'
-            '<div class="chart-container"><div id="learnings-mae-12h"></div></div>'
-            "</div>\n"
+            (
+                '  <details class="collapsible-section">\n'
+                '  <summary>show charts</summary>\n'
+                '  <div class="learnings-hyp-grid">'
+                '<div class="chart-container"><div id="learnings-mae-6h"></div></div>'
+                '<div class="chart-container"><div id="learnings-mae-12h"></div></div>'
+                "</div>\n"
+                + f"  {weights_html}\n"
+                + "  </details>\n"
+            )
             if has_mae
             else no_data + "\n"
         )
-        + f"  {weights_html}\n"
-        "\n"
+        + "\n"
         # --- Hypothesis B ---
         '  <h3 class="obs-subhead">Hypothesis B: Solar clearness index vs. NWS sky cover</h3>\n'
         '  <p class="learnings-desc">'
@@ -2666,7 +2782,10 @@ def _learnings_section_html(data: dict) -> str:
         "NWS sky cover is never used as a model input &mdash; this is validation only."
         "</p>\n"
         + (
+            '  <details class="collapsible-section">\n'
+            '  <summary>show chart</summary>\n'
             '  <div class="chart-container"><div id="learnings-clearness-chart"></div></div>\n'
+            '  </details>\n'
             if has_clearness
             else no_data + "\n"
         )
@@ -2683,10 +2802,13 @@ def _learnings_section_html(data: dict) -> str:
         "A flat or rising line means the weighting is not converging."
         "</p>\n"
         + (
+            '  <details class="collapsible-section">\n'
+            '  <summary>show charts</summary>\n'
             '  <div class="learnings-hyp-grid">'
             '<div class="chart-container"><div id="learnings-hyp-c-6h"></div></div>'
             '<div class="chart-container"><div id="learnings-hyp-c-24h"></div></div>'
             "</div>\n"
+            "  </details>\n"
             if has_hyp_c
             else no_data + "\n"
         )
@@ -2702,7 +2824,10 @@ def _learnings_section_html(data: dict) -> str:
         "If pressure MAE starts dropping back toward dewpoint level, something has changed."
         "</p>\n"
         + (
+            '  <details class="collapsible-section">\n'
+            '  <summary>show chart</summary>\n'
             '  <div class="chart-container"><div id="learnings-hyp-d-chart"></div></div>\n'
+            '  </details>\n'
             if has_hyp_d
             else no_data + "\n"
         )
@@ -2718,10 +2843,13 @@ def _learnings_section_html(data: dict) -> str:
         "be meaningful."
         "</p>\n"
         + (
+            '  <details class="collapsible-section">\n'
+            '  <summary>show charts</summary>\n'
             '  <div class="learnings-hyp-grid">'
             '<div class="chart-container"><div id="learnings-hyp-e-6h"></div></div>'
             '<div class="chart-container"><div id="learnings-hyp-e-24h"></div></div>'
             "</div>\n"
+            "  </details>\n"
             if has_hyp_e
             else no_data + "\n"
         )
@@ -2735,7 +2863,10 @@ def _learnings_section_html(data: dict) -> str:
         "the dominant model here gets high weight in that column."
         "</p>\n"
         + (
+            '  <details class="collapsible-section">\n'
+            '  <summary>show chart</summary>\n'
             '  <div class="chart-container"><div id="learnings-hyp-f-chart"></div></div>\n'
+            '  </details>\n'
             if has_hyp_f
             else no_data + "\n"
         )
@@ -2752,10 +2883,13 @@ def _learnings_section_html(data: dict) -> str:
         "explanation &mdash; not the diurnal cycle."
         "</p>\n"
         + (
+            '  <details class="collapsible-section">\n'
+            '  <summary>show charts</summary>\n'
             '  <div class="learnings-hyp-grid">'
             '<div class="chart-container"><div id="learnings-hyp-g-6h"></div></div>'
             '<div class="chart-container"><div id="learnings-hyp-g-24h"></div></div>'
             "</div>\n"
+            "  </details>\n"
             if has_hyp_g
             else no_data + "\n"
         )
@@ -3394,6 +3528,101 @@ def _overall_accuracy_html(rows: list) -> str:
     )
 
 
+def _trend_values(ys: list) -> list | None:
+    """Least-squares linear trend over ys (integer x-indices); returns y for every index."""
+    pairs = [(i, y) for i, y in enumerate(ys) if y is not None]
+    if len(pairs) < 2:
+        return None
+    n = len(pairs)
+    xs = [p[0] for p in pairs]
+    yv = [p[1] for p in pairs]
+    x_mean = sum(xs) / n
+    y_mean = sum(yv) / n
+    num = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, yv))
+    den = sum((x - x_mean) ** 2 for x in xs)
+    if den == 0:
+        return None
+    slope = num / den
+    intercept = y_mean - slope * x_mean
+    return [round(intercept + slope * i, 2) for i in range(len(ys))]
+
+
+def _skill_timeseries_data(rows: list) -> dict:
+    """Pivot per-day avg_skill rows into per-model series.
+
+    Skill is already computed per (variable, lead_hours) and averaged in the DB query,
+    so this just reorganises the flat rows into parallel lists for Plotly.
+    """
+    from collections import defaultdict
+    by_day: dict = defaultdict(dict)
+    for r in rows:
+        by_day[r["day"]][r["model_id"]] = r["avg_skill"]
+    days, ensemble, nws, tempest = [], [], [], []
+    for day in sorted(by_day):
+        days.append(day)
+        for out_list, mid in [(ensemble, 100), (nws, 200), (tempest, 201)]:
+            skill = by_day[day].get(mid)
+            out_list.append(round(skill, 1) if skill is not None else None)
+    return {"days": days, "ensemble": ensemble, "nws": nws, "tempest": tempest}
+
+
+def _skill_timeseries_html(rows_14d: list, rows_120d: list, rows_alltime: list) -> str:
+    """Heading + three window-toggled chart containers for the skill-over-time section."""
+    windows = [("14d", ""), ("120d", ' style="display:none"'), ("alltime", ' style="display:none"')]
+    parts = [
+        '<h3 class="obs-subhead">Skill Over Time</h3>',
+        '<p class="chart-legend-note">Daily forecast skill vs. climatological mean (0% line). '
+        'Averaged across temperature, dew point, and pressure.</p>',
+    ]
+    for wid, hidden in windows:
+        parts.append(
+            f'<div id="skill-timeseries-{wid}"{hidden}>'
+            f'<div class="chart-container"><div id="skill-timeseries-chart-{wid}"></div></div>'
+            f'</div>'
+        )
+    return "\n".join(parts)
+
+
+def _skill_timeseries_js(rows_14d: list, rows_120d: list, rows_alltime: list) -> str:
+    """Plotly initialization calls for the three skill-over-time charts."""
+    windows = [("14d", rows_14d), ("120d", rows_120d), ("alltime", rows_alltime)]
+    calls = []
+    for wid, rows in windows:
+        d = _skill_timeseries_data(rows)
+        eid = f"skill-timeseries-chart-{wid}"
+        days_j = json.dumps(d["days"])
+        ens_j = json.dumps(d["ensemble"])
+        nws_j = json.dumps(d["nws"])
+        tst_j = json.dumps(d["tempest"])
+        trend = _trend_values(d["ensemble"])
+        trend_j = json.dumps(trend) if trend else "[]"
+        calls.append(
+            f'Plotly.react("{eid}",['
+            f'{{x:{days_j},y:{ens_j},name:"barogram_ensemble",type:"scatter",'
+            f'mode:"lines+markers",connectgaps:false,line:{{color:"#1f77b4"}},'
+            f'marker:{{size:4}}}},'
+            f'{{x:{days_j},y:{nws_j},name:"nws",type:"scatter",'
+            f'mode:"lines+markers",connectgaps:false,line:{{color:"#ff7f0e"}},'
+            f'marker:{{size:4}}}},'
+            f'{{x:{days_j},y:{tst_j},name:"tempest_forecast",type:"scatter",'
+            f'mode:"lines+markers",connectgaps:false,line:{{color:"#2ca02c"}},'
+            f'marker:{{size:4}}}},'
+            f'{{x:{days_j},y:{trend_j},name:"ensemble trend",type:"scatter",'
+            f'mode:"lines",connectgaps:true,line:{{color:"#1f77b4",dash:"dash",width:1.5}},'
+            f'showlegend:true}}'
+            f'],{{'
+            f'height:340,margin:{{t:30,b:60,l:50,r:16}},'
+            f'paper_bgcolor:"white",plot_bgcolor:"#fafafa",'
+            f'yaxis:{{title:"Skill (%)",zeroline:true,zerolinecolor:"#888",zerolinewidth:2}},'
+            f'xaxis:{{type:"date"}},'
+            f'legend:{{x:0.01,y:0.99,xanchor:"left",yanchor:"top"}},'
+            f'shapes:[{{type:"line",xref:"paper",x0:0,x1:1,y0:0,y1:0,'
+            f'line:{{color:"#888",width:2,dash:"dash"}}}}]'
+            f'}},{{responsive:true}});'
+        )
+    return "\n".join(calls)
+
+
 def _accuracy_table_js() -> str:
     return """\
 function updateAccTable(varName) {
@@ -3421,13 +3650,17 @@ document.querySelectorAll('.acc-filter-btn').forEach(function(btn) {
 
 function updateAccWindow(win) {
     ['14d', '120d', 'alltime'].forEach(function(w) {
-        var oel = document.getElementById('acc-overall-' + w);
-        var lel = document.getElementById('acc-lead-' + w);
-        if (oel) oel.style.display = (w === win) ? '' : 'none';
-        if (lel) lel.style.display = (w === win) ? '' : 'none';
+        ['acc-overall-', 'acc-lead-', 'skill-timeseries-'].forEach(function(pfx) {
+            var el = document.getElementById(pfx + w);
+            if (el) el.style.display = (w === win) ? '' : 'none';
+        });
     });
     var activeBtn = document.querySelector('.acc-filter-btn.active');
     if (activeBtn) updateAccTable(activeBtn.dataset.var);
+    window.setTimeout(function() {
+        var c = document.getElementById('skill-timeseries-chart-' + win);
+        if (c) Plotly.Plots.resize(c);
+    }, 0);
 }
 
 document.querySelectorAll('.acc-window-btn').forEach(function(btn) {
@@ -3559,6 +3792,9 @@ def generate(
     acc_rows_14d = _acc[_14d]
     acc_rows_120d = _acc[_120d]
     acc_rows_alltime = _acc[0]
+    _skill_ts = db.skill_timeseries_multi(conn_out, [_14d, _120d, 0])
+    skill_ts_html = _skill_timeseries_html(_skill_ts[_14d], _skill_ts[_120d], _skill_ts[0])
+    skill_ts_js = _skill_timeseries_js(_skill_ts[_14d], _skill_ts[_120d], _skill_ts[0])
     _counts = db.accuracy_run_count_multi(conn_out, [_14d, _120d, 0])
     acc_count_14d = _counts[_14d]
     acc_count_120d = _counts[_120d]
@@ -3729,16 +3965,24 @@ def generate(
 <div class="container">
 
 <header>
-  <h1>barogram</h1>
+  <div class="header-left">
+    <h1>barogram</h1>
+    <nav class="jump-nav">
+      <a href="#conditions">Conditions</a>
+      <a href="#forecast">Forecast</a>
+      <a href="#verification">Verification</a>
+      <a href="#analysis">Analysis</a>
+      <a href="#learnings">Learnings</a>
+    </nav>
+  </div>
   <div class="generated">
     <span>generated {generated_at}</span>
     <span>last forecast: {last_forecast_str}</span>
     <span>last tune: {last_tune_str}</span>
   </div>
 </header>
-
 {staleness_banner}
-<section class="section">
+<section class="section" id="conditions">
   <h2>Latest Conditions</h2>
   <div class="conditions-grid">
     {tempest_card}
@@ -3749,16 +3993,23 @@ def generate(
 
 {ensemble_section}
 
-<section class="section">
+<section class="section" id="verification">
   <h2>Verification</h2>
   <div class="mae-filter-bar">{acc_window_btns}</div>
   <h3 class="obs-subhead">Overall Forecast Skill</h3>
   <p class="chart-legend-note">Skill score vs. climatological mean, averaged across all variables and lead times. 100% = perfect · 0% = matches climatological mean · negative = worse than climatological mean.</p>
   <div class="table-scroll">{overall_accuracy_html}</div>
+  {skill_ts_html}
+  <details class="collapsible-section">
+    <summary class="obs-subhead">Recent Misses (14 days)</summary>
+    <p class="chart-legend-note">Largest forecast errors per source over the last 14 days, sorted biggest miss first within each group.</p>
+    <div class="table-scroll">{recent_misses_html}</div>
+  </details>
   <h3 class="obs-subhead">Forecast Skill by Lead Time</h3>
   <p class="chart-legend-note">Skill score vs. climatological mean at each lead time for the selected variable. Negative = worse than climatology.</p>
   <div class="mae-filter-bar">{acc_filter_btns}</div>
   <div class="table-scroll">{acc_lead_table_html}</div>
+  <h3 class="obs-subhead section-dig-deeper">Detailed MAE</h3>
   <div class="verification-primary">
     {table_30}
   </div>
@@ -3766,11 +4017,6 @@ def generate(
     {table_10}
     {table_7d}
   </div>
-  <details class="collapsible-section">
-    <summary class="obs-subhead">Recent Misses (14 days)</summary>
-    <p class="chart-legend-note">Largest forecast errors per source over the last 14 days, sorted biggest miss first within each group.</p>
-    <div class="table-scroll">{recent_misses_html}</div>
-  </details>
   <h3 class="obs-subhead">MAE over time</h3>
   <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button><button id="raw-toggle" class="mae-raw-btn">Raw values</button></div>
   <p class="chart-legend-note">Grey: reference lines (climo = long-dash, persistence = dotted) &nbsp;·&nbsp; Per-run detail: solid with dash-dot rolling avg overlay</p>
@@ -3779,7 +4025,7 @@ def generate(
   </div>
 </section>
 
-<section class="section">
+<section class="section analysis-section" id="analysis">
   <h2>Model Analysis</h2>
 
   <h3 class="obs-subhead">Bias Over Time</h3>
@@ -3843,6 +4089,7 @@ def generate(
 {_error_dist_js(error_dist)}
 {_learnings_js(learnings)}
 {_accuracy_table_js()}
+{skill_ts_js}
 </script>
 </body>
 </html>
