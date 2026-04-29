@@ -615,7 +615,7 @@ def _weights_section_html(rows: list, all_members: list | None = None) -> str:
             '' if tuned
             else ' <span style="color:#aaa;font-style:italic;font-weight:400">(not tuned)</span>'
         )
-        blocks.append(
+        block_inner = (
             f'<div class="weights-model-block">'
             f'<h3>{model_names[model_id]}{untrained_note}'
             f' <span class="model-id-cell">(model {model_id})</span></h3>'
@@ -626,13 +626,27 @@ def _weights_section_html(rows: list, all_members: list | None = None) -> str:
             f'</table>'
             f'</div>'
         )
+        blocks.append((model_id, block_inner))
 
-    return (
-        '<details class="score-details" style="margin-top:16px">'
-        '<summary>Member weights</summary>'
-        f'<div class="weights-section">{"".join(blocks)}</div>'
-        '</details>'
+    _ENSEMBLE_ID = 100
+    ensemble_blocks = [b for mid, b in blocks if mid == _ENSEMBLE_ID]
+    other_blocks = [(mid, b) for mid, b in blocks if mid != _ENSEMBLE_ID]
+
+    ensemble_html = (
+        f'<div class="weights-section">{"".join(ensemble_blocks)}</div>'
+        if ensemble_blocks else ''
     )
+    others_html = "".join(
+        f'<details class="collapsible-section" style="margin-top:12px">'
+        f'<summary>{model_names[mid]}'
+        f' <span class="model-id-cell" style="font-weight:400">(model {mid})</span>'
+        f'</summary>'
+        f'<div class="weights-section" style="margin-top:8px">{b}</div>'
+        f'</details>'
+        for mid, b in other_blocks
+    )
+
+    return ensemble_html + others_html
 
 
 def _table_data(rows) -> dict:
@@ -3972,6 +3986,7 @@ def generate(
       <a href="#forecast">Forecast</a>
       <a href="#verification">Verification</a>
       <a href="#analysis">Analysis</a>
+      <a href="#weights">Weights</a>
       <a href="#learnings">Learnings</a>
     </nav>
   </div>
@@ -4057,6 +4072,11 @@ def generate(
   <h3 class="obs-subhead">Error Distribution</h3>
   <div class="mae-filter-bar"><span class="filter-label">Variable</span>{error_dist_var_btns}<span class="filter-label filter-sep-left">Lead</span>{error_dist_lead_btns}</div>
   <div class="chart-container"><div id="error-dist-chart"></div></div>
+</section>
+
+<section class="section" id="weights">
+  <h2>Weights</h2>
+  <p class="learnings-intro">Inverse-MAE member weights computed by <code>barogram tune</code>. Higher weight means the tuner is trusting that member more based on recent scoring history. Sector columns show how trust shifts across time-of-day.</p>
   {weights_section}
 </section>
 
