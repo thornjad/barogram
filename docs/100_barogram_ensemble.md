@@ -28,8 +28,10 @@ As new base models are added, they get a new member row here (member_id == base 
 
 Before enough scoring history exists, all members receive equal weight. Once the `tune`
 command has sufficient data (default ≥ 3 scored rows per cell), it computes inverse-MAE
-weights per (member_id, variable, lead_hours) and stores them in the weights table.
-The ensemble reads these at forecast time.
+weights per (member_id, variable, lead_hours, sector) and stores them in the weights
+table. The ensemble reads these at forecast time, deriving the sector from each cell's
+valid_at hour (0=night 00-05, 1=morning 06-11, 2=afternoon 12-17, 3=evening 18-23).
+If no weight is found for a given sector, the member falls back to equal weighting.
 
 The `spread` field on member_id=0 rows is the unweighted population standard deviation
 across all contributing members for that (variable, lead_hours) cell.

@@ -11,6 +11,7 @@
 | 7 | airmass_diurnal | [007_airmass_diurnal.md](007_airmass_diurnal.md) |
 | 8 | analog | [008_analog.md](008_analog.md) |
 | 9 | surface_signs | [009_surface_signs.md](009_surface_signs.md) |
+| 10 | synoptic_state_machine | [010_synoptic_state_machine.md](010_synoptic_state_machine.md) |
 | 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
 
 # System

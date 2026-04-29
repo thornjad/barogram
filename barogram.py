@@ -24,6 +24,7 @@ import models.nws as nws_model
 import models.persistence as persistence
 import models.pressure_tendency as pressure_tendency
 import models.surface_signs as surface_signs
+import models.synoptic_state_machine as synoptic_state_machine
 import models.tempest_forecast as tempest_forecast_model
 import models.weighted_climatological_mean as weighted_climatological_mean
 
@@ -37,6 +38,7 @@ _MODELS = [
     airmass_diurnal,
     analog,
     surface_signs,
+    synoptic_state_machine,
     nws_model,
     tempest_forecast_model,
     barogram_ensemble,  # must be last: reads base model rows from current run
@@ -495,55 +497,81 @@ def cmd_tune(args, conf):
     conn_out = db.open_output_db(conf.output_db)
     db.run_migrations(conn_out, migrations_dir)
 
+    _SECTOR_LABELS = {0: "night 00-05", 1: "morning 06-11", 2: "afternoon 12-17", 3: "evening 18-23"}
+
     ensemble_model_ids = {m.MODEL_ID for m in _MODELS if getattr(m, "NEEDS_WEIGHTS", False)}
 
     summary = db.score_summary(conn_out)
+    sector_summary = db.score_summary_by_sector(conn_out)
 
-    scored = [
-        r for r in summary
+    # pooled MAE across all sectors; only qualifying cells
+    pooled_mae = {
+        (r["model_id"], r["member_id"], r["variable"], r["lead_hours"]): r["avg_mae"]
+        for r in summary
         if r["model_id"] in ensemble_model_ids
         and r["member_id"] > 0
         and r["n"] >= args.min_runs
         and r["avg_mae"] is not None
         and r["avg_mae"] > 0
-    ]
+    }
+    model_names = {r["model_id"]: r["model"] for r in summary if r["model_id"] in ensemble_model_ids}
 
-    if not scored:
+    if not pooled_mae:
         print(f"no qualifying data (need >= {args.min_runs} scored rows per cell; "
               f"run 'score' first or lower --min-runs)")
         return
 
-    groups = defaultdict(dict)
-    model_names = {}
-    for r in scored:
-        groups[(r["model_id"], r["variable"], r["lead_hours"])][r["member_id"]] = r["avg_mae"]
-        model_names[r["model_id"]] = r["model"]
+    # sector MAE: (model_id, member_id, variable, lead_hours, sector) -> (avg_mae, n)
+    sector_mae = {}
+    for r in sector_summary:
+        if r["model_id"] not in ensemble_model_ids or r["member_id"] <= 0:
+            continue
+        sector_mae[(r["model_id"], r["member_id"], r["variable"],
+                    r["lead_hours"], r["sector"])] = (r["avg_mae"], r["n"])
+
+    # group pooled data by (model_id, variable, lead_hours) -> {member_id: mae}
+    pooled_groups: dict = defaultdict(dict)
+    for (model_id, member_id, variable, lead_hours), mae in pooled_mae.items():
+        pooled_groups[(model_id, variable, lead_hours)][member_id] = mae
 
     all_weights = {model_id: {} for model_id in ensemble_model_ids}
-    for (model_id, variable, lead_hours), mae_by_member in groups.items():
-        raw = {mid: 1.0 / mae for mid, mae in mae_by_member.items()}
-        raw_total = sum(raw.values())
-        fractions = {mid: w / raw_total for mid, w in raw.items()}
-
-        n = len(fractions)
-        min_w = args.floor / n
-        floored = {mid: max(f, min_w) for mid, f in fractions.items()}
-        floored_total = sum(floored.values())
-        final = {mid: w / floored_total for mid, w in floored.items()}
-
-        for mid, w in final.items():
-            all_weights[model_id][(mid, variable, lead_hours)] = w
+    for (model_id, variable, lead_hours), pooled_by_member in pooled_groups.items():
+        for sector in range(4):
+            blended = {}
+            for mid, p_mae in pooled_by_member.items():
+                s_data = sector_mae.get((model_id, mid, variable, lead_hours, sector))
+                if s_data and s_data[1] >= args.min_runs and s_data[0] > 0:
+                    blended[mid] = (1 - args.pool_alpha) * s_data[0] + args.pool_alpha * p_mae
+                else:
+                    blended[mid] = p_mae
+            raw = {mid: 1.0 / mae for mid, mae in blended.items()}
+            raw_total = sum(raw.values())
+            fractions = {mid: w / raw_total for mid, w in raw.items()}
+            n_members = len(fractions)
+            min_w = args.floor / n_members
+            floored = {mid: max(f, min_w) for mid, f in fractions.items()}
+            floored_total = sum(floored.values())
+            final = {mid: w / floored_total for mid, w in floored.items()}
+            for mid, w in final.items():
+                all_weights[model_id][(mid, variable, lead_hours, sector)] = w
 
     for model_id in sorted(all_weights):
         name = model_names.get(model_id, f"model {model_id}")
         if not all_weights[model_id]:
             print(f"\n{name}: no qualifying data")
             continue
-        print(f"\n{name}:")
-        for (mid, variable, lead_hours), weight in sorted(all_weights[model_id].items()):
-            n = len(groups[(model_id, variable, lead_hours)])
-            equal_w = 1.0 / n
-            print(f"  member={mid:2d}  {variable:12s}  lead={lead_hours:2d}h  "
+        print(f"\npool_alpha={args.pool_alpha:.2f}")
+        print(f"{name}:")
+        cur_sector = None
+        for key in sorted(all_weights[model_id], key=lambda k: (k[3], k[2], k[0], k[1])):
+            mid, variable, lead_hours, sector = key
+            weight = all_weights[model_id][key]
+            if sector != cur_sector:
+                print(f"  sector={sector} ({_SECTOR_LABELS[sector]}):")
+                cur_sector = sector
+            group_size = len(pooled_groups.get((model_id, variable, lead_hours), {}))
+            equal_w = 1.0 / group_size if group_size else 1.0
+            print(f"    member={mid:2d}  {variable:12s}  lead={lead_hours:2d}h  "
                   f"weight={weight:.4f}  (equal={equal_w:.4f})")
 
     if args.dry_run:
@@ -616,6 +644,11 @@ def main():
     p.add_argument(
         "--floor", type=float, default=0.5, metavar="F",
         help="min weight as a multiple of equal weight share (default: 0.5)",
+    )
+    p.add_argument(
+        "--pool-alpha", type=float, default=0.10, metavar="A",
+        help="pooled-weight blend fraction (0–1); permanent floor mixing sector and "
+             "all-data weights (default: 0.10)",
     )
     p.add_argument(
         "--dry-run", action="store_true",
