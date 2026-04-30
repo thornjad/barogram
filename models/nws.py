@@ -36,7 +36,7 @@ def _fetch(lat: float, lon: float) -> dict[int, dict]:
         hourly_url = points["properties"]["forecastHourly"]
 
         req = urllib.request.Request(hourly_url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=45) as resp:
             hourly = json.loads(resp.read())
 
         result: dict[int, dict] = {}
