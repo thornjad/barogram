@@ -423,7 +423,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     .conditions-grid, .charts-grid { grid-template-columns: 1fr; }
 }
 .forecast-cards { display:flex; gap:12px; overflow-x:auto; padding-bottom:4px; }
-.forecast-card { flex:0 0 auto; min-width:110px; background:#fff; border:1px solid #ddd; border-radius:8px; padding:14px 16px; text-align:center; }
+.forecast-card { flex:0 0 auto; min-width:140px; background:#fff; border:1px solid #ddd; border-radius:8px; padding:14px 16px; text-align:center; }
 .forecast-card.now-card { border-color:#b0c4de; background:#f5f8fc; }
 .fcst-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#888; margin-bottom:8px; }
 .fcst-temp { font-size:32px; font-weight:700; color:#1a1a1a; line-height:1; }
@@ -434,6 +434,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .fcst-ref { font-size:11px; color:#999; margin-top:8px; padding-top:6px; border-top:1px solid #f0f0f0; text-align:left; line-height:1.8; }
 .fcst-ref-lbl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#ccc; display:block; line-height:1.4; }
 .fcst-ref .detail-label { color:#bbb; }
+.fcst-ref-temp { font-size:15px; }
 .fcst-delta { font-size:10px; color:#999; margin-left:3px; }
 .jump-nav {
     display: flex;
@@ -2331,7 +2332,7 @@ def _ensemble_forecast_section(
                     sign = "+" if delta_f >= 0 else ""
                     delta_html = f' <span class="fcst-delta">{sign}{delta_f:.0f}\u00b0</span>'
                 tf_lines.append(
-                    f'<span class="detail-label">Temp</span> {tf_temp_f:.0f}\u00b0F{delta_html}'
+                    f'<span class="detail-label">Temp</span> <span class="fcst-ref-temp">{tf_temp_f:.0f}\u00b0F</span>{delta_html}'
                 )
             if tempest_fcst.get("dewpoint") is not None:
                 tf_lines.append(
@@ -2360,7 +2361,7 @@ def _ensemble_forecast_section(
                     sign = "+" if delta_f >= 0 else ""
                     delta_html = f' <span class="fcst-delta">{sign}{delta_f:.0f}\u00b0</span>'
                 nws_lines.append(
-                    f'<span class="detail-label">Temp</span> {nws_temp_f:.0f}\u00b0F{delta_html}'
+                    f'<span class="detail-label">Temp</span> <span class="fcst-ref-temp">{nws_temp_f:.0f}\u00b0F</span>{delta_html}'
                 )
             if nws.get("dewpoint") is not None:
                 nws_lines.append(
