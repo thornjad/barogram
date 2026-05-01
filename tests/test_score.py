@@ -23,16 +23,16 @@ def _insert_forecast(conn_out, variable="temperature", value=20.0, valid_at=None
 
 
 def _insert_obs(conn_in, ts, air_temp=18.5, dew_point=10.0,
-                station_pressure=1013.0, wind_avg=3.0):
+                station_pressure=1013.0, wind_avg=3.0, precip_accum_day=None):
     conn_in.execute(
         """
         insert into tempest_obs
             (station_id, timestamp, air_temp, dew_point,
              station_pressure, wind_avg, wind_gust, wind_direction,
              precip_accum_day, solar_radiation, uv_index, lightning_count)
-        values ('KTEST', ?, ?, ?, ?, ?, null, null, null, null, null, null)
+        values ('KTEST', ?, ?, ?, ?, ?, null, null, ?, null, null, null)
         """,
-        (ts, air_temp, dew_point, station_pressure, wind_avg),
+        (ts, air_temp, dew_point, station_pressure, wind_avg, precip_accum_day),
     )
 
 
@@ -130,3 +130,29 @@ def test_variable_column_mapping():
         row = conn_out.execute("select observed from forecasts").fetchone()
         assert abs(row["observed"] - expected_obs) < 1e-9, \
             f"variable {variable!r} mapped to wrong obs column"
+
+
+def test_score_precip_prob_rain():
+    """precip_prob forecast scores 1.0 observed when precip delta > 0.1mm."""
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    _insert_obs(conn_in, _PAST - 600, precip_accum_day=0.0)
+    _insert_obs(conn_in, _PAST + 600, precip_accum_day=1.0)
+    _insert_forecast(conn_out, "precip_prob", 0.8, _PAST)
+    score.run(conn_in, conn_out)
+    row = conn_out.execute("select observed, mae from forecasts").fetchone()
+    assert row["observed"] == 1.0
+    assert abs(row["mae"] - 0.2) < 1e-6
+
+
+def test_score_precip_prob_no_rain():
+    """precip_prob forecast scores 0.0 observed when no precip accumulation."""
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    _insert_obs(conn_in, _PAST - 600, precip_accum_day=0.0)
+    _insert_obs(conn_in, _PAST + 600, precip_accum_day=0.0)
+    _insert_forecast(conn_out, "precip_prob", 0.4, _PAST)
+    score.run(conn_in, conn_out)
+    row = conn_out.execute("select observed, mae from forecasts").fetchone()
+    assert row["observed"] == 0.0
+    assert abs(row["mae"] - 0.4) < 1e-6

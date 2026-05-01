@@ -232,3 +232,27 @@ def test_ensemble_inputs_excludes_nonzero_member_id():
     )
     rows = db.ensemble_inputs(conn, 1700000000)
     assert rows == []
+
+
+def test_climo_precip_probability_no_precip(make_input_db_with_precip):
+    import datetime
+    conn, ts = make_input_db_with_precip
+    t = datetime.datetime.fromtimestamp(ts)
+    result = db.climo_precip_probability(conn, t.month, t.hour, min_obs=1)
+    assert result == 0.0
+
+
+def test_climo_precip_probability_with_precip(make_input_db_with_precip_rain):
+    import datetime
+    conn, ts = make_input_db_with_precip_rain
+    t = datetime.datetime.fromtimestamp(ts)
+    result = db.climo_precip_probability(conn, t.month, t.hour, min_obs=1)
+    assert result == 1.0
+
+
+def test_climo_precip_probability_insufficient(make_input_db_with_precip):
+    import datetime
+    conn, ts = make_input_db_with_precip
+    t = datetime.datetime.fromtimestamp(ts)
+    result = db.climo_precip_probability(conn, t.month, t.hour, min_obs=9999)
+    assert result is None

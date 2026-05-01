@@ -23,6 +23,45 @@ def _build_obs_index(obs_rows: list) -> tuple[list, dict]:
     return sorted_ts, obs_by_ts
 
 
+def _find_surrounding_obs(
+    sorted_ts: list, obs_by_ts: dict, target: int, window_sec: int = 1800
+) -> tuple:
+    """Return (pre_obs, post_obs) — obs at or before AND at or after target within window.
+
+    pre_obs is the nearest obs with timestamp <= target.
+    post_obs is the nearest obs with timestamp >= target.
+    Either may be None if no obs exists in that half-window.
+    """
+    i = bisect.bisect_right(sorted_ts, target)
+    pre = None
+    post = None
+    if i > 0:
+        pre_ts = sorted_ts[i - 1]
+        if abs(pre_ts - target) <= window_sec:
+            pre = obs_by_ts[pre_ts]
+    if i < len(sorted_ts):
+        post_ts = sorted_ts[i]
+        if abs(post_ts - target) <= window_sec:
+            post = obs_by_ts[post_ts]
+    return pre, post
+
+
+def _precip_occurred(pre_obs, post_obs) -> float | None:
+    """Return 1.0 if measurable precip accumulated between two obs, 0.0 if not, None if unknown."""
+    if pre_obs is None or post_obs is None:
+        return None
+    pre_p = pre_obs["precip_accum_day"]
+    post_p = post_obs["precip_accum_day"]
+    if pre_p is None or post_p is None:
+        return None
+    from datetime import datetime
+    pre_date = datetime.fromtimestamp(pre_obs["timestamp"]).date()
+    post_date = datetime.fromtimestamp(post_obs["timestamp"]).date()
+    if pre_date != post_date:
+        return None  # midnight crossing — can't reliably compute delta
+    return 1.0 if max(0.0, post_p - pre_p) > 0.1 else 0.0
+
+
 def _find_nearest_obs(
     sorted_ts: list, obs_by_ts: dict, target: int, window_sec: int = 1800
 ) -> sqlite3.Row | None:
@@ -78,14 +117,23 @@ def run(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
         if obs is None:
             skipped += 1
             continue
-        col = _OBS_COLUMN.get(row["variable"])
-        if col is None:
-            skipped += 1
-            continue
-        observed = obs[col]
-        if observed is None:
-            skipped += 1
-            continue
+
+        if row["variable"] == "precip_prob":
+            pre, post = _find_surrounding_obs(sorted_ts, obs_by_ts, row["valid_at"])
+            observed = _precip_occurred(pre, post)
+            if observed is None:
+                skipped += 1
+                continue
+        else:
+            col = _OBS_COLUMN.get(row["variable"])
+            if col is None:
+                skipped += 1
+                continue
+            observed = obs[col]
+            if observed is None:
+                skipped += 1
+                continue
+
         error = row["value"] - observed
         scored_rows.append({
             "id": row["id"],

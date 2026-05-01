@@ -2,6 +2,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+import pytest
+
 import db as dbmod
 
 _MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
@@ -66,6 +68,42 @@ def make_output_db() -> sqlite3.Connection:
     conn.execute("pragma foreign_keys=on")
     dbmod.run_migrations(conn, _MIGRATIONS_DIR)
     return conn
+
+
+@pytest.fixture
+def make_input_db_with_precip():
+    """Input DB with two obs on the same day, no precip accumulation."""
+    conn = make_input_db()
+    ts = int(time.time()) - 7200
+    conn.execute(
+        "insert into tempest_obs (station_id, timestamp, air_temp, dew_point, "
+        "station_pressure, wind_avg, precip_accum_day) values (?,?,20,12,1013,2,0.0)",
+        ("KTEST", ts - 3600),
+    )
+    conn.execute(
+        "insert into tempest_obs (station_id, timestamp, air_temp, dew_point, "
+        "station_pressure, wind_avg, precip_accum_day) values (?,?,20,12,1013,2,0.0)",
+        ("KTEST", ts),
+    )
+    return conn, ts
+
+
+@pytest.fixture
+def make_input_db_with_precip_rain():
+    """Input DB with two obs on the same day, second shows 1 mm accumulation."""
+    conn = make_input_db()
+    ts = int(time.time()) - 7200
+    conn.execute(
+        "insert into tempest_obs (station_id, timestamp, air_temp, dew_point, "
+        "station_pressure, wind_avg, precip_accum_day) values (?,?,20,12,1013,2,0.0)",
+        ("KTEST", ts - 3600),
+    )
+    conn.execute(
+        "insert into tempest_obs (station_id, timestamp, air_temp, dew_point, "
+        "station_pressure, wind_avg, precip_accum_day) values (?,?,20,12,1013,2,1.0)",
+        ("KTEST", ts),
+    )
+    return conn, ts
 
 
 def make_obs(ts: int | None = None) -> dict:

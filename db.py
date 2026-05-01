@@ -189,8 +189,7 @@ def climo_bucket_means(
     hour: int,
     min_obs: int = 30,
 ) -> dict[str, float | None]:
-    row = conn.execute(
-        """
+    _sql = """
         select
             avg(t.air_temp)           as temperature,
             avg(t.dew_point)          as dewpoint,
@@ -201,9 +200,21 @@ def climo_bucket_means(
         where s.source = 'tempest'
           and cast(strftime('%m', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) = ?
           and cast(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) = ?
-        """,
-        (month, hour),
-    ).fetchone()
+        """
+    _sql_fallback = """
+        select
+            avg(t.air_temp)           as temperature,
+            avg(t.dew_point)          as dewpoint,
+            avg(t.station_pressure)   as pressure,
+            count(*)                  as n
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and cast(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) = ?
+        """
+    row = conn.execute(_sql, (month, hour)).fetchone()
+    if row is None or row["n"] < min_obs:
+        row = conn.execute(_sql_fallback, (hour,)).fetchone()
     if row is None or row["n"] < min_obs:
         return {}
     return {
@@ -213,12 +224,56 @@ def climo_bucket_means(
     }
 
 
+def climo_precip_probability(
+    conn: sqlite3.Connection,
+    month: int,
+    hour: int,
+    min_obs: int = 30,
+) -> float | None:
+    """Fraction of (month, hour) obs where measurable precip accumulated since previous obs.
+
+    Uses LAG within each calendar day so midnight resets don't create false positives.
+    Falls back to all-months same hour when the specific month bucket has fewer than
+    min_obs qualifying rows.
+    Returns None when fewer than min_obs rows exist even after fallback.
+    """
+    _cte = """
+        with lagged as (
+            select
+                cast(strftime('%m', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) as obs_month,
+                cast(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) as obs_hour,
+                t.precip_accum_day,
+                lag(t.precip_accum_day) over (
+                    partition by date(t.timestamp, 'unixepoch', 'localtime')
+                    order by t.timestamp
+                ) as prev_precip
+            from tempest_obs t
+            join stations s on s.station_id = t.station_id
+            where s.source = 'tempest'
+        )
+        select
+            avg(case
+                when precip_accum_day is not null
+                     and max(0.0, precip_accum_day - coalesce(prev_precip, 0.0)) > 0.1
+                then 1.0 else 0.0
+            end) as precip_prob,
+            count(*) as n
+        from lagged
+        """
+    row = conn.execute(_cte + "where obs_month = ? and obs_hour = ?", (month, hour)).fetchone()
+    if row is None or row["n"] < min_obs:
+        row = conn.execute(_cte + "where obs_hour = ?", (hour,)).fetchone()
+    if row is None or row["n"] < min_obs:
+        return None
+    return row["precip_prob"]
+
+
 def climo_bucket_obs(
     conn: sqlite3.Connection,
     month: int,
     hour: int,
 ) -> list[sqlite3.Row]:
-    return conn.execute(
+    rows = conn.execute(
         """
         select t.timestamp, t.air_temp, t.dew_point,
                t.station_pressure, t.wind_avg
@@ -230,6 +285,20 @@ def climo_bucket_obs(
         order by t.timestamp desc
         """,
         (month, hour),
+    ).fetchall()
+    if rows:
+        return rows
+    return conn.execute(
+        """
+        select t.timestamp, t.air_temp, t.dew_point,
+               t.station_pressure, t.wind_avg
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and cast(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) = ?
+        order by t.timestamp desc
+        """,
+        (hour,),
     ).fetchall()
 
 
@@ -513,7 +582,7 @@ def skill_timeseries_multi(conn: sqlite3.Connection, since_epochs: list) -> dict
                 where scored_at is not null
                   and member_id = 0
                   and model_id = 2
-                  and variable in ('temperature', 'dewpoint', 'pressure')
+                  and variable in ('temperature', 'dewpoint', 'pressure', 'precip_prob')
                   and issued_at >= ?
                 group by variable, lead_hours
             ),
@@ -529,7 +598,7 @@ def skill_timeseries_multi(conn: sqlite3.Connection, since_epochs: list) -> dict
                 where scored_at is not null
                   and member_id = 0
                   and model_id in (100, 200, 201)
-                  and variable in ('temperature', 'dewpoint', 'pressure')
+                  and variable in ('temperature', 'dewpoint', 'pressure', 'precip_prob')
                   and issued_at >= ?
                 group by day, model_id, model, variable, lead_hours
             )
@@ -896,6 +965,7 @@ def analog_candidates(
                 t.dew_point,
                 t.station_pressure,
                 t.wind_avg,
+                t.precip_accum_day,
                 date(t.timestamp, 'unixepoch', 'localtime') as obs_date,
                 cast(strftime('%H', t.timestamp, 'unixepoch', 'localtime') as integer) * 3600
                 + cast(strftime('%M', t.timestamp, 'unixepoch', 'localtime') as integer) * 60
@@ -917,7 +987,7 @@ def analog_candidates(
                    row_number() over (partition by obs_date order by tod_diff) as rn
             from candidates
         )
-        select timestamp, air_temp, dew_point, station_pressure, wind_avg, obs_date
+        select timestamp, air_temp, dew_point, station_pressure, wind_avg, precip_accum_day, obs_date
         from ranked
         where rn = 1
         order by timestamp desc
