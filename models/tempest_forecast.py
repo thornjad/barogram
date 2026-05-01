@@ -53,9 +53,11 @@ def _fetch(station_id: str, token: str) -> dict[int, dict]:
                 continue
             temp = entry.get("air_temperature")
             rh = entry.get("relative_humidity")
+            pop = entry.get("precip_probability")
             result[int(ts)] = {
                 "temperature": temp,
                 "dewpoint": _dewpoint_from_rh(temp, rh),
+                "precip_prob": pop / 100.0 if pop is not None else None,
             }
         return result
     except Exception:
@@ -87,6 +89,7 @@ def run(obs, issued_at: int, *, conf=None) -> list[dict]:
         for variable, key in [
             ("temperature", "temperature"),
             ("dewpoint", "dewpoint"),
+            ("precip_prob", "precip_prob"),
         ]:
             if entry.get(key) is None:
                 continue

@@ -12,7 +12,8 @@ Analog models exploit the fact that weather is approximately periodic: days with
 2. **Similarity**: Compute weighted Euclidean distance in sigma-normalized feature space across features including temperature, dewpoint, pressure, and wind. Sigma normalization means each feature contributes on a scale of standard deviations, so no feature dominates due to its units.
 3. **Analog selection**: Sort candidates by distance and take the K nearest.
 4. **Forecast**: For each of the K analog days, look up the observation at `analog_time + lead_hours` (±30 min window). The forecast value is the mean of those K future observations; spread is the population standard deviation.
-5. **Graceful degradation**: When fewer candidates exist than K (always true early on), all available analogs are used. If no valid future observation exists for an analog at a given lead, that analog is excluded from the mean.
+5. **Precipitation probability**: For each analog, check whether measurable precip (>0.1 mm delta) occurred between the analog anchor and the future time. Midnight-crossing is handled specially: if the target time is on the next calendar day, the future `precip_accum_day` is compared against 0 (since the accumulator resets at midnight). The fraction of analogs with precip is the `precip_prob` forecast.
+6. **Graceful degradation**: When fewer candidates exist than K (always true early on), all available analogs are used. If no valid future observation exists for an analog at a given lead, that analog is excluded from the mean.
 
 ## Normalization
 

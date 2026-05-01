@@ -5,7 +5,9 @@
 This model recognizes the cyclical nature of the seasons, and forecasts based on the historical average conditions for the calendar month and hour of the day. This is based on past Tempest observations, and so improves as more historical data is logged. The historical data includes the current year, which reveals this method to be, at least in a way, an iterative improvement over the persistence model (model 001). The persistence model is based on the current conditions only, and in the extreme situation where the only historical information available is the current conditions, the climatological model would hypothetically produce the same result (though we gate to at least 30 observations for this model).
 
 ## Method
-For each lead time (+6h, +12h, +18h, +24h), the calendar month and hour are used to query all accumulated Tempest observations in that (month, hour) bucket, including the current year. The arithmetic mean of each variable across those observations is the forecast value.
+For each lead time (+6h, +12h, +18h, +24h), the calendar month and hour are used to query all accumulated Tempest observations in that (month, hour) bucket, including the current year. The arithmetic mean of each continuous variable across those observations is the forecast value.
+
+For `precip_prob`, the model computes the historical precipitation occurrence rate in the same (month, hour) bucket: each obs is flagged 1 if it shows a measurable precip delta (>0.1 mm from the previous obs on the same calendar day) and 0 otherwise; the mean of those flags is the probability.
 
 Bucket matching uses local time for both the query (SQLite `'localtime'` modifier) and the Python-side extraction (`datetime.fromtimestamp`), keeping them consistent.
 

@@ -27,7 +27,7 @@ class TestNoHistoricalData:
         obs = make_obs()
         rows = analog_mod.run(obs, obs["timestamp"], conn_in=conn_in)
         # 4 leads × 3 variables × 9 members (0-8) = 108 rows
-        assert len(rows) == 108
+        assert len(rows) == 144
 
     def test_all_values_none(self):
         conn_in = make_input_db()
@@ -71,7 +71,7 @@ class TestFewerCandidatesThanK:
 
         obs = make_obs(ts=now)
         rows = analog_mod.run(obs, now, conn_in=conn_in)
-        assert len(rows) == 108
+        assert len(rows) == 144
 
     def test_two_candidates_member_values_not_all_none(self):
         """Futures are available, so at least some member values should be non-None."""
@@ -103,7 +103,7 @@ class TestSingleCandidate:
 
         obs = make_obs(ts=now)
         rows = analog_mod.run(obs, now, conn_in=conn_in)
-        assert len(rows) == 108
+        assert len(rows) == 144
 
     def test_single_candidate_spread_is_none(self):
         """spread requires at least 2 values; with 1 analog it must be None."""

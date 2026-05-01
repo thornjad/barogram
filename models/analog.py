@@ -4,7 +4,7 @@
 # when fewer candidates exist than K, uses however many are available.
 # member_id=0: inverse-MAE weighted mean of members 1-8 when weights available.
 
-import datetime
+import datetime as _dt
 import math
 import statistics
 
@@ -81,8 +81,8 @@ def _distance(
 
 def _month_diff(ts1: int, ts2: int) -> int:
     """Circular calendar-month distance between two timestamps (0–6)."""
-    m1 = datetime.datetime.fromtimestamp(ts1).month
-    m2 = datetime.datetime.fromtimestamp(ts2).month
+    m1 = _dt.datetime.fromtimestamp(ts1).month
+    m2 = _dt.datetime.fromtimestamp(ts2).month
     diff = abs(m1 - m2)
     return min(diff, 12 - diff)
 
@@ -184,6 +184,76 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                     "variable": variable,
                     "value": value,
                 })
+
+        # precip_prob: fraction of analog futures with measurable precipitation
+        for mid, name, _k, _fw in _MEMBERS:
+            analogs = member_analogs[mid]
+            precip_flags = []
+            for _, cand in analogs:
+                future = future_cache[cand["timestamp"]]
+                if future is None:
+                    continue
+                fut_precip = future["precip_accum_day"]
+                if fut_precip is None:
+                    continue
+                cand_date = _dt.datetime.fromtimestamp(cand["timestamp"]).date()
+                target_date = _dt.datetime.fromtimestamp(
+                    cand["timestamp"] + lead * 3600
+                ).date()
+                if cand_date != target_date:
+                    precip_flags.append(1.0 if fut_precip > 0.1 else 0.0)
+                else:
+                    cand_precip = cand["precip_accum_day"] or 0.0
+                    delta = max(0.0, fut_precip - cand_precip)
+                    precip_flags.append(1.0 if delta > 0.1 else 0.0)
+            pp_val = sum(precip_flags) / len(precip_flags) if precip_flags else None
+            member_vals[mid]["precip_prob"] = pp_val
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": mid,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": "precip_prob",
+                "value": pp_val,
+            })
+
+        # precip_prob member_id=0: weighted mean + spread
+        valid_pp_pairs = [
+            (mid, member_vals[mid]["precip_prob"])
+            for mid in _ALL_MEMBER_IDS
+            if member_vals[mid].get("precip_prob") is not None
+        ]
+        if not valid_pp_pairs:
+            pp_mean = None
+        elif weights:
+            w_pairs = [
+                (weights.get((mid, "precip_prob", lead), None), v)
+                for mid, v in valid_pp_pairs
+            ]
+            if any(w is None for w, _ in w_pairs):
+                pp_mean = sum(v for _, v in valid_pp_pairs) / len(valid_pp_pairs)
+            else:
+                total_w = sum(w for w, _ in w_pairs)
+                pp_mean = sum(w * v for w, v in w_pairs) / total_w
+        else:
+            pp_mean = sum(v for _, v in valid_pp_pairs) / len(valid_pp_pairs)
+        pp_spread = (
+            statistics.pstdev([v for _, v in valid_pp_pairs])
+            if len(valid_pp_pairs) > 1 else None
+        )
+        rows.append({
+            "model_id": MODEL_ID,
+            "model": MODEL_NAME,
+            "member_id": 0,
+            "issued_at": issued_at,
+            "valid_at": valid_at,
+            "lead_hours": lead,
+            "variable": "precip_prob",
+            "value": pp_mean,
+            "spread": pp_spread,
+        })
 
         # member_id=0: weighted mean + spread across all named members
         for variable in VARIABLES:
