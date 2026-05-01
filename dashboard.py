@@ -2213,22 +2213,6 @@ def _ensemble_forecast_section(
             "wind_speed": tempest["wind_avg"],
         }
 
-    def _fmt_value(variable, value, spread=None) -> str:
-        """Format a forecast value (SI units) with optional spread as an HTML snippet."""
-        if value is None:
-            return "&mdash;"
-        unit = _UNIT[variable]
-        if variable in ("temperature", "dewpoint"):
-            disp = _to_f(value)
-            s = f"{disp:.0f}{unit}"
-            spread_disp = _diff_to_f(spread) if spread is not None else None
-        else:
-            s = f"{value:.1f} {unit}"
-            spread_disp = spread
-        if spread_disp is not None and spread_disp > 0:
-            s += f'<small class="fcst-spread">&pm;{spread_disp:.1f}</small>'
-        return s
-
     def _nws_at(target_ts: int) -> dict | None:
         """Return NWS forecast entry nearest to target_ts, within 90 min."""
         if not nws_forecast:
