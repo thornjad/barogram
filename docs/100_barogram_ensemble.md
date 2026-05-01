@@ -1,7 +1,7 @@
 # Model 100: barogram_ensemble
 
 **Type:** ensemble
-**Variables:** temperature, dewpoint, pressure, wind_speed (pressure coverage depends on contributing models)
+**Variables:** temperature, dewpoint, pressure (coverage depends on contributing models)
 **Lead times:** 6, 12, 18, 24 hours
 
 ## Overview

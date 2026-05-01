@@ -12,7 +12,7 @@ means for a given hour of day, this model fits an explicit curve shape and can
 project that shape forward from a known anchor point — the current observation
 or the most recent overnight minimum.
 
-Variables: **temperature, dewpoint, wind_speed**. Pressure is omitted; the
+Variables: **temperature, dewpoint**. Pressure is omitted; the
 diurnal barometric tide (~0.5–1.5 hPa amplitude at mid-latitudes) is too small
 relative to synoptic noise to be useful.
 

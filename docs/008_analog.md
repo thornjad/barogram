@@ -9,7 +9,7 @@ Analog models exploit the fact that weather is approximately periodic: days with
 ## Algorithm
 
 1. **Candidate selection**: For each historical calendar day (up to 365 days back), find the observation closest to the current local time-of-day using circular time-of-day distance. This yields one representative observation per historical day.
-2. **Similarity**: Compute weighted Euclidean distance in sigma-normalized feature space across four variables: temperature, dewpoint, pressure, and wind speed. Sigma normalization means each variable contributes on a scale of standard deviations, so no variable dominates due to its units.
+2. **Similarity**: Compute weighted Euclidean distance in sigma-normalized feature space across features including temperature, dewpoint, pressure, and wind. Sigma normalization means each feature contributes on a scale of standard deviations, so no feature dominates due to its units.
 3. **Analog selection**: Sort candidates by distance and take the K nearest.
 4. **Forecast**: For each of the K analog days, look up the observation at `analog_time + lead_hours` (±30 min window). The forecast value is the mean of those K future observations; spread is the population standard deviation.
 5. **Graceful degradation**: When fewer candidates exist than K (always true early on), all available analogs are used. If no valid future observation exists for an analog at a given lead, that analog is excluded from the mean.

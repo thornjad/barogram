@@ -64,7 +64,7 @@ Every dict returned by `run()` must have these keys:
     "issued_at": int,    # unix epoch
     "valid_at": int,     # unix epoch
     "lead_hours": int,   # one of [6, 12, 18, 24]
-    "variable": str,     # "temperature" | "humidity" | "pressure" | "wind_speed"
+    "variable": str,     # "temperature" | "dewpoint" | "pressure"
     "value": float | None,
     # optional — single-member models may omit; insert_forecasts applies defaults
     "member_id": int,    # default 0; 1+ for named members of a multi-member model
@@ -130,7 +130,7 @@ lowercase as well.
 | `issued_at` | integer | Unix epoch of forecast run |
 | `valid_at` | integer | Unix epoch of forecast target time |
 | `lead_hours` | integer | one of 6, 12, 18, 24 |
-| `variable` | text | `temperature`, `dewpoint`, `pressure`, `wind_speed` |
+| `variable` | text | `temperature`, `dewpoint`, `pressure` |
 | `value` | real | forecast value (NULL = model abstained) |
 | `spread` | real | std dev across members; non-NULL only on member_id=0 for multi-member models |
 | `observed` | real | filled by scorer; actual observed value |

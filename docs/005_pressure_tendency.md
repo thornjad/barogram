@@ -23,7 +23,7 @@ w=0.5.
 
 ## Transfer functions for other variables
 
-For temperature, dew point, and wind speed, a simple linear transfer function is learned from the full observation history in the input database:
+For temperature and dew point, a simple linear transfer function is learned from the full observation history in the input database:
 
     delta_variable(lead) = slope * tendency_rate + intercept
 
