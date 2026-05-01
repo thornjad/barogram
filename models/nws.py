@@ -1,9 +1,9 @@
 """nws: external reference model using NWS hourly forecast from api.weather.gov.
 
 Fetches NWS hourly forecasts and snaps them to the standard 6/12/18/24h lead
-times. Covers temperature, dewpoint, and wind speed. Pressure is skipped because
-NWS provides sea-level pressure while barogram scores against station pressure,
-and the elevation correction would introduce systematic bias.
+times. Covers temperature and dewpoint. Pressure is skipped because NWS provides
+sea-level pressure while barogram scores against station pressure, and the
+elevation correction would introduce systematic bias.
 
 No API key required. The station lat/lon is derived from the wxlog stations table.
 """
@@ -49,16 +49,7 @@ def _fetch(lat: float, lon: float) -> dict[int, dict]:
             unit = period.get("temperatureUnit", "F")
             temp_c = (temp - 32) * 5 / 9 if unit == "F" else float(temp)
             dew_c = (period.get("dewpoint") or {}).get("value")  # already °C
-            ws_str = period.get("windSpeed") or ""
-            wind_ms = None
-            if ws_str:
-                nums = [
-                    float(p) for p in ws_str.replace(" to ", " ").split()
-                    if p.replace(".", "").isdigit()
-                ]
-                if nums:
-                    wind_ms = sum(nums) / len(nums) * 0.44704  # avg mph → m/s
-            result[ts] = {"temperature": temp_c, "dewpoint": dew_c, "wind_speed": wind_ms}
+            result[ts] = {"temperature": temp_c, "dewpoint": dew_c}
         return result
     except Exception as e:
         print(f"nws: fetch failed: {e}", file=sys.stderr)
@@ -91,7 +82,6 @@ def run(obs, issued_at: int, *, conn_in=None, location=None) -> list[dict]:
         for variable, key in [
             ("temperature", "temperature"),
             ("dewpoint", "dewpoint"),
-            ("wind_speed", "wind_speed"),
         ]:
             if entry.get(key) is None:
                 continue

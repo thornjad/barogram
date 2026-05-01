@@ -39,7 +39,6 @@ LEAD_HOURS = [6, 12, 18, 24]
 VAR_COL = {
     "temperature": "air_temp",
     "dewpoint":    "dew_point",
-    "wind_speed":  "wind_avg",
 }
 
 _K_MEAN = 0.55          # typical mean clearness across all-weather days

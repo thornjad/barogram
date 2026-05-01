@@ -1,7 +1,7 @@
 """tempest_forecast: external reference model using Tempest's built-in forecast.
 
 Fetches the WeatherFlow/Tempest better_forecast hourly data and snaps it to the
-standard 6/12/18/24h lead times. Covers temperature, dewpoint, and wind speed.
+standard 6/12/18/24h lead times. Covers temperature and dewpoint.
 Dewpoint is derived from forecasted air_temperature and relative_humidity via the
 August-Roche-Magnus formula, matching how wxlog derives it from sensor data.
 
@@ -56,7 +56,6 @@ def _fetch(station_id: str, token: str) -> dict[int, dict]:
             result[int(ts)] = {
                 "temperature": temp,
                 "dewpoint": _dewpoint_from_rh(temp, rh),
-                "wind_speed": entry.get("wind_avg"),
             }
         return result
     except Exception:
@@ -88,7 +87,6 @@ def run(obs, issued_at: int, *, conf=None) -> list[dict]:
         for variable, key in [
             ("temperature", "temperature"),
             ("dewpoint", "dewpoint"),
-            ("wind_speed", "wind_speed"),
         ]:
             if entry.get(key) is None:
                 continue

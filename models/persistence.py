@@ -11,7 +11,6 @@ VARIABLES = {
     "temperature": "air_temp",
     "dewpoint": "dew_point",
     "pressure": "station_pressure",
-    "wind_speed": "wind_avg",
 }
 
 

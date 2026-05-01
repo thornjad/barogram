@@ -27,7 +27,6 @@ LEAD_HOURS = [6, 12, 18, 24]
 VAR_COL = {
     "temperature": "air_temp",
     "dewpoint":    "dew_point",
-    "wind_speed":  "wind_avg",
 }
 
 _CURVES    = ["sine", "piecewise", "asymmetric"]

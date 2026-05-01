@@ -6,7 +6,6 @@ VARIABLES = {
     "temperature": "air_temp",
     "dewpoint": "dew_point",
     "pressure": "station_pressure",
-    "wind_speed": "wind_avg",
 }
 
 # (member_id, name, weight_fn(age_days) -> float)
