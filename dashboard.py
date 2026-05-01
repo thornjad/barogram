@@ -9,23 +9,36 @@ import db
 import fmt
 import models.pressure_tendency as pressure_tendency
 
-VARIABLES = ["temperature", "dewpoint", "pressure"]
+VARIABLES = ["temperature", "dewpoint", "pressure", "precip_prob"]
 
 _VARIABLE_LABEL = {
     "temperature": "Temperature",
     "dewpoint": "Dew Point",
     "pressure": "Pressure",
+    "precip_prob": "Precip Prob",
 }
 
 _UNIT = {
     "temperature": "\u00b0F",
     "dewpoint": "\u00b0F",
     "pressure": "hPa",
+    "precip_prob": "%",
+}
+
+_FMT = {
+    "temperature": ".1f",
+    "dewpoint": ".1f",
+    "pressure": ".1f",
+    "precip_prob": ".0f",
 }
 
 
 def _to_f(c):
     return None if c is None else c * 9 / 5 + 32
+
+
+def _to_pct(v):
+    return None if v is None else v * 100
 
 
 def _to_mph(ms):
@@ -88,7 +101,11 @@ def _fetch_nws_forecast(lat: float, lon: float) -> dict[int, dict]:
             unit = period.get("temperatureUnit", "F")
             temp_c = (temp - 32) * 5 / 9 if unit == "F" else float(temp)
             dew_c = (period.get("dewpoint") or {}).get("value")  # already °C
-            result[ts] = {"temperature": temp_c, "dewpoint": dew_c}
+            pop = (period.get("probabilityOfPrecipitation") or {}).get("value")
+            entry: dict = {"temperature": temp_c, "dewpoint": dew_c}
+            if pop is not None:
+                entry["precip_prob"] = pop / 100.0
+            result[ts] = entry
         return result
     except Exception:
         return {}
@@ -293,11 +310,12 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .model-run-card { background: #fff; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
 .model-run-header { display: flex; align-items: baseline; gap: 10px; padding: 10px 16px; background: #f9f9f9; border-bottom: 1px solid #eee; }
 .model-run-header strong { font-size: 14px; }
-.base-badge, .ensemble-badge, .baseline-badge, .external-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.base-badge, .ensemble-badge, .baseline-badge, .external-badge, .fun-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .base-badge { background: #e8f4e8; color: #2d6a2d; }
 .ensemble-badge { background: #eff4ff; color: #3b5bdb; }
 .baseline-badge { background: #ece9e0; color: #aaa; }
 .external-badge { background: #fff3e0; color: #b34400; }
+.fun-badge { background: #d4f0d4; color: #1e6b1e; }
 .mae-summary-table .baseline-row th { color: #bbb; }
 .baseline-row td { color: #bbb; }
 .baseline-row .model-id-cell { color: #888; }
@@ -455,6 +473,28 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     margin-top: 8px;
 }
 .analysis-section > h2 { color: #555; }
+.ap-signal-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    margin-top: 10px;
+}
+.ap-signal-table th, .ap-signal-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #eee;
+    text-align: right;
+}
+.ap-signal-table th { font-weight: 600; background: #f9f9f9; color: #1a1a1a; }
+.ap-signal-table th:nth-child(-n+4), .ap-signal-table td:nth-child(-n+4) { text-align: left; }
+.ap-signal-table tbody tr:last-child td { border-bottom: none; }
+.ap-badge { font-size: 11px; padding: 1px 7px; border-radius: 3px; font-weight: 600; display: inline-block; }
+.ap-wet { background: #dbeafe; color: #1e40af; }
+.ap-dry { background: #fef3c7; color: #92400e; }
+.ap-neutral { background: #f3f4f6; color: #4b5563; }
+.ap-none { color: #bbb; font-style: italic; }
 """
 
 
@@ -752,6 +792,8 @@ def _forecast_table_html(table: dict, lead_times: list, slp_offset: float = 0.0)
     header_cells = "".join(f"<th>+{h}h</th>" for h in lead_times)
     rows = []
     for var in VARIABLES:
+        if not table.get(var):
+            continue
         label = _VARIABLE_LABEL.get(var, var)
         unit = _UNIT.get(var, "")
         if var == "pressure" and slp_offset != 0.0:
@@ -759,9 +801,12 @@ def _forecast_table_html(table: dict, lead_times: list, slp_offset: float = 0.0)
         cells = []
         for h in lead_times:
             v = table.get(var, {}).get(h)
-            if var == "temperature" or var == "dewpoint":
+            if var in ("temperature", "dewpoint"):
                 v = _to_f(v)
-            cells.append(f"<td>{fmt.val(v, '.1f', unit)}</td>")
+            elif var == "precip_prob":
+                v = _to_pct(v)
+            fmt_spec = _FMT.get(var, ".1f")
+            cells.append(f"<td>{fmt.val(v, fmt_spec, unit)}</td>")
         rows.append(f'<tr><th>{label}</th>{"".join(cells)}</tr>')
         if var == "pressure" and slp_offset != 0.0:
             slp_cells = []
@@ -797,10 +842,13 @@ def _model_runs_html(
     for (model_id, model, mtype, issued_at) in sorted_keys:
         model_rows = by_model[(model_id, model, mtype, issued_at)]
         table = _table_data(model_rows)
-        type_badge = {
-            "ensemble": f'<span class="ensemble-badge">ensemble</span>',
-            "external": f'<span class="external-badge">external</span>',
-        }.get(mtype, "")
+        if model == "bogo":
+            type_badge = '<span class="fun-badge">fun</span>'
+        else:
+            type_badge = {
+                "ensemble": f'<span class="ensemble-badge">ensemble</span>',
+                "external": f'<span class="external-badge">external</span>',
+            }.get(mtype, "")
         table_html = _forecast_table_html(table, lead_times, slp_offset)
         n_members = (member_counts or {}).get(model_id, 0)
         member_toggle = (
@@ -1034,6 +1082,8 @@ def _score_summary_table(
             badge = '<span class="ensemble-badge">ensemble</span>'
         elif m["type"] == "external":
             badge = '<span class="external-badge">external</span>'
+        elif name == "bogo":
+            badge = '<span class="fun-badge">fun</span>'
         else:
             badge = ""
 
@@ -1450,6 +1500,7 @@ const maeAllModels = [...new Set(
 )].sort();
 const maeModelColors = {{}};
 maeAllModels.forEach(function(m, i) {{ maeModelColors[m] = MAE_PALETTE[i % MAE_PALETTE.length]; }});
+if (maeAllModels.includes('bogo')) maeModelColors['bogo'] = '#b0d8b0';
 
 let maeActiveVar = 'avg';
 let verifMode = 'ratio';
@@ -1747,6 +1798,7 @@ fcstAllModels.filter(function(m) {{ return m !== 'persistence'; }}).forEach(func
     fcstModelColors[m] = FCST_PALETTE[i % FCST_PALETTE.length];
 }});
 if (fcstAllModels.includes('persistence')) fcstModelColors['persistence'] = '#aaaaaa';
+if (fcstAllModels.includes('bogo')) fcstModelColors['bogo'] = '#b0d8b0';
 
 let fcstActiveVar = fcstVariables[0];
 
@@ -1808,6 +1860,7 @@ const biasAllModels = [...new Set(
 )].sort();
 const biasModelColors = {{}};
 biasAllModels.forEach(function(m, i) {{ biasModelColors[m] = BIAS_PALETTE[i % BIAS_PALETTE.length]; }});
+if (biasAllModels.includes('bogo')) biasModelColors['bogo'] = '#b0d8b0';
 
 let biasActiveVar = 'temperature';
 
@@ -1884,6 +1937,7 @@ leadSkillAllModels.filter(function(m){{return m !== 'persistence';}}).forEach(fu
     leadSkillModelColors[m] = LEAD_SKILL_PALETTE[i % LEAD_SKILL_PALETTE.length];
 }});
 if (leadSkillAllModels.includes('persistence')) leadSkillModelColors['persistence'] = '#aaaaaa';
+if (leadSkillAllModels.includes('bogo')) leadSkillModelColors['bogo'] = '#b0d8b0';
 
 let leadSkillActiveVar = 'temperature';
 
@@ -2021,6 +2075,7 @@ diurnalAllModels.filter(function(m){{return m !== 'persistence';}}).forEach(func
     diurnalModelColors[m] = DIURNAL_PALETTE[i % DIURNAL_PALETTE.length];
 }});
 if (diurnalAllModels.includes('persistence')) diurnalModelColors['persistence'] = '#aaaaaa';
+if (diurnalAllModels.includes('bogo')) diurnalModelColors['bogo'] = '#b0d8b0';
 
 let diurnalActiveVar = 'temperature';
 let diurnalMode = 'bias';
@@ -2100,6 +2155,7 @@ errorDistAllModels.filter(function(m){{return m !== 'persistence';}}).forEach(fu
     errorDistModelColors[m] = ERROR_DIST_PALETTE[i % ERROR_DIST_PALETTE.length];
 }});
 if (errorDistAllModels.includes('persistence')) errorDistModelColors['persistence'] = '#aaaaaa';
+if (errorDistAllModels.includes('bogo')) errorDistModelColors['bogo'] = '#b0d8b0';
 
 let errorDistActiveVar = 'temperature';
 let errorDistActiveLead = '6';
@@ -2227,7 +2283,7 @@ def _ensemble_forecast_section(
         return entry if entry else None
 
     def _card(label: str, is_now: bool, temp_val, dew_val, pres_val, wind_val,
-              temp_spread=None, nws=None, tempest_fcst=None) -> str:
+              temp_spread=None, nws=None, tempest_fcst=None, precip_val=None) -> str:
         cls = 'forecast-card now-card' if is_now else 'forecast-card'
         # temperature — always the hero
         if temp_val is not None:
@@ -2258,6 +2314,10 @@ def _ensemble_forecast_section(
             details.append(
                 f'<span class="detail-label">Wind</span> {_to_mph(wind_val):.0f} mph'
             )
+        if precip_val is not None:
+            details.append(
+                f'<span class="detail-label">Precip</span> {round(precip_val * 100)}%'
+            )
         details_html = (
             '<div class="fcst-details">' + "<br>".join(details) + "</div>"
             if details else ""
@@ -2279,6 +2339,10 @@ def _ensemble_forecast_section(
             if tempest_fcst.get("dewpoint") is not None:
                 tf_lines.append(
                     f'<span class="detail-label">Dew</span> {_to_f(tempest_fcst["dewpoint"]):.0f}\u00b0F'
+                )
+            if tempest_fcst.get("precip_prob") is not None:
+                tf_lines.append(
+                    f'<span class="detail-label">Precip</span> {round(tempest_fcst["precip_prob"] * 100)}%'
                 )
             if tf_lines:
                 tempest_fcst_html = (
@@ -2304,6 +2368,10 @@ def _ensemble_forecast_section(
             if nws.get("dewpoint") is not None:
                 nws_lines.append(
                     f'<span class="detail-label">Dew</span> {_to_f(nws["dewpoint"]):.0f}\u00b0F'
+                )
+            if nws.get("precip_prob") is not None:
+                nws_lines.append(
+                    f'<span class="detail-label">Precip</span> {round(nws["precip_prob"] * 100)}%'
                 )
             if nws_lines:
                 nws_html = (
@@ -2340,14 +2408,16 @@ def _ensemble_forecast_section(
         t_cell = table.get("temperature", {}).get(lead)
         d_cell = table.get("dewpoint", {}).get(lead)
         p_cell = table.get("pressure", {}).get(lead)
+        pp_cell = table.get("precip_prob", {}).get(lead)
         t_val = t_cell[0] if t_cell else None
         t_spread = t_cell[1] if t_cell else None
         d_val = d_cell[0] if d_cell else None
         p_raw = p_cell[0] if p_cell else None
         p_val = p_raw + slp_offset if p_raw is not None else None
+        pp_val = pp_cell[0] if pp_cell else None
         nws_entry = _nws_at(vat) if vat else None
         tf_entry = _tempest_fcst_at(lead)
-        cards_html += _card(label, False, t_val, d_val, p_val, None, t_spread, nws_entry, tf_entry)
+        cards_html += _card(label, False, t_val, d_val, p_val, None, t_spread, nws_entry, tf_entry, pp_val)
 
     issued_str = fmt.ts(issued_at) if issued_at else "&mdash;"
     return (
@@ -2384,6 +2454,117 @@ def _learnings_clearness_index(solar_rad: float | None, lat_deg: float, ts: int)
 
 
 _SKY_FRAC = {"CLR": 0.0, "SKC": 0.0, "FEW": 0.15, "SCT": 0.40, "BKN": 0.70, "OVC": 1.0}
+
+
+def _ap_signal_state(conn_in: sqlite3.Connection, obs) -> dict | None:
+    """Compute live airmass_precip signal states from the current observation."""
+    if obs is None:
+        return None
+    import models.airmass_precip as ap
+    from models.surface_signs import (
+        _LOOKUP_SEC,
+        _SIGNAL_WINDOW_SEC,
+        _build_solar_climo,
+        _find_nearest_ts,
+        _obs_in_window,
+        _solar_cloud_category,
+        _wind_rotation_category,
+    )
+    ts = obs["timestamp"]
+    obs_30d = db.tempest_obs_in_range(conn_in, ts - 30 * 86400, ts)
+    solar_climo = _build_solar_climo(obs_30d)
+    by_ts = {r["timestamp"]: r for r in obs_30d}
+    sorted_ts = sorted(by_ts)
+
+    obs_3h = db.nearest_tempest_obs(conn_in, ts - 3 * 3600, window_sec=_LOOKUP_SEC)
+    obs_1h = db.nearest_tempest_obs(conn_in, ts - 3600, window_sec=_LOOKUP_SEC)
+    window_obs = _obs_in_window(sorted_ts, by_ts, ts - _SIGNAL_WINDOW_SEC, ts)
+
+    m = ap._moisture_cat(obs)
+    p = ap._ptend_cat(obs, obs_3h)
+    cloud = _solar_cloud_category(obs, solar_climo)
+
+    return {
+        1: m,
+        2: p,
+        3: cloud,
+        4: ap._wind_sector_4(obs),
+        5: ap._active_precip_cat(obs, obs_1h),
+        6: (m, p) if m is not None and p is not None else None,
+        7: _wind_rotation_category(window_obs),
+        8: (cloud, m) if cloud is not None and m is not None else None,
+    }
+
+
+_AP_SIGNAL_DESC = {
+    1: "T−Td spread",
+    2: "3h ΔP",
+    3: "solar vs climo",
+    4: "wind direction",
+    5: "last-hour precip",
+    6: "T−Td × ΔP",
+    7: "3h wind rotation",
+    8: "cloud × moisture",
+}
+_AP_WET = {"moist", "falling", "heavy_cloud", "raining", "backing"}
+_AP_DRY = {"dry", "rising", "clear", "veering"}
+
+
+def _ap_badge(state) -> str:
+    if state is None:
+        return '<span class="ap-none">–</span>'
+    if isinstance(state, tuple):
+        return " · ".join(_ap_badge(s) for s in state)
+    cls = "ap-wet" if state in _AP_WET else ("ap-dry" if state in _AP_DRY else "ap-neutral")
+    return f'<span class="ap-badge {cls}">{state}</span>'
+
+
+def _ap_signal_state_html(signal_state: dict | None, member_rows: list) -> str:
+    """Table of live signal states and per-member precip_prob forecasts."""
+    if signal_state is None:
+        return '<p class="no-data">No Tempest observation available.</p>'
+
+    from models.airmass_precip import _MEMBER_NAMES
+
+    by_mid: dict[int, dict[int, float | None]] = {}
+    for row in member_rows:
+        if row["model"] == "airmass_precip":
+            mid = row["member_id"]
+            if mid > 0 and row["variable"] == "precip_prob":
+                by_mid.setdefault(mid, {})[row["lead_hours"]] = row["value"]
+
+    header = (
+        "<tr>"
+        "<th>#</th><th>member</th><th>signal</th><th>state</th>"
+        "<th>+6h</th><th>+12h</th><th>+18h</th><th>+24h</th>"
+        "</tr>"
+    )
+    body = ""
+    for mid, name in _MEMBER_NAMES:
+        state_cell = _ap_badge(signal_state.get(mid))
+        sig = _AP_SIGNAL_DESC.get(mid, "")
+        leads = ""
+        for lead in [6, 12, 18, 24]:
+            v = by_mid.get(mid, {}).get(lead)
+            leads += (
+                '<td class="ap-none">–</td>' if v is None
+                else f"<td>{round(v * 100)}%</td>"
+            )
+        body += (
+            f'<tr><td class="model-id-cell">{mid}</td>'
+            f"<td>{name}</td>"
+            f'<td style="color:#888;font-size:12px">{sig}</td>'
+            f"<td>{state_cell}</td>{leads}</tr>"
+        )
+
+    return (
+        '<p class="chart-legend-note">Signal state and precip probability at last forecast run. '
+        "Blue = precip-favorable &nbsp;·&nbsp; "
+        "Amber = unfavorable &nbsp;·&nbsp; "
+        "Grey = neutral.</p>"
+        f'<table class="ap-signal-table"><thead>{header}</thead>'
+        f"<tbody>{body}</tbody></table>"
+    )
 
 
 def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
@@ -3232,6 +3413,7 @@ if (trajectoryModelColors['barogram_ensemble'] !== undefined) trajectoryModelCol
 if (trajectoryModelColors['nws'] !== undefined) trajectoryModelColors['nws'] = '#d95f02';
 if (trajectoryModelColors['tempest_forecast'] !== undefined) trajectoryModelColors['tempest_forecast'] = '#7570b3';
 if (trajectoryModelColors['persistence'] !== undefined) trajectoryModelColors['persistence'] = '#aaaaaa';
+if (trajectoryModelColors['bogo'] !== undefined) trajectoryModelColors['bogo'] = '#b0d8b0';
 
 let trajectoryActiveVar = trajectoryVars.includes('temperature') ? 'temperature' : trajectoryVars[0];
 
@@ -3291,7 +3473,7 @@ drawTrajectoryChart();
 """
 
 
-_ACC_VARIABLES = ["temperature", "dewpoint", "pressure"]
+_ACC_VARIABLES = ["temperature", "dewpoint", "pressure", "precip_prob"]
 
 
 def _skill_score(mae: float | None, climo_mae: float | None) -> float | None:
@@ -3368,6 +3550,9 @@ def _accuracy_lead_table_html(rows: list, lead_times: list) -> str:
             row_cls = ""
         elif meta["type"] == "external":
             badge = '<span class="external-badge">external</span>'
+            row_cls = ""
+        elif name == "bogo":
+            badge = '<span class="fun-badge">fun</span>'
             row_cls = ""
         else:
             badge = ""
@@ -3450,6 +3635,9 @@ def _overall_accuracy_html(rows: list) -> str:
             row_cls = ""
         elif meta["type"] == "external":
             badge = '<span class="external-badge">external</span>'
+            row_cls = ""
+        elif name == "bogo":
+            badge = '<span class="fun-badge">fun</span>'
             row_cls = ""
         else:
             badge = ""
@@ -3802,6 +3990,9 @@ def generate(
     learnings = _learnings_data(conn_in, conn_out)
     learnings_section = _learnings_section_html(learnings)
 
+    ap_state = _ap_signal_state(conn_in, tempest)
+    ap_signal_html = _ap_signal_state_html(ap_state, member_forecast_rows)
+
     zambretti = pressure_tendency.zambretti_text(tempest, conn_in, elevation_m) if tempest else None
     zambretti_panel = _zambretti_panel_html(zambretti)
     tempest_card = _conditions_card("Tempest", tempest, elevation_m)
@@ -3912,6 +4103,7 @@ def generate(
       <a href="#analysis">Analysis</a>
       <a href="#weights">Weights</a>
       <a href="#learnings">Learnings</a>
+      <a href="#latest-run">Latest Run</a>
     </nav>
   </div>
   <div class="generated">
@@ -3996,6 +4188,9 @@ def generate(
   <h3 class="obs-subhead">Error Distribution</h3>
   <div class="mae-filter-bar"><span class="filter-label">Variable</span>{error_dist_var_btns}<span class="filter-label filter-sep-left">Lead</span>{error_dist_lead_btns}</div>
   <div class="chart-container"><div id="error-dist-chart"></div></div>
+
+  <h3 class="obs-subhead">airmass_precip &mdash; Signal State</h3>
+  {ap_signal_html}
 </section>
 
 <section class="section" id="weights">
@@ -4006,7 +4201,7 @@ def generate(
 
 {learnings_section}
 
-<section class="section">
+<section class="section" id="latest-run">
   <h2>Latest Forecast Run</h2>
   <div class="mae-filter-bar">{fcst_filter_btns}</div>
   <div class="chart-container"><div id="chart-forecast"></div></div>

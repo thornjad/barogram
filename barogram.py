@@ -16,6 +16,8 @@ import fmt
 import sync as _sync
 import models.analog as analog
 import models.airmass_diurnal as airmass_diurnal
+import models.airmass_precip as airmass_precip
+import models.bogo as bogo
 import models.climatological_mean as climatological_mean
 import models.climo_deviation as climo_deviation
 import models.diurnal_curve as diurnal_curve
@@ -36,9 +38,11 @@ _MODELS = [
     pressure_tendency,
     diurnal_curve,
     airmass_diurnal,
+    airmass_precip,
     analog,
     surface_signs,
     synoptic_state_machine,
+    bogo,
     nws_model,
     tempest_forecast_model,
     barogram_ensemble,  # must be last: reads base model rows from current run
