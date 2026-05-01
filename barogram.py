@@ -327,8 +327,6 @@ def _convert_forecast_value(var: str, val: float | None) -> float | None:
         return None
     if var in ("temperature", "dewpoint"):
         return val * 9 / 5 + 32
-    if var == "wind_speed":
-        return val * 2.23694
     return val
 
 
@@ -337,8 +335,6 @@ def _convert_error_value(var: str, val: float | None) -> float | None:
         return None
     if var in ("temperature", "dewpoint"):
         return val * 1.8
-    if var == "wind_speed":
-        return val * 2.23694
     return val
 
 
@@ -350,7 +346,7 @@ def _print_insights_table(result: dict) -> None:
     ef = result.get("ensemble_forecast")
     if ef:
         print(f"\nensemble forecast  (issued {fmt.ts(ef['issued_at'])})")
-        header = f"  {'lead':>4}  {'temp (F)':>10}  {'dewpt (F)':>10}  {'pres (hPa)':>11}  {'wind (mph)':>11}"
+        header = f"  {'lead':>4}  {'temp (F)':>10}  {'dewpt (F)':>10}  {'pres (hPa)':>11}"
         print(header)
         print("  " + "-" * (len(header) - 2))
         for lead in sorted(ef["leads"], key=int):
@@ -358,8 +354,7 @@ def _print_insights_table(result: dict) -> None:
             t = fmt.val(lv.get("temperature"), ".1f")
             d = fmt.val(lv.get("dewpoint"), ".1f")
             p = fmt.val(lv.get("pressure"), ".1f")
-            w = fmt.val(lv.get("wind_speed"), ".1f")
-            print(f"  {lead+'h':>4}  {t:>10}  {d:>10}  {p:>11}  {w:>11}")
+            print(f"  {lead+'h':>4}  {t:>10}  {d:>10}  {p:>11}")
 
     accuracy = result.get("model_accuracy", {})
     if accuracy:
