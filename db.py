@@ -195,7 +195,6 @@ def climo_bucket_means(
             avg(t.air_temp)           as temperature,
             avg(t.dew_point)          as dewpoint,
             avg(t.station_pressure)   as pressure,
-            avg(t.wind_avg)           as wind_speed,
             count(*)                  as n
         from tempest_obs t
         join stations s on s.station_id = t.station_id
@@ -211,7 +210,6 @@ def climo_bucket_means(
         "temperature": row["temperature"],
         "dewpoint": row["dewpoint"],
         "pressure": row["pressure"],
-        "wind_speed": row["wind_speed"],
     }
 
 
