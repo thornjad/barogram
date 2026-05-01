@@ -115,7 +115,6 @@ def test_variable_column_mapping():
         ("temperature", {"air_temp": 20.0}, 20.0),
         ("dewpoint",    {"dew_point": 10.0}, 10.0),
         ("pressure",    {"station_pressure": 1013.0}, 1013.0),
-        ("wind_speed",  {"wind_avg": 5.0}, 5.0),
     ]
     for variable, obs_kwargs, expected_obs in mapping:
         conn_in = make_input_db()

@@ -5,7 +5,7 @@ from unittest.mock import patch
 import barogram
 from tests.conftest import make_input_db, make_obs, make_output_db
 
-_VALID_VARIABLES = {"temperature", "dewpoint", "pressure", "wind_speed"}
+_VALID_VARIABLES = {"temperature", "dewpoint", "pressure"}
 _VALID_LEAD_HOURS = {6, 12, 18, 24}
 _REQUIRED_KEYS = {"model_id", "model", "issued_at", "valid_at", "lead_hours", "variable", "value"}
 
@@ -27,7 +27,7 @@ def _make_seeded_output_db(issued_at: int):
     conn = make_output_db()
     valid_at = issued_at + 6 * 3600
     for mid, name in _BASE_MODEL_SEED:
-        for var in ("temperature", "dewpoint", "pressure", "wind_speed"):
+        for var in ("temperature", "dewpoint", "pressure"):
             conn.execute(
                 """
                 insert into forecasts
@@ -61,7 +61,7 @@ def test_all_models_satisfy_contract():
                 tempest_station_id="99999", tempest_token="fake-token"
             )
             canned = {
-                issued_at + h * 3600: {"temperature": 20.0, "dewpoint": 14.0, "wind_speed": 3.0}
+                issued_at + h * 3600: {"temperature": 20.0, "dewpoint": 14.0}
                 for h in [6, 12, 18, 24]
             }
             mod = importlib.import_module(f"models.{model.MODEL_NAME}")

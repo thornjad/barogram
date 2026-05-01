@@ -121,24 +121,6 @@ def test_temperature_error_conversion_difference_only(tmp_path):
     assert mae != pytest.approx(33.8), "must not add 32 to error values"
 
 
-def test_wind_speed_conversion(tmp_path):
-    conn = make_output_db()
-    _seed_ens_row(conn, "wind_speed", 1.0)
-    out = _run_insights(conn, tmp_path)
-    data = json.loads(out)
-    val = data["ensemble_forecast"]["leads"]["6"]["wind_speed"]
-    # 1.0 m/s * 2.23694 = 2.23694, rounded to 2 dp = 2.24
-    assert abs(val - round(1.0 * 2.23694, 2)) < 0.001
-
-
-def test_wind_error_conversion(tmp_path):
-    conn = make_output_db()
-    _seed_scored_row(conn, _NWS_MODEL_ID, "nws", "wind_speed", 24, 1.0, 0.0)
-    out = _run_insights(conn, tmp_path)
-    data = json.loads(out)
-    mae = data["model_accuracy"]["nws"]["wind_speed"]["mae_24h"]
-    assert abs(mae - 2.23694) < 0.001
-
 
 def test_pressure_unchanged(tmp_path):
     conn = make_output_db()

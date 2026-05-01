@@ -154,13 +154,13 @@ def _make_obs_for_integration():
 
 
 def test_member_count_after_new_members():
-    """run() must produce exactly 17 members × 4 leads × 3 vars = 204 total rows."""
+    """run() must produce exactly 17 members × 4 leads × 2 vars = 136 total rows."""
     import models.airmass_diurnal as m
 
     conn_in = _make_rich_input_db()
     obs = _make_obs_for_integration()
     rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
-    assert len(rows) == 204, f"expected 204 rows, got {len(rows)}"
+    assert len(rows) == 136, f"expected 136 rows, got {len(rows)}"
 
 
 def test_member_ids_include_new_range():
@@ -212,7 +212,7 @@ def test_missing_pressure_no_crash():
 
     # must not raise
     rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
-    assert len(rows) == 204, "should still produce all 204 rows when pressure is None"
+    assert len(rows) == 136, "should still produce all 136 rows when pressure is None"
 
 
 def test_clearness_trend_non_none_on_clearing_morning():
@@ -254,7 +254,7 @@ def test_no_crash_all_nighttime_window():
     }
     # must not raise
     rows = m.run(obs, t_predawn, conn_in=conn_in, weights={})
-    assert len(rows) == 204, "should still produce all 204 rows for a pre-dawn run"
+    assert len(rows) == 136, "should still produce all 136 rows for a pre-dawn run"
 
     # at nighttime, member 1 also has no clearness signal;
     # members 9-11 should produce the same values as member 1 (both fall back to baseline)
@@ -373,4 +373,4 @@ def test_no_crash_no_wind_direction_in_historical():
     conn_in = _make_rich_input_db()
     obs = _make_obs_for_integration()
     rows = m.run(obs, obs["timestamp"], conn_in=conn_in, weights={})
-    assert len(rows) == 204
+    assert len(rows) == 136
