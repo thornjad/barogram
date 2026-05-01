@@ -9,20 +9,18 @@ import db
 import fmt
 import models.pressure_tendency as pressure_tendency
 
-VARIABLES = ["temperature", "dewpoint", "pressure", "wind_speed"]
+VARIABLES = ["temperature", "dewpoint", "pressure"]
 
 _VARIABLE_LABEL = {
     "temperature": "Temperature",
     "dewpoint": "Dew Point",
     "pressure": "Pressure",
-    "wind_speed": "Wind Speed",
 }
 
 _UNIT = {
     "temperature": "\u00b0F",
     "dewpoint": "\u00b0F",
     "pressure": "hPa",
-    "wind_speed": "mph",
 }
 
 
@@ -90,16 +88,7 @@ def _fetch_nws_forecast(lat: float, lon: float) -> dict[int, dict]:
             unit = period.get("temperatureUnit", "F")
             temp_c = (temp - 32) * 5 / 9 if unit == "F" else float(temp)
             dew_c = (period.get("dewpoint") or {}).get("value")  # already °C
-            ws_str = period.get("windSpeed") or ""
-            wind_ms = None
-            if ws_str:
-                nums = [
-                    float(p) for p in ws_str.replace(" to ", " ").split()
-                    if p.replace(".", "").isdigit()
-                ]
-                if nums:
-                    wind_ms = sum(nums) / len(nums) * 0.44704  # avg mph → m/s
-            result[ts] = {"temperature": temp_c, "dewpoint": dew_c, "wind_speed": wind_ms}
+            result[ts] = {"temperature": temp_c, "dewpoint": dew_c}
         return result
     except Exception:
         return {}
@@ -675,8 +664,6 @@ def _chart_data(rows) -> dict:
         v = row["value"]
         if var == "temperature" or var == "dewpoint":
             v = _to_f(v)
-        elif var == "wind_speed":
-            v = _to_mph(v)
         ts = datetime.fromtimestamp(row["valid_at"], tz=fmt.CENTRAL).strftime("%Y-%m-%d %H:%M:%S")
         data[var][model]["x"].append(ts)
         data[var][model]["y"].append(v)
@@ -774,8 +761,6 @@ def _forecast_table_html(table: dict, lead_times: list, slp_offset: float = 0.0)
             v = table.get(var, {}).get(h)
             if var == "temperature" or var == "dewpoint":
                 v = _to_f(v)
-            elif var == "wind_speed":
-                v = _to_mph(v)
             cells.append(f"<td>{fmt.val(v, '.1f', unit)}</td>")
         rows.append(f'<tr><th>{label}</th>{"".join(cells)}</tr>')
         if var == "pressure" and slp_offset != 0.0:
@@ -1148,9 +1133,6 @@ def _score_summary_table(
                     if var in ("temperature", "dewpoint"):
                         mae = _diff_to_f(mae)
                         bias = _diff_to_f(bias)
-                    elif var == "wind_speed":
-                        mae = _to_mph(mae)
-                        bias = _to_mph(bias)
                     sign = "+" if (bias or 0) >= 0 else ""
                     cells.append(f"<td>{mae:.2f}<small>{sign}{bias:.2f}</small></td>")
                 else:
@@ -1222,7 +1204,6 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
                     mae = ts[issued]
                     mae_display = (
                         _diff_to_f(mae) if var in ("temperature", "dewpoint")
-                        else _to_mph(mae) if var == "wind_speed"
                         else mae
                     )
                     c = c_var.get(issued)
@@ -1295,7 +1276,6 @@ def _bias_timeseries_data(rows: list) -> dict:
                     bias = ts[issued]
                     bias_display = (
                         _diff_to_f(bias) if var in ("temperature", "dewpoint")
-                        else _to_mph(bias) if var == "wind_speed"
                         else bias
                     )
                     x.append(fmt.short_ts(issued))
@@ -1330,8 +1310,6 @@ def _lead_skill_data(summary_rows: list) -> dict:
         if mae is not None:
             if var in ("temperature", "dewpoint"):
                 mae = _diff_to_f(mae)
-            elif var == "wind_speed":
-                mae = _to_mph(mae)
         result[var][model]["points"][row["lead_hours"]] = mae
     return result
 
@@ -1353,8 +1331,6 @@ def _heatmap_data(summary_rows: list) -> dict:
         if mae is not None:
             if var in ("temperature", "dewpoint"):
                 mae = _diff_to_f(mae)
-            elif var == "wind_speed":
-                mae = _to_mph(mae)
         lookup[(var, model, lead)] = mae
 
     sorted_models = sorted(models_seen.keys(), key=lambda m: models_seen[m])
@@ -1406,9 +1382,6 @@ def _diurnal_data(rows: list) -> dict:
                 if var in ("temperature", "dewpoint"):
                     b = _diff_to_f(b)
                     m = _diff_to_f(m)
-                elif var == "wind_speed":
-                    b = _to_mph(b)
-                    m = _to_mph(m)
                 bias_list.append(b)
                 mae_list.append(m)
             meta = model_meta[model]
@@ -1441,8 +1414,6 @@ def _error_dist_data(rows: list) -> dict:
         if err is not None:
             if var in ("temperature", "dewpoint"):
                 err = _diff_to_f(err)
-            elif var == "wind_speed":
-                err = _to_mph(err)
         raw.setdefault(var, {}).setdefault(lead, {}).setdefault(model, []).append(err)
 
     result: dict = {}
@@ -1468,7 +1439,6 @@ def _mae_timeseries_js(timeseries_data: dict) -> str:
         "temperature": "Temperature MAE (°F)",
         "dewpoint": "Dew Point MAE (°F)",
         "pressure": "Pressure MAE (hPa)",
-        "wind_speed": "Wind Speed MAE (mph)",
     })
     return f"""const maeLeadData = {data_json};
 const maeFilterLabels = {filter_labels_json};
@@ -1613,8 +1583,6 @@ def _member_forecast_js(member_rows: list, lead_times: list) -> str:
         v = row["value"]
         if row["variable"] in ("temperature", "dewpoint"):
             v = _to_f(v)
-        elif row["variable"] == "wind_speed":
-            v = _to_mph(v)
         entry["vars"].setdefault(row["variable"], {})[row["lead_hours"]] = v
 
     data_json = json.dumps(data)
@@ -1687,8 +1655,6 @@ def _member_detail_js(member_rows: list) -> str:
         mae = row["avg_mae"]
         if row["variable"] in ("temperature", "dewpoint"):
             mae = _diff_to_f(mae)
-        elif row["variable"] == "wind_speed":
-            mae = _to_mph(mae)
         data.setdefault(row["model"], []).append({
             "member_id": row["member_id"],
             "member_name": row["member_name"],
@@ -1765,7 +1731,6 @@ def _chart_js(chart_data_dict: dict) -> str:
         "temperature": "Temperature (\u00b0F)",
         "dewpoint": "Dew Point (\u00b0F)",
         "pressure": "Pressure (hPa)",
-        "wind_speed": "Wind Speed (mph)",
     })
     vars_json = json.dumps(VARIABLES)
     return f"""\
@@ -1832,7 +1797,6 @@ def _bias_timeseries_js(bias_data: dict) -> str:
         "temperature": "Temperature Bias (\u00b0F)",
         "dewpoint": "Dew Point Bias (\u00b0F)",
         "pressure": "Pressure Bias (hPa)",
-        "wind_speed": "Wind Speed Bias (mph)",
     })
     return f"""const biasLeadData = {data_json};
 const biasFilterLabels = {filter_labels_json};
@@ -1907,7 +1871,6 @@ def _lead_skill_js(skill_data: dict) -> str:
         "temperature": "Temperature MAE (\u00b0F)",
         "dewpoint": "Dew Point MAE (\u00b0F)",
         "pressure": "Pressure MAE (hPa)",
-        "wind_speed": "Wind Speed MAE (mph)",
     })
     return f"""const leadSkillData = {data_json};
 const leadSkillFilterLabels = {filter_labels_json};
@@ -2045,7 +2008,6 @@ def _diurnal_js(diurnal_data: dict) -> str:
         "temperature": "Temperature (\u00b0F)",
         "dewpoint": "Dew Point (\u00b0F)",
         "pressure": "Pressure (hPa)",
-        "wind_speed": "Wind Speed (mph)",
     })
     return f"""const diurnalData = {data_json};
 const diurnalFilterLabels = {filter_labels_json};
@@ -2160,7 +2122,7 @@ function drawErrorDistChart() {{
         line: {{ color: '#333', width: 1.5, dash: 'dot' }}
     }}];
     const unitLabels = {{
-        temperature: '\u00b0F', dewpoint: '\u00b0F', pressure: 'hPa', wind_speed: 'mph'
+        temperature: '\u00b0F', dewpoint: '\u00b0F', pressure: 'hPa'
     }};
     Plotly.react('error-dist-chart', traces, {{
         barmode: 'overlay',
@@ -2260,10 +2222,6 @@ def _ensemble_forecast_section(
             disp = _to_f(value)
             s = f"{disp:.0f}{unit}"
             spread_disp = _diff_to_f(spread) if spread is not None else None
-        elif variable == "wind_speed":
-            disp = _to_mph(value)
-            s = f"{disp:.1f} {unit}"
-            spread_disp = _to_mph(spread) if spread is not None else None
         else:
             s = f"{value:.1f} {unit}"
             spread_disp = spread
@@ -2338,10 +2296,6 @@ def _ensemble_forecast_section(
                 tf_lines.append(
                     f'<span class="detail-label">Dew</span> {_to_f(tempest_fcst["dewpoint"]):.0f}\u00b0F'
                 )
-            if tempest_fcst.get("wind_speed") is not None:
-                tf_lines.append(
-                    f'<span class="detail-label">Wind</span> {_to_mph(tempest_fcst["wind_speed"]):.0f} mph'
-                )
             if tf_lines:
                 tempest_fcst_html = (
                     '<div class="fcst-ref">'
@@ -2366,10 +2320,6 @@ def _ensemble_forecast_section(
             if nws.get("dewpoint") is not None:
                 nws_lines.append(
                     f'<span class="detail-label">Dew</span> {_to_f(nws["dewpoint"]):.0f}\u00b0F'
-                )
-            if nws.get("wind_speed") is not None:
-                nws_lines.append(
-                    f'<span class="detail-label">Wind</span> {_to_mph(nws["wind_speed"]):.0f} mph'
                 )
             if nws_lines:
                 nws_html = (
@@ -2406,16 +2356,14 @@ def _ensemble_forecast_section(
         t_cell = table.get("temperature", {}).get(lead)
         d_cell = table.get("dewpoint", {}).get(lead)
         p_cell = table.get("pressure", {}).get(lead)
-        w_cell = table.get("wind_speed", {}).get(lead)
         t_val = t_cell[0] if t_cell else None
         t_spread = t_cell[1] if t_cell else None
         d_val = d_cell[0] if d_cell else None
         p_raw = p_cell[0] if p_cell else None
         p_val = p_raw + slp_offset if p_raw is not None else None
-        w_val = w_cell[0] if w_cell else None
         nws_entry = _nws_at(vat) if vat else None
         tf_entry = _tempest_fcst_at(lead)
-        cards_html += _card(label, False, t_val, d_val, p_val, w_val, t_spread, nws_entry, tf_entry)
+        cards_html += _card(label, False, t_val, d_val, p_val, None, t_spread, nws_entry, tf_entry)
 
     issued_str = fmt.ts(issued_at) if issued_at else "&mdash;"
     return (
@@ -3078,9 +3026,9 @@ def _learnings_js(data: dict) -> str:
             ))
 
     # --- Hypothesis F: model specialization heatmap ---
-    variables = ["temperature", "dewpoint", "pressure", "wind_speed"]
+    variables = ["temperature", "dewpoint", "pressure"]
     leads = [6, 12, 18, 24]
-    var_labels = {"temperature": "temp", "dewpoint": "dewpt", "pressure": "pressure", "wind_speed": "wind"}
+    var_labels = {"temperature": "temp", "dewpoint": "dewpt", "pressure": "pressure"}
 
     # collect unique model names and assign stable colors/indices
     all_best_models = sorted({v["model"] for v in data["hyp_f"].values()})
@@ -3246,9 +3194,6 @@ def _trajectory_data(rows: list) -> dict:
         if var in ("temperature", "dewpoint"):
             obs_disp = _to_f(obs_mean)
             unit = "\u00b0F"
-        elif var == "wind_speed":
-            obs_disp = _to_mph(obs_mean)
-            unit = "mph"
         else:
             obs_disp = obs_mean
             unit = "hPa"
@@ -3261,8 +3206,6 @@ def _trajectory_data(rows: list) -> dict:
                     continue
                 if var in ("temperature", "dewpoint"):
                     val_disp = _to_f(val)
-                elif var == "wind_speed":
-                    val_disp = _to_mph(val)
                 else:
                     val_disp = val
                 dt = datetime.fromtimestamp(issued_at, tz=timezone.utc)
@@ -3364,7 +3307,7 @@ drawTrajectoryChart();
 """
 
 
-_ACC_VARIABLES = ["temperature", "dewpoint", "pressure", "wind_speed"]
+_ACC_VARIABLES = ["temperature", "dewpoint", "pressure"]
 
 
 def _skill_score(mae: float | None, climo_mae: float | None) -> float | None:
@@ -3484,7 +3427,7 @@ def _overall_accuracy_html(rows: list) -> str:
     for r in rows:
         name = r["model"]
         var = r["variable"]
-        if var not in _ACC_VARIABLES or var == "wind_speed":
+        if var not in _ACC_VARIABLES:
             continue
         ref = climo_mae.get((var, r["lead_hours"]))
         skill = _skill_score(r["avg_mae"], ref)
@@ -3717,10 +3660,6 @@ def _recent_misses_html(rows: list) -> str:
             pred_str = f"{_to_f(val):.1f}\u00b0F" if val is not None else "\u2014"
             obs_str = f"{_to_f(obs):.1f}\u00b0F" if obs is not None else "\u2014"
             err_disp = _diff_to_f(err)
-        elif var == "wind_speed":
-            pred_str = f"{_to_mph(val):.1f} mph" if val is not None else "\u2014"
-            obs_str = f"{_to_mph(obs):.1f} mph" if obs is not None else "\u2014"
-            err_disp = _to_mph(err)
         else:
             pred_str = f"{val:.1f} hPa" if val is not None else "\u2014"
             obs_str = f"{obs:.1f} hPa" if obs is not None else "\u2014"
@@ -3899,7 +3838,7 @@ def generate(
         f'<button class="mae-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
             ("avg", "Average"), ("temperature", "Temperature"),
-            ("dewpoint", "Dew Point"), ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
+            ("dewpoint", "Dew Point"), ("pressure", "Pressure"),
         ])
     )
     mae_chart_divs = "".join(
@@ -3911,14 +3850,14 @@ def generate(
         f'<button class="fcst-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
             ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-            ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
+            ("pressure", "Pressure"),
         ])
     )
     acc_filter_btns = "".join(
         f'<button class="acc-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
             ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-            ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
+            ("pressure", "Pressure"),
         ])
     )
     acc_window_btns = "".join(
@@ -3928,7 +3867,7 @@ def generate(
 
     _var_btns = [
         ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-        ("pressure", "Pressure"), ("wind_speed", "Wind Speed"),
+        ("pressure", "Pressure"),
     ]
     bias_filter_btns = "".join(
         f'<button class="bias-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
@@ -3959,7 +3898,7 @@ def generate(
         for i, lt in enumerate(lead_times)
     )
     _traj_vars = [("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-                  ("pressure", "Pressure"), ("wind_speed", "Wind Speed")]
+                  ("pressure", "Pressure")]
     trajectory_filter_btns = "".join(
         f'<button class="trajectory-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate(_traj_vars)
