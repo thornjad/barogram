@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 import time
 import urllib.request
@@ -128,16 +129,16 @@ header {
     z-index: 100;
     background: #f5f5f5;
     display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
+    flex-direction: column;
+    gap: 8px;
     margin-bottom: 24px;
     padding: 12px 0;
     border-bottom: 2px solid #1a1a1a;
 }
-.header-left {
+.header-top {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    justify-content: space-between;
+    align-items: flex-end;
 }
 header h1 { font-size: 22px; letter-spacing: -0.5px; }
 .generated { font-size: 12px; color: #666; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
@@ -426,27 +427,54 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .no-data { color: #888; font-style: italic; font-size: 13px; margin: 8px 0 16px; }
 .filter-label { font-size: 11px; color: #888; white-space: nowrap; align-self: center; }
 .filter-sep-left { margin-left: 8px; }
-@media (max-width: 600px) {
+@media (max-width: 768px) {
+    body { padding: 12px 10px; }
+    .generated { font-size: 11px; }
     .conditions-grid, .charts-grid { grid-template-columns: 1fr; }
+    .verification-windows { grid-template-columns: 1fr; }
+    .learnings-hyp-grid { grid-template-columns: 1fr; }
+    .weights-section { grid-template-columns: 1fr; }
+    .section { scroll-margin-top: 70px; }
+    .score-table, .mae-summary-table, .obs-history-table { font-size: 12px; }
+    .forecast-table th, .forecast-table td { padding: 6px 8px; }
+    .fcst-row-refs { gap: 12px; }
+    .model-run-header { flex-wrap: wrap; gap: 6px; }
+    .mae-raw-btn { margin-left: 0; }
+    .jump-nav a { font-size: 11px; padding: 3px 8px; }
+    #analysis, #weights, #obs-history { display: none; }
+    .model-runs { display: none; }
+    .jump-nav a[href="#analysis"],
+    .jump-nav a[href="#weights"] { display: none; }
 }
-.forecast-cards { display:flex; gap:12px; overflow-x:auto; padding-bottom:4px; }
-.forecast-card { flex:0 0 auto; min-width:140px; background:#fff; border:1px solid #ddd; border-radius:8px; padding:14px 16px; text-align:center; }
-.forecast-card.now-card { border-color:#b0c4de; background:#f5f8fc; }
-.fcst-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#888; margin-bottom:8px; }
-.fcst-temp { font-size:32px; font-weight:700; color:#1a1a1a; line-height:1; }
-.fcst-temp-spread { font-size:11px; color:#aaa; margin-top:2px; margin-bottom:10px; }
-.fcst-details { font-size:12px; color:#555; line-height:1.8; text-align:left; }
+.forecast-rows { display: flex; flex-direction: column; gap: 6px; }
+.fcst-row {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 16px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 12px 16px;
+    align-items: start;
+}
+.fcst-row.now-row { border-color: #b0c4de; background: #f5f8fc; }
+.fcst-row-main { }
+.fcst-row-refs { display: flex; gap: 20px; }
+.fcst-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#888; margin-bottom:6px; }
+.fcst-temp { font-size:26px; font-weight:700; color:#1a1a1a; line-height:1; }
+.fcst-temp-spread { font-size:11px; color:#aaa; margin-top:2px; margin-bottom:8px; }
+.fcst-details { font-size:12px; color:#555; line-height:1.8; }
 .fcst-details .detail-label { color:#999; }
 .fcst-no-data { color:#bbb; font-size:13px; }
-.fcst-ref { font-size:11px; color:#999; margin-top:8px; padding-top:6px; border-top:1px solid #f0f0f0; text-align:left; line-height:1.8; }
-.fcst-ref-lbl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#ccc; display:block; line-height:1.4; }
+.fcst-ref { flex: 1; min-width: 0; font-size:11px; color:#999; line-height:1.8; }
+.fcst-ref-lbl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#ccc; display:block; line-height:1.6; }
 .fcst-ref .detail-label { color:#bbb; }
-.fcst-ref-temp { font-size:15px; }
+.fcst-ref-temp { font-size:14px; }
 .fcst-delta { font-size:10px; color:#999; margin-left:3px; }
 .jump-nav {
     display: flex;
     gap: 6px;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
 }
 .jump-nav a {
     font-size: 12px;
@@ -742,6 +770,8 @@ def _conditions_card(label: str, obs, elevation_m: float = 0.0) -> str:
     timestamp = fmt.ts(obs["timestamp"])
 
     if label == "Tempest":
+        name = "Tempest Weather Station"
+        station_id = None
         gust = obs["wind_gust"]
         gust_str = f", gusts to {fmt.val(_to_mph(gust), '.1f', ' mph')}" if gust is not None else ""
         lc = obs["lightning_count"]
@@ -781,7 +811,9 @@ def _conditions_card(label: str, obs, elevation_m: float = 0.0) -> str:
 
     return (
         f'<div class="card">'
-        f'<h3>{label}: {name} <span class="station-id">({station_id})</span></h3>'
+        f'<h3>{label}: {name}'
+        + (f' <span class="station-id">({station_id})</span>' if station_id else "")
+        + '</h3>'
         f'<p class="obs-time">{timestamp}</p>'
         f'<table class="obs-table"><tbody>{rows_html}</tbody></table>'
         f'</div>'
@@ -920,8 +952,11 @@ def _obs_history_section(tempest_obs: list, nws_obs: list, elevation_m: float = 
         if not obs_list:
             return label
         r = obs_list[0]
+        if label == "Tempest":
+            return 'Tempest Weather Station'
         name = r["name"] or r["station_id"]
-        return f'{label}: {name} <span class="station-id">({r["station_id"]})</span>'
+        sid = r["station_id"]
+        return f'{label}: {name} <span class="station-id">({sid})</span>'
 
     def table_block(label: str, obs_list: list, tbody_id: str, btn_id: str, headers: list) -> str:
         heading = station_heading(label, obs_list)
@@ -956,7 +991,7 @@ def _obs_history_section(tempest_obs: list, nws_obs: list, elevation_m: float = 
     )
 
     return (
-        '<section class="section">'
+        '<section class="section" id="obs-history">'
         '<h2>Observation History</h2>'
         + tempest_block
         + nws_block
@@ -1201,10 +1236,10 @@ def _score_summary_table(
     return (
         f'<div>'
         f'<p class="window-label">{window_label} \u2014 {total} scored</p>'
-        f'{summary_table}'
+        f'<div class="table-scroll">{summary_table}</div>'
         f'<details class="score-details">'
         f'<summary>Variable breakdown</summary>'
-        f'{detail_table}'
+        f'<div class="table-scroll">{detail_table}</div>'
         f'</details>'
         f'</div>'
     )
@@ -1563,12 +1598,12 @@ function drawMaeCharts() {{
         }}] : [];
         Plotly.react('mae-chart-' + lead, traces, {{
             title: {{ text: title, font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-            margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-            xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }}, nticks: 10 }},
+            margin: {{ t: 40, b: 100, l: 50, r: 16 }},
+            xaxis: {{ tickangle: 0, tickfont: {{ size: 10 }}, nticks: 5 }},
             yaxis: Object.assign({{ tickfont: {{ size: 11 }} }}, yRange),
             height: 380,
             showlegend: true,
-            legend: {{ x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.8)', font: {{ size: 11 }} }},
+            legend: {{ orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{ size: 10 }} }},
             shapes: shapes,
             paper_bgcolor: 'white',
             plot_bgcolor: '#fafafa'
@@ -1803,8 +1838,13 @@ if (fcstAllModels.includes('bogo')) fcstModelColors['bogo'] = '#b0d8b0';
 let fcstActiveVar = fcstVariables[0];
 
 function drawFcstChart() {{
+    const isMobile = window.innerWidth < 768;
+    const mobileModels = new Set(['persistence', 'barogram_ensemble', 'nws', 'tempest_forecast']);
     const varData = fcstData[fcstActiveVar] || {{}};
-    const traces = Object.entries(varData).map(function([model, d]) {{
+    const entries = Object.entries(varData).filter(function([model]) {{
+        return !isMobile || mobileModels.has(model);
+    }});
+    const traces = entries.map(function([model, d]) {{
         const isPersistence = model === 'persistence';
         const color = fcstModelColors[model] || '#888888';
         return {{
@@ -1819,12 +1859,12 @@ function drawFcstChart() {{
     }});
     Plotly.react('chart-forecast', traces, {{
         title: {{ text: fcstVarLabels[fcstActiveVar], font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-        margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-        xaxis: {{ type: 'date', tickformat: '%b %e %H:%M', tickangle: -30, tickfont: {{ size: 11 }}, nticks: 10 }},
+        margin: {{ t: 40, b: isMobile ? 120 : 100, l: 50, r: 16 }},
+        xaxis: {{ type: 'date', tickformat: '%b %e %H:%M', tickangle: 0, tickfont: {{ size: 10 }}, nticks: 5 }},
         yaxis: {{ tickfont: {{ size: 11 }} }},
-        height: 420,
+        height: isMobile ? 360 : 420,
         showlegend: true,
-        legend: {{ x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.8)', font: {{ size: 11 }} }},
+        legend: {{ orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{ size: 10 }} }},
         paper_bgcolor: 'white',
         plot_bgcolor: '#fafafa'
     }}, {{responsive: true}});
@@ -1894,7 +1934,7 @@ function drawBiasCharts() {{
             title: {{ text: '+' + lead + 'h \u2014 ' + (biasFilterLabels[biasActiveVar] || biasActiveVar),
                       font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
             margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-            xaxis: {{ tickangle: -30, tickfont: {{ size: 11 }}, nticks: 10 }},
+            xaxis: {{ tickangle: 0, tickfont: {{ size: 10 }}, nticks: 5 }},
             yaxis: {{ tickfont: {{ size: 11 }} }},
             height: 380,
             showlegend: false,
@@ -2284,7 +2324,7 @@ def _ensemble_forecast_section(
 
     def _card(label: str, is_now: bool, temp_val, dew_val, pres_val, wind_val,
               temp_spread=None, nws=None, tempest_fcst=None, precip_val=None) -> str:
-        cls = 'forecast-card now-card' if is_now else 'forecast-card'
+        cls = 'fcst-row now-row' if is_now else 'fcst-row'
         # temperature — always the hero
         if temp_val is not None:
             temp_disp = f"{_to_f(temp_val):.0f}\u00b0F"
@@ -2383,11 +2423,15 @@ def _ensemble_forecast_section(
 
         return (
             f'<div class="{cls}">'
+            f'<div class="fcst-row-main">'
             f'<div class="fcst-label">{label}</div>'
             f'{temp_html}'
             f'{details_html}'
+            f'</div>'
+            f'<div class="fcst-row-refs">'
             f'{tempest_fcst_html}'
             f'{nws_html}'
+            f'</div>'
             f'</div>'
         )
 
@@ -2424,7 +2468,7 @@ def _ensemble_forecast_section(
         '<section class="section" id="forecast">\n'
         '  <h2>Ensemble Forecast</h2>\n'
         f'  <div class="obs-time">issued {issued_str}</div>\n'
-        f'  <div class="forecast-cards">{cards_html}</div>\n'
+        f'  <div class="forecast-rows">{cards_html}</div>\n'
         '</section>\n'
     )
 
@@ -3028,11 +3072,11 @@ def _learnings_section_html(data: dict) -> str:
 def _learnings_js(data: dict) -> str:
     _font = "'-apple-system, sans-serif'"
     _base_layout = (
-        f"margin:{{t:40,b:60,l:50,r:16}},"
-        f"xaxis:{{tickangle:-30,tickfont:{{size:11}},nticks:10}},"
+        f"margin:{{t:40,b:100,l:50,r:16}},"
+        f"xaxis:{{tickangle:0,tickfont:{{size:10}},nticks:5}},"
         f"yaxis:{{rangemode:'tozero',tickfont:{{size:11}}}},"
         f"height:320,showlegend:true,"
-        f"legend:{{x:0.01,y:0.99,xanchor:'left',yanchor:'top',bgcolor:'rgba(255,255,255,0.8)',font:{{size:11}}}},"
+        f"legend:{{orientation:'h',x:0,y:-0.18,xanchor:'left',yanchor:'top',font:{{size:10}}}},"
         f"paper_bgcolor:'white',plot_bgcolor:'#fafafa'"
     )
 
@@ -3100,14 +3144,14 @@ def _learnings_js(data: dict) -> str:
         cl_layout = (
             f"{{title:{{text:'Daily avg clearness (Tempest) vs sky cover fraction (NWS KMSP)',"
             f"font:{{size:13,family:{_font}}}}},"
-            f"margin:{{t:50,b:70,l:60,r:70}},"
-            f"xaxis:{{tickangle:-30,tickfont:{{size:11}},title:'date',nticks:10}},"
+            f"margin:{{t:50,b:110,l:60,r:16}},"
+            f"xaxis:{{tickangle:0,tickfont:{{size:10}},nticks:5,title:'date'}},"
             f"yaxis:{{title:'clearness index k (1=clear, 0=overcast)',"
             f"range:[0,1.05],tickfont:{{size:11}}}},"
             f"yaxis2:{{title:'sky cover fraction (1=OVC, 0=CLR)',"
             f"range:[0,1.05],overlaying:'y',side:'right',tickfont:{{size:11}}}},"
             f"height:380,showlegend:true,"
-            f"legend:{{x:0.01,y:0.99,xanchor:'left',yanchor:'top',bgcolor:'rgba(255,255,255,0.8)'}},"
+            f"legend:{{orientation:'h',x:0,y:-0.18,xanchor:'left',yanchor:'top',font:{{size:10}}}},"
             f"paper_bgcolor:'white',plot_bgcolor:'#fafafa'}}"
         )
         lines.append(
@@ -3449,12 +3493,12 @@ function drawTrajectoryChart() {{
     Plotly.react('trajectory-chart', traces, {{
         title: {{ text: 'Forecast trajectory \u2014 valid ' + (trajectoryData.valid_at_label || ''),
                   font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-        margin: {{ t: 40, b: 60, l: 55, r: 16 }},
+        margin: {{ t: 40, b: 100, l: 55, r: 16 }},
         xaxis: {{ title: 'Issued at', type: 'date', tickfont: {{ size: 11 }} }},
         yaxis: {{ title: unit, tickfont: {{ size: 11 }} }},
         height: 380,
         showlegend: true,
-        legend: {{ x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(255,255,255,0.8)', font: {{ size: 11 }} }},
+        legend: {{ orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{ size: 10 }} }},
         paper_bgcolor: 'white',
         plot_bgcolor: '#fafafa'
     }}, {{responsive: true}});
@@ -3741,11 +3785,11 @@ def _skill_timeseries_js(rows_14d: list, rows_120d: list, rows_alltime: list) ->
             f'mode:"lines",connectgaps:true,line:{{color:"#1f77b4",dash:"dash",width:1.5}},'
             f'showlegend:true}}'
             f'],{{'
-            f'height:340,margin:{{t:30,b:60,l:50,r:16}},'
+            f'height:340,margin:{{t:30,b:100,l:50,r:16}},'
             f'paper_bgcolor:"white",plot_bgcolor:"#fafafa",'
             f'yaxis:{{title:"Skill (%)",zeroline:true,zerolinecolor:"#888",zerolinewidth:2}},'
             f'xaxis:{{type:"date"}},'
-            f'legend:{{x:0.01,y:0.99,xanchor:"left",yanchor:"top"}},'
+            f'legend:{{orientation:"h",x:0,y:-0.18,xanchor:"left",yanchor:"top",font:{{size:10}}}},'
             f'shapes:[{{type:"line",xref:"paper",x0:0,x1:1,y0:0,y1:0,'
             f'line:{{color:"#888",width:2,dash:"dash"}}}}]'
             f'}},{{responsive:true}});'
@@ -3854,6 +3898,37 @@ def _recent_misses_html(rows: list) -> str:
             f'</tr>'
         )
     return header + "".join(body_rows) + "</tbody></table>"
+
+
+def _write_fragment(html: str, out_dir: Path) -> None:
+    css_start = html.index("<style>\n") + len("<style>\n")
+    css_end = html.index("\n</style>")
+    css = html[css_start:css_end]
+
+    # scope bare-element selectors so they don't bleed into the host site
+    css = re.sub(r"(?m)^body \{", ".barogram {", css)
+    css = re.sub(r"(?m)^header h1 \{", ".barogram-header h1 {", css)
+    css = re.sub(r"(?m)^header \{", ".barogram-header {", css)
+    css = re.sub(r"(?m)^h2 \{", ".barogram h2 {", css)
+    css = re.sub(r"(?m)^h3 \{", ".barogram h3 {", css)
+    # disable sticky header when embedded — site nav already handles that
+    css += "\n.barogram-header { position: relative; top: auto; z-index: auto; }\n"
+
+    body_start = html.index("<body>\n") + len("<body>\n")
+    script_anchor = '\n<script src="https://cdn.jsdelivr.net/'
+    body_end = html.index(script_anchor)
+    body_html = html[body_start:body_end]
+    body_html = body_html.replace("<header>", '<div class="barogram-header">', 1)
+    body_html = body_html.replace("</header>", "</div>", 1)
+    body_html = f'<div class="barogram">\n{body_html}\n</div>'
+
+    scripts_start = html.index(script_anchor) + 1
+    scripts_end = html.index("\n</body>")
+    scripts_html = html[scripts_start:scripts_end]
+
+    (out_dir / "barogram-style.css").write_text(css, encoding="utf-8")
+    (out_dir / "barogram-body.html").write_text(body_html, encoding="utf-8")
+    (out_dir / "barogram-scripts.html").write_text(scripts_html, encoding="utf-8")
 
 
 def generate(
@@ -4094,25 +4169,29 @@ def generate(
 <div class="container">
 
 <header>
-  <div class="header-left">
+  <div class="header-top">
     <h1>barogram</h1>
-    <nav class="jump-nav">
-      <a href="#conditions">Conditions</a>
-      <a href="#forecast">Forecast</a>
-      <a href="#verification">Verification</a>
-      <a href="#analysis">Analysis</a>
-      <a href="#weights">Weights</a>
-      <a href="#learnings">Learnings</a>
-      <a href="#latest-run">Latest Run</a>
-    </nav>
+    <div class="generated">
+      <span>generated {generated_at}</span>
+      <span>last forecast: {last_forecast_str}</span>
+      <span>last tune: {last_tune_str}</span>
+    </div>
   </div>
-  <div class="generated">
-    <span>generated {generated_at}</span>
-    <span>last forecast: {last_forecast_str}</span>
-    <span>last tune: {last_tune_str}</span>
-  </div>
+  <nav class="jump-nav">
+    <a href="#conditions">Conditions</a>
+    <a href="#forecast">Forecast</a>
+    <a href="#verification">Verification</a>
+    <a href="#analysis">Analysis</a>
+    <a href="#weights">Weights</a>
+    <a href="#learnings">Learnings</a>
+    <a href="#latest-run">Latest Run</a>
+  </nav>
 </header>
 {staleness_banner}
+<section class="section" id="about">
+  <p>Barogram is a pet forecast ensemble, a small collection of models I run for fun and to learn more about how forecasting actually works. Every three hours, they look at the latest readings from a backyard Tempest weather station and a nearby NWS airport station, then each independently predict local temperature, dew point, pressure, and precipitation probability for the next 6 to 24 hours.</p>
+  <p style="margin-top:10px">After each run, the previous predictions get scored against what actually happened. Models that have been performing better lately carry more weight in the ensemble&#x2019;s combined output. The base models use simple approaches and none of them are impressive on their own. The ensemble is what makes them useful.</p>
+</section>
 <section class="section" id="conditions">
   <h2>Latest Conditions</h2>
   <div class="conditions-grid">
@@ -4235,3 +4314,4 @@ def generate(
 """
 
     output_path.write_text(html, encoding="utf-8")
+    _write_fragment(html, output_path.parent)
