@@ -31,7 +31,7 @@ def _fetch(lat: float, lon: float) -> dict[int, dict]:
     """Fetch NWS hourly forecast keyed by unix timestamp. Returns {} on failure."""
     try:
         req = urllib.request.Request(_NWS_POINTS.format(lat=lat, lon=lon), headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             points = json.loads(resp.read())
         hourly_url = points["properties"]["forecastHourly"]
 

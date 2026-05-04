@@ -11,6 +11,7 @@ not configured, so forecast runs succeed on machines without Tempest credentials
 
 import json
 import math
+import sys
 import urllib.request
 
 MODEL_ID = 201
@@ -44,7 +45,7 @@ def _fetch(station_id: str, token: str) -> dict[int, dict]:
     try:
         url = _API.format(station_id=station_id, token=token)
         req = urllib.request.Request(url, headers={"User-Agent": "barogram/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
         result: dict[int, dict] = {}
         for entry in data.get("forecast", {}).get("hourly", []):
@@ -60,7 +61,8 @@ def _fetch(station_id: str, token: str) -> dict[int, dict]:
                 "precip_prob": pop / 100.0 if pop is not None else None,
             }
         return result
-    except Exception:
+    except Exception as e:
+        print(f"tempest_forecast: fetch failed: {e}", file=sys.stderr)
         return {}
 
 
