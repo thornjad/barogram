@@ -26,6 +26,7 @@ _MIN_WIND_MS        = 1.5       # below this, wind direction is unreliable
 _MIN_SAMPLES        = 3         # minimum historical pairs per (cat, col, lead)
 _PRECIP_1H_MM       = 0.5       # mm/h threshold for active precipitation
 _SOLAR_FLOOR_W      = 5.0       # W/m² floor to distinguish day from night
+_SOLAR_CLIMO_MIN_W  = 100.0     # min climo mean below which cloud classification is unreliable
 _SOLAR_MIN_SAMPLES  = 10        # minimum samples to compute climo solar mean
 _VEER_THRESHOLD_DEG = 15.0      # degrees threshold for veering/backing classification
 
@@ -138,7 +139,7 @@ def _solar_cloud_category(obs, solar_climo):
         return None
     dt = datetime.datetime.fromtimestamp(obs["timestamp"])
     climo_mean = solar_climo.get((dt.month, dt.hour))
-    if climo_mean is None:
+    if climo_mean is None or climo_mean < _SOLAR_CLIMO_MIN_W:
         return None
     deficit = 1.0 - sr / climo_mean
     if deficit > 0.7:
