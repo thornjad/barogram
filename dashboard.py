@@ -4312,9 +4312,9 @@ def _write_fragment(html: str, out_dir: Path) -> None:
     script_anchor = '\n<script src="https://cdn.jsdelivr.net/'
     body_end = html.index(script_anchor)
     body_html = html[body_start:body_end]
-    body_html = re.sub(r"<header\b[^>]*>", '<div class="barogram-header" id="barogram-top">', body_html, count=1)
+    body_html = re.sub(r"<header\b[^>]*>", '<div class="barogram-header">', body_html, count=1)
     body_html = body_html.replace("</header>", "</div>", 1)
-    body_html = f'<div class="barogram">\n{body_html}\n</div>'
+    body_html = f'<div class="barogram" id="barogram-top">\n{body_html}\n</div>'
 
     scripts_start = html.index(script_anchor) + 1
     scripts_end = html.index("\n</body>")
@@ -4560,9 +4560,9 @@ def generate(
 </style>
 </head>
 <body>
-<div class="container">
+<div class="container" id="barogram-top">
 
-<header id="barogram-top">
+<header>
   <div class="header-top">
     <h1>barogram</h1>
     <div class="generated">
