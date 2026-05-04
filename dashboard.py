@@ -1916,6 +1916,7 @@ def _chart_js(chart_data_dict: dict) -> str:
         "temperature": "Temperature (\u00b0F)",
         "dewpoint": "Dew Point (\u00b0F)",
         "pressure": "Pressure (hPa)",
+        "precip_prob": "Precip Prob",
     })
     vars_json = json.dumps(VARIABLES)
     return f"""\
@@ -4483,6 +4484,7 @@ def generate(
         for i, (v, lbl) in enumerate([
             ("avg", "Average"), ("temperature", "Temperature"),
             ("dewpoint", "Dew Point"), ("pressure", "Pressure"),
+            ("precip_prob", "Precip Prob"),
         ])
     )
     mae_chart_divs = "".join(
@@ -4494,14 +4496,14 @@ def generate(
         f'<button class="fcst-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
             ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-            ("pressure", "Pressure"),
+            ("pressure", "Pressure"), ("precip_prob", "Precip Prob"),
         ])
     )
     acc_filter_btns = "".join(
         f'<button class="acc-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
             ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-            ("pressure", "Pressure"),
+            ("pressure", "Pressure"), ("precip_prob", "Precip Prob"),
         ])
     )
     acc_window_btns = "".join(
