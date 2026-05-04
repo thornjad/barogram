@@ -416,6 +416,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
         font-weight: 600;
         margin-bottom: 1px;
     }
+    .ap-signal-table td:nth-child(1) { display: none; }
     .ap-signal-table td:nth-child(2) {
         grid-column: 1 / -1;
         font-size: 13px;
@@ -425,6 +426,8 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
         margin-bottom: 2px;
     }
     .ap-signal-table td:nth-child(2)::before { display: none; }
+    .ap-signal-table td:nth-child(3) { grid-column: 1 / -1; }
+    .ap-signal-table td:nth-child(4) { grid-column: 1 / -1; }
 }
 .forecast-rows { display: flex; flex-direction: column; gap: 6px; }
 .fcst-row {

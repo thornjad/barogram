@@ -532,6 +532,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
         font-weight: 600;
         margin-bottom: 1px;
     }
+    .ap-signal-table td:nth-child(1) { display: none; }
     .ap-signal-table td:nth-child(2) {
         grid-column: 1 / -1;
         font-size: 13px;
@@ -541,6 +542,8 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
         margin-bottom: 2px;
     }
     .ap-signal-table td:nth-child(2)::before { display: none; }
+    .ap-signal-table td:nth-child(3) { grid-column: 1 / -1; }
+    .ap-signal-table td:nth-child(4) { grid-column: 1 / -1; }
 }
 .forecast-rows { display: flex; flex-direction: column; gap: 6px; }
 .fcst-row {
@@ -3796,6 +3799,9 @@ def _trajectory_data(rows: list) -> dict:
         if var in ("temperature", "dewpoint"):
             obs_disp = _to_f(obs_mean)
             unit = "\u00b0F"
+        elif var == "precip_prob":
+            obs_disp = obs_mean
+            unit = "%"
         else:
             obs_disp = obs_mean
             unit = "hPa"
@@ -4544,7 +4550,7 @@ def generate(
         for i, lt in enumerate(lead_times)
     )
     _traj_vars = [("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-                  ("pressure", "Pressure")]
+                  ("pressure", "Pressure"), ("precip_prob", "Precip Prob")]
     trajectory_filter_btns = "".join(
         f'<button class="trajectory-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate(_traj_vars)
