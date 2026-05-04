@@ -121,7 +121,7 @@ def nearest_tempest_obs(
     return conn.execute(
         """
         select t.air_temp, t.dew_point, t.station_pressure, t.wind_avg,
-               t.wind_direction, t.solar_radiation, t.wind_gust,
+               t.wind_direction, t.solar_radiation, t.uv_index, t.wind_gust,
                t.lightning_count, t.precip_accum_day
         from tempest_obs t
         join stations s on s.station_id = t.station_id
@@ -794,7 +794,7 @@ def tempest_obs_in_range(conn: sqlite3.Connection, start_ts: int, end_ts: int) -
     return conn.execute(
         """
         select t.timestamp, t.air_temp, t.dew_point, t.station_pressure, t.wind_avg,
-               t.wind_direction, t.solar_radiation, t.wind_gust,
+               t.wind_direction, t.solar_radiation, t.uv_index, t.wind_gust,
                t.lightning_count, t.precip_accum_day
         from tempest_obs t
         join stations s on s.station_id = t.station_id
