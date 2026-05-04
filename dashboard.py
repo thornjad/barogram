@@ -4572,7 +4572,7 @@ def generate(
     </div>
   </div>
   <nav class="jump-nav">
-    <a href="#barogram-top">Top</a>
+    <a href="#">Top</a>
     <a href="#conditions">Conditions</a>
     <a href="#forecast">Forecast</a>
     <a href="#verification">Verification</a>
