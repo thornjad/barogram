@@ -549,6 +549,8 @@ def cmd_tune(args, conf):
             n_members = len(fractions)
             min_w = args.floor / n_members
             floored = {mid: max(f, min_w) for mid, f in fractions.items()}
+            if bogo.MODEL_ID in floored:
+                floored[bogo.MODEL_ID] = min_w  # bogo always gets minimum weight
             floored_total = sum(floored.values())
             final = {mid: w / floored_total for mid, w in floored.items()}
             for mid, w in final.items():
