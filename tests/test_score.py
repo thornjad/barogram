@@ -133,7 +133,7 @@ def test_variable_column_mapping():
 
 
 def test_score_precip_prob_rain():
-    """precip_prob forecast scores 1.0 observed when precip delta > 0.1mm."""
+    """precip_prob mae stores Brier score (squared error) when it rained."""
     conn_in = make_input_db()
     conn_out = make_output_db()
     _insert_obs(conn_in, _PAST - 600, precip_accum_day=0.0)
@@ -142,11 +142,11 @@ def test_score_precip_prob_rain():
     score.run(conn_in, conn_out)
     row = conn_out.execute("select observed, mae from forecasts").fetchone()
     assert row["observed"] == 1.0
-    assert abs(row["mae"] - 0.2) < 1e-6
+    assert abs(row["mae"] - 0.04) < 1e-6  # (0.8 - 1.0)^2
 
 
 def test_score_precip_prob_no_rain():
-    """precip_prob forecast scores 0.0 observed when no precip accumulation."""
+    """precip_prob mae stores Brier score (squared error) when dry."""
     conn_in = make_input_db()
     conn_out = make_output_db()
     _insert_obs(conn_in, _PAST - 600, precip_accum_day=0.0)
@@ -155,4 +155,4 @@ def test_score_precip_prob_no_rain():
     score.run(conn_in, conn_out)
     row = conn_out.execute("select observed, mae from forecasts").fetchone()
     assert row["observed"] == 0.0
-    assert abs(row["mae"] - 0.4) < 1e-6
+    assert abs(row["mae"] - 0.16) < 1e-6  # (0.4 - 0.0)^2
