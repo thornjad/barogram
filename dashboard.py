@@ -152,6 +152,8 @@ header h1 { font-size: 22px; letter-spacing: -0.5px; }
     border-radius: 3px;
 }
 .stale-banner code { background: #ffeaa0; padding: 1px 4px; border-radius: 2px; font-size: 12px; }
+.stale-age-banner { background: #fff0e0; border-color: #e07000; border-left-color: #c05000; }
+.stale-age-banner code { background: #ffd8a8; }
 h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
 h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .conditions-grid {
@@ -503,47 +505,58 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
         margin-bottom: 2px;
     }
     .tempest-obs td:first-child::before, .nws-obs td:first-child::before { display: none; }
-    .ap-signal-table thead { display: none; }
-    .ap-signal-table tbody { display: block; width: 100%; }
-    .ap-signal-table tr {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
+    .ap-signal-container .table-scroll { display: none; }
+    .ap-signal-cards { display: flex; flex-direction: column; gap: 4px; }
+    .ap-signal-card {
         border: 1px solid #e0e0e0;
         border-radius: 4px;
-        padding: 8px 10px;
-        margin-bottom: 6px;
-        gap: 5px 12px;
+        padding: 7px 10px;
         background: #fff;
     }
-    .ap-signal-table td {
-        display: block;
-        padding: 0;
-        border: none;
-        font-size: 12px;
-        line-height: 1.4;
+    .ap-card-info {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
     }
-    .ap-signal-table td::before {
-        content: attr(data-label);
+    .ap-card-num { font-size: 10px; color: #bbb; flex-shrink: 0; width: 18px; }
+    .ap-card-name {
+        font-weight: 600;
+        font-size: 12px;
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .ap-card-signal {
+        font-size: 10px;
+        color: #999;
+        flex-shrink: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 95px;
+    }
+    .ap-card-state { flex-shrink: 0; }
+    .ap-card-leads {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 5px;
+        padding-top: 5px;
+        border-top: 1px solid #f0f0f0;
+    }
+    .ap-card-lead { text-align: center; }
+    .ap-lead-lbl {
         display: block;
         font-size: 9px;
-        color: #999;
+        color: #bbb;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
-        font-weight: 600;
+        letter-spacing: 0.03em;
+        line-height: 1.3;
         margin-bottom: 1px;
     }
-    .ap-signal-table td:nth-child(1) { display: none; }
-    .ap-signal-table td:nth-child(2) {
-        grid-column: 1 / -1;
-        font-size: 13px;
-        font-weight: 700;
-        padding-bottom: 3px;
-        border-bottom: 1px solid #f0f0f0;
-        margin-bottom: 2px;
-    }
-    .ap-signal-table td:nth-child(2)::before { display: none; }
-    .ap-signal-table td:nth-child(3) { grid-column: 1 / -1; }
-    .ap-signal-table td:nth-child(4) { grid-column: 1 / -1; }
+    .ap-card-lead-val { font-size: 12px; color: #333; }
 }
 .forecast-rows { display: flex; flex-direction: column; gap: 6px; }
 .fcst-row {
@@ -600,6 +613,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     margin-top: 8px;
 }
 .analysis-section > h2 { color: #555; }
+.ap-signal-cards { display: none; }
 .ap-signal-table {
     width: 100%;
     border-collapse: collapse;
@@ -1127,224 +1141,6 @@ makeLoader(nwsHistory, 'nws-obs-tbody', 'nws-more-btn');
 """
 
 
-def _compute_model_summary(rows: list) -> dict:
-    """Returns model_name -> {model_id, type, avg_mae, mae_24h, n} from member_id=0 rows."""
-    accum: dict = {}
-    for row in rows:
-        name = row["model"]
-        if name not in accum:
-            accum[name] = {
-                "model_id": row["model_id"],
-                "type": row["type"],
-                "sum_mae": 0.0,
-                "sum_n": 0,
-                "sum_24": 0.0,
-                "n_24": 0,
-            }
-        a = accum[name]
-        n = row["n"]
-        mae = row["avg_mae"]
-        if mae is not None and n:
-            a["sum_mae"] += mae * n
-            a["sum_n"] += n
-            if row["lead_hours"] == 24:
-                a["sum_24"] += mae * n
-                a["n_24"] += n
-    result = {}
-    for name, a in accum.items():
-        result[name] = {
-            "model_id": a["model_id"],
-            "type": a["type"],
-            "avg_mae": a["sum_mae"] / a["sum_n"] if a["sum_n"] else None,
-            "mae_24h": a["sum_24"] / a["n_24"] if a["n_24"] else None,
-            "n": a["sum_n"],
-        }
-    return result
-
-
-def _mae_color_class(value: float | None, baseline: float | None) -> str:
-    if value is None or baseline is None or baseline == 0:
-        return ""
-    ratio = value / baseline
-    if ratio <= 0.90:
-        return ' class="mae-better"'
-    if ratio >= 1.10:
-        return ' class="mae-worse"'
-    return ""
-
-
-def _score_summary_table(
-    summary_rows: list,
-    window_label: str,
-    member_models: set | None = None,
-    all_models: dict | None = None,
-) -> str:
-    model_summary = _compute_model_summary(summary_rows)
-
-    # merge in any models that have runs but no scored data yet
-    if all_models:
-        for name, meta in all_models.items():
-            if name not in model_summary:
-                model_summary[name] = {
-                    "model_id": meta["model_id"],
-                    "type": meta["type"],
-                    "avg_mae": None,
-                    "mae_24h": None,
-                    "n": 0,
-                }
-
-    if not model_summary:
-        return f'<div><p class="window-label">{window_label}</p><p class="muted">no scored forecasts</p></div>'
-
-    climo = model_summary.get("climatological_mean", {})
-    c_avg = climo.get("avg_mae")
-    c_24h = climo.get("mae_24h")
-    total = sum(row["n"] for row in summary_rows)
-    sorted_names = sorted(model_summary.keys(), key=lambda k: model_summary[k]["model_id"])
-
-    pers_m = model_summary.get("persistence", {})
-    pers_avg_ratio = pers_m["avg_mae"] / c_avg if (pers_m.get("avg_mae") is not None and c_avg) else None
-    pers_24h_ratio = pers_m["mae_24h"] / c_24h if (pers_m.get("mae_24h") is not None and c_24h) else None
-
-    # level 1: at-a-glance summary rows
-    summary_tbody = []
-    for name in sorted_names:
-        m = model_summary[name]
-        if name == "climatological_mean":
-            badge = '<span class="baseline-badge">baseline</span>'
-        elif name == "persistence":
-            badge = ""
-        elif m["type"] == "ensemble":
-            badge = '<span class="ensemble-badge">ensemble</span>'
-        elif m["type"] == "external":
-            badge = '<span class="external-badge">external</span>'
-        elif name == "bogo":
-            badge = '<span class="fun-badge">fun</span>'
-        else:
-            badge = ""
-
-        is_climo = name == "climatological_mean"
-        is_pers = name == "persistence"
-        if is_climo:
-            avg_ratio = 1.0 if m["avg_mae"] is not None else None
-            h24_ratio = 1.0 if m["mae_24h"] is not None else None
-        else:
-            avg_ratio = m["avg_mae"] / c_avg if (m["avg_mae"] is not None and c_avg) else None
-            h24_ratio = m["mae_24h"] / c_24h if (m["mae_24h"] is not None and c_24h) else None
-
-        def _worse_than_pers(ratio, pers_ratio):
-            return (ratio is not None and pers_ratio is not None and ratio > pers_ratio)
-
-        if not is_climo and not is_pers and _worse_than_pers(avg_ratio, pers_avg_ratio):
-            avg_cls = ' class="mae-worse-pers"'
-        else:
-            avg_cls = _mae_color_class(avg_ratio, 1.0) if not is_climo and avg_ratio is not None else ""
-        if not is_climo and not is_pers and _worse_than_pers(h24_ratio, pers_24h_ratio):
-            h24_cls = ' class="mae-worse-pers"'
-        else:
-            h24_cls = _mae_color_class(h24_ratio, 1.0) if not is_climo and h24_ratio is not None else ""
-        def _cell(ratio, raw, cls, is_baseline=False):
-            if ratio is None:
-                return "\u2014"
-            raw_str = f"{raw:.2f}" if raw is not None else "\u2014"
-            effective_cls = ' class="mae-baseline-val"' if is_baseline else cls
-            return f'<span{effective_cls} data-raw="{raw_str}" data-ratio="{ratio:.2f}">{ratio:.2f}</span>'
-        avg_str = _cell(avg_ratio, m["avg_mae"], avg_cls, is_climo)
-        h24_str = _cell(h24_ratio, m["mae_24h"], h24_cls, is_climo)
-
-        has_members = bool(member_models) and name in member_models
-        safe = name.replace("_", "-").replace(" ", "-")
-        members_cell = (
-            f'<td><button class="member-btn" data-model="{name}">members</button></td>'
-            if has_members else "<td></td>"
-        )
-        member_detail_row = (
-            f'<tr class="member-detail-row" id="mdr-{safe}" style="display:none">'
-            f'<td colspan="5"><div class="member-detail" id="md-{safe}"></div></td>'
-            f'</tr>'
-            if has_members else ""
-        )
-        row_cls = ' class="baseline-row"' if name in ('climatological_mean', 'persistence') else ''
-        summary_tbody.append(
-            f'<tr{row_cls}>'
-            f'<td class="model-id-cell">{m["model_id"]}</td>'
-            f'<th>{name} {badge}</th>'
-            f'<td>{avg_str}</td>'
-            f'<td>{h24_str}</td>'
-            f'{members_cell}'
-            f'</tr>'
-            f'{member_detail_row}'
-        )
-
-    summary_table = (
-        '<table class="mae-summary-table">'
-        '<thead><tr><th>ID</th><th>Model</th><th class="col-avg-hdr">Avg vs climo</th><th class="col-24h-hdr">+24h vs climo</th><th></th></tr></thead>'
-        f'<tbody>{"".join(summary_tbody)}</tbody>'
-        '</table>'
-    )
-
-    # level 2: variable × lead breakdown wrapped in <details>
-    by_model: dict = {}
-    for row in summary_rows:
-        key = (row["model_id"], row["model"], row["type"])
-        by_model.setdefault(key, {}).setdefault(row["variable"], {})[row["lead_hours"]] = (
-            row["avg_mae"], row["avg_bias"]
-        )
-
-    leads = sorted({row["lead_hours"] for row in summary_rows})
-    header_cells = "".join(f"<th>+{h}h</th>" for h in leads)
-    sorted_keys = sorted(by_model.keys(), key=lambda k: k[0])
-    detail_rows = []
-    for model_id, model_name, model_type in sorted_keys:
-        hdr_class = {"ensemble": "ensemble-header", "external": "external-header"}.get(
-            model_type, "model-header"
-        )
-        detail_rows.append(
-            f'<tr class="{hdr_class}"><th colspan="{len(leads) + 1}">{model_id} — {model_name}</th></tr>'
-        )
-        var_data = by_model[(model_id, model_name, model_type)]
-        row_class = {
-            "ensemble": ' class="ensemble-row"',
-            "external": ' class="external-row"',
-        }.get(model_type, "")
-        for var in VARIABLES:
-            if var not in var_data:
-                continue
-            var_label = _VARIABLE_LABEL.get(var, var)
-            unit = _UNIT.get(var, "")
-            cells = []
-            for l in leads:
-                if l in var_data[var]:
-                    mae, bias = var_data[var][l]
-                    if var in ("temperature", "dewpoint"):
-                        mae = _diff_to_f(mae)
-                        bias = _diff_to_f(bias)
-                    sign = "+" if (bias or 0) >= 0 else ""
-                    cells.append(f"<td>{mae:.2f}<small>{sign}{bias:.2f}</small></td>")
-                else:
-                    cells.append("<td>\u2014</td>")
-            detail_rows.append(
-                f'<tr{row_class}><th>{var_label} ({unit})</th>{"".join(cells)}</tr>'
-            )
-
-    detail_table = (
-        '<table class="score-table">'
-        f'<thead><tr><th>MAE / bias</th>{header_cells}</tr></thead>'
-        f'<tbody>{"".join(detail_rows)}</tbody>'
-        '</table>'
-    )
-
-    return (
-        f'<div>'
-        f'<p class="window-label">{window_label} \u2014 {total} scored</p>'
-        f'<div class="table-scroll">{summary_table}</div>'
-        f'<details class="score-details">'
-        f'<summary>Variable breakdown</summary>'
-        f'<div class="table-scroll">{detail_table}</div>'
-        f'</details>'
-        f'</div>'
-    )
-
 
 def _rolling_mean(values: list, window: int = 10) -> list:
     """Trailing rolling mean of `window` points; None values are skipped."""
@@ -1357,12 +1153,11 @@ def _rolling_mean(values: list, window: int = 10) -> list:
 
 def _mae_timeseries_data(timeseries_rows: list) -> dict:
     """lead (str) -> model -> {is_baseline, is_persistence, is_ensemble, model_id,
-                               series: {var|avg -> {x, y_raw, y_ratio, y_ratio_rolling}}}
+                               series: {var|avg -> {x, y_ratio, y_ratio_rolling}}}
 
-    y_ratio = MAE / climatological_mean_MAE for the same (var, lead, issued_at).
-    climatological_mean always has y_ratio = 1.0; persistence shows its actual
-    ratio vs climo. Average series ratios are the mean ratio across variables
-    (dimensionless, comparable across vars).
+    y_ratio = skill vs climatological_mean for the same (var, lead, issued_at):
+    MAE / climo_MAE (1.0 = matches climo). Average series averages dimensionless
+    ratios across variables (safe to mix because units cancel).
     """
     raw: dict = {}
     model_meta: dict = {}
@@ -1375,7 +1170,6 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
 
     result: dict = {}
     for lead in sorted(raw):
-        # climo MAE for this lead: var -> issued_at -> mae
         c_ts: dict = raw[lead].get("climatological_mean", {})
         result[str(lead)] = {}
         for model, vars_ in raw[lead].items():
@@ -1385,28 +1179,19 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
             series: dict = {}
             for var, ts in vars_.items():
                 c_var = c_ts.get(var, {})
-                x, y_raw, y_ratio = [], [], []
+                x, y_ratio = [], []
                 for issued in sorted(ts):
                     mae = ts[issued]
-                    mae_display = (
-                        _diff_to_f(mae) if var in ("temperature", "dewpoint")
-                        else mae
-                    )
                     c = c_var.get(issued)
                     ratio = 1.0 if is_baseline else (mae / c if c else None)
                     x.append(fmt.short_ts(issued))
-                    y_raw.append(mae_display)
                     y_ratio.append(ratio)
-                series[var] = {
-                    "x": x, "y_raw": y_raw, "y_ratio": y_ratio,
-                    "y_ratio_rolling": _rolling_mean(y_ratio),
-                    "y_raw_rolling": _rolling_mean(y_raw),
-                }
-            # average series
+                series[var] = {"x": x, "y_ratio": y_ratio, "y_ratio_rolling": _rolling_mean(y_ratio)}
+            # average series: mean skill ratio across variables (dimensionless)
             all_issued = sorted(set().union(*[set(ts) for ts in vars_.values()]))
-            ax, ay_raw, ay_ratio = [], [], []
+            ax, ay_ratio = [], []
             for issued in all_issued:
-                ratios, raws = [], []
+                ratios = []
                 for var, ts in vars_.items():
                     if issued not in ts:
                         continue
@@ -1415,16 +1200,10 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
                     c = c_var.get(issued)
                     if is_baseline or c:
                         ratios.append(1.0 if is_baseline else mae / c)
-                    raws.append(mae)
                 if ratios:
                     ax.append(fmt.short_ts(issued))
                     ay_ratio.append(sum(ratios) / len(ratios))
-                    ay_raw.append(sum(raws) / len(raws) if raws else None)
-            series["avg"] = {
-                "x": ax, "y_raw": ay_raw, "y_ratio": ay_ratio,
-                "y_ratio_rolling": _rolling_mean(ay_ratio),
-                "y_raw_rolling": _rolling_mean(ay_raw),
-            }
+            series["avg"] = {"x": ax, "y_ratio": ay_ratio, "y_ratio_rolling": _rolling_mean(ay_ratio)}
             result[str(lead)][model] = {
                 "is_baseline": is_baseline,
                 "is_persistence": is_persistence,
@@ -1473,30 +1252,6 @@ def _bias_timeseries_data(rows: list) -> dict:
                 "model_id": model_meta[model]["model_id"],
                 "series": series,
             }
-    return result
-
-
-def _lead_skill_data(summary_rows: list) -> dict:
-    """variable -> model -> {model_id, is_persistence, is_ensemble, points: {lead -> avg_mae}}"""
-    result: dict = {}
-    for row in summary_rows:
-        var = row["variable"]
-        model = row["model"]
-        if var not in result:
-            result[var] = {}
-        if model not in result[var]:
-            result[var][model] = {
-                "model_id": row["model_id"],
-                "is_persistence": model == "persistence",
-                "is_ensemble": row["type"] == "ensemble",
-                "is_external": row["type"] == "external",
-                "points": {},
-            }
-        mae = row["avg_mae"]
-        if mae is not None:
-            if var in ("temperature", "dewpoint"):
-                mae = _diff_to_f(mae)
-        result[var][model]["points"][row["lead_hours"]] = mae
     return result
 
 
@@ -1582,50 +1337,14 @@ def _diurnal_data(rows: list) -> dict:
     return result
 
 
-def _error_dist_data(rows: list) -> dict:
-    """variable -> lead_str -> model -> {model_id, is_persistence, is_ensemble, errors}"""
-    raw: dict = {}
-    model_meta: dict = {}
-    for row in rows:
-        var = row["variable"]
-        lead = str(row["lead_hours"])
-        model = row["model"]
-        if model not in model_meta:
-            model_meta[model] = {
-                "model_id": row["model_id"],
-                "is_persistence": model == "persistence",
-                "is_ensemble": row["type"] == "ensemble",
-            }
-        err = row["error"]
-        if err is not None:
-            if var in ("temperature", "dewpoint"):
-                err = _diff_to_f(err)
-        raw.setdefault(var, {}).setdefault(lead, {}).setdefault(model, []).append(err)
-
-    result: dict = {}
-    for var, leads in raw.items():
-        result[var] = {}
-        for lead, models in leads.items():
-            result[var][lead] = {}
-            for model, errors in models.items():
-                meta = model_meta[model]
-                result[var][lead][model] = {
-                    "model_id": meta["model_id"],
-                    "is_persistence": meta["is_persistence"],
-                    "is_ensemble": meta["is_ensemble"],
-                    "errors": [e for e in errors if e is not None],
-                }
-    return result
-
-
 def _mae_timeseries_js(timeseries_data: dict) -> str:
     data_json = json.dumps(timeseries_data)
     filter_labels_json = json.dumps({
-        "avg": "Average MAE",
-        "temperature": "Temperature MAE (°F)",
-        "dewpoint": "Dew Point MAE (°F)",
-        "pressure": "Pressure MAE (hPa)",
-        "precip_prob": "Precip Prob MAE",
+        "avg": "Average skill vs climo",
+        "temperature": "Temperature skill vs climo",
+        "dewpoint": "Dew Point skill vs climo",
+        "pressure": "Pressure skill vs climo",
+        "precip_prob": "Precip Prob Brier skill",
     })
     return f"""const maeLeadData = {data_json};
 const maeFilterLabels = {filter_labels_json};
@@ -1640,7 +1359,6 @@ maeAllModels.forEach(function(m, i) {{ maeModelColors[m] = MAE_PALETTE[i % MAE_P
 if (maeAllModels.includes('bogo')) maeModelColors['bogo'] = '#b0d8b0';
 
 let maeActiveVar = 'avg';
-let verifMode = 'ratio';
 let smoothMode = true;
 
 function drawMaeCharts() {{
@@ -1654,25 +1372,18 @@ function drawMaeCharts() {{
             const isEns = info.is_ensemble;
             const color = isRef ? '#aaaaaa' : maeModelColors[model];
             const dash = isBaseline ? 'longdash' : (isPersistence ? 'dot' : (isEns ? 'dash' : 'solid'));
-            // smooth mode: use rolling avg as primary for non-reference models
-            let y;
-            if (verifMode === 'ratio') {{
-                y = (smoothMode && !isRef) ? (s.y_ratio_rolling || []) : (s.y_ratio || []);
-            }} else {{
-                y = (smoothMode && !isRef) ? (s.y_raw_rolling || []) : (s.y_raw || []);
-            }}
+            const y = (smoothMode && !isRef) ? (s.y_ratio_rolling || []) : (s.y_ratio || []);
             return {{
                 type: 'scatter',
                 mode: isRef ? 'lines' : (smoothMode ? 'lines' : 'lines+markers'),
-                name: String(info.model_id),
+                name: String(info.model_id),  // deliberate: full names overflow chart legend
                 x: s.x || [],
                 y: y,
                 line: {{ width: isRef ? 1.5 : 2, dash: dash, color: color }},
                 marker: {{ size: 5, color: color }}
             }};
         }});
-        // per-run mode: show rolling avg as secondary overlay in ratio mode
-        if (!smoothMode && verifMode === 'ratio') {{
+        if (!smoothMode) {{
             Object.entries(leadData).forEach(function([model, info]) {{
                 if (info.is_baseline || info.is_persistence) return;
                 const s = (info.series || {{}})[maeActiveVar] || {{}};
@@ -1688,41 +1399,25 @@ function drawMaeCharts() {{
                 }});
             }});
         }}
-        const isRatio = verifMode === 'ratio';
-        const varLabel = isRatio
-            ? (maeActiveVar === 'avg' ? 'average skill vs climo' : maeFilterLabels[maeActiveVar].replace(' MAE', ' skill vs climo'))
-            : (maeFilterLabels[maeActiveVar] || maeActiveVar);
+        const varLabel = maeFilterLabels[maeActiveVar] || maeActiveVar;
         const title = '+' + lead + 'h — ' + varLabel;
-        const yRange = isRatio ? {{ rangemode: 'tozero' }} : {{ rangemode: 'tozero' }};
-        const shapes = isRatio ? [{{
-            type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 1, y1: 1,
-            line: {{ color: '#dddddd', width: 1, dash: 'dot' }}
-        }}] : [];
         Plotly.react('mae-chart-' + lead, traces, {{
             title: {{ text: title, font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
             margin: {{ t: 40, b: 100, l: 50, r: 16 }},
             xaxis: {{ tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
-            yaxis: Object.assign({{ tickfont: {{ size: 11 }} }}, yRange),
+            yaxis: {{ tickfont: {{ size: 11 }}, rangemode: 'tozero',
+                title: {{ text: 'MAE ÷ climo MAE', font: {{ size: 10 }} }} }},
             height: 380,
             showlegend: true,
             legend: {{ orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{ size: 10 }} }},
-            shapes: shapes,
+            shapes: [{{
+                type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 1, y1: 1,
+                line: {{ color: '#888', width: 1.5, dash: 'dot' }},
+                label: {{ text: 'climo baseline', font: {{ size: 9 }}, xanchor: 'right', yanchor: 'bottom' }}
+            }}],
             paper_bgcolor: 'white',
             plot_bgcolor: '#fafafa'
         }}, {{responsive: true}});
-    }});
-}}
-
-function updateTableMode() {{
-    const isRatio = verifMode === 'ratio';
-    document.querySelectorAll('[data-raw][data-ratio]').forEach(function(el) {{
-        el.textContent = isRatio ? el.dataset.ratio : el.dataset.raw;
-    }});
-    document.querySelectorAll('.col-avg-hdr').forEach(function(el) {{
-        el.textContent = isRatio ? 'Avg vs climo' : 'Avg MAE';
-    }});
-    document.querySelectorAll('.col-24h-hdr').forEach(function(el) {{
-        el.textContent = isRatio ? '+24h vs climo' : '+24h MAE';
     }});
 }}
 
@@ -1733,14 +1428,6 @@ document.querySelectorAll('.mae-filter-btn').forEach(function(btn) {{
         maeActiveVar = btn.dataset.var;
         drawMaeCharts();
     }});
-}});
-
-document.getElementById('raw-toggle').addEventListener('click', function() {{
-    verifMode = verifMode === 'ratio' ? 'raw' : 'ratio';
-    this.classList.toggle('active');
-    this.textContent = verifMode === 'ratio' ? 'Raw values' : 'Skill ratio';
-    drawMaeCharts();
-    updateTableMode();
 }});
 
 document.getElementById('smooth-toggle').addEventListener('click', function() {{
@@ -2057,86 +1744,6 @@ document.querySelectorAll('.bias-filter-btn').forEach(function(btn) {{
 
 drawBiasCharts();
 """
-
-
-def _lead_skill_js(skill_data: dict) -> str:
-    data_json = json.dumps(skill_data)
-    filter_labels_json = json.dumps({
-        "temperature": "Temperature MAE (\u00b0F)",
-        "dewpoint": "Dew Point MAE (\u00b0F)",
-        "pressure": "Pressure MAE (hPa)",
-        "precip_prob": "Precip Prob MAE",
-    })
-    return f"""const leadSkillData = {data_json};
-const leadSkillFilterLabels = {filter_labels_json};
-
-const LEAD_SKILL_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
-const leadSkillAllModels = [...new Set(
-    Object.values(leadSkillData).flatMap(function(d){{return Object.keys(d);}})
-)].sort();
-const leadSkillModelColors = {{}};
-leadSkillAllModels.filter(function(m){{return m !== 'persistence';}}).forEach(function(m, i) {{
-    leadSkillModelColors[m] = LEAD_SKILL_PALETTE[i % LEAD_SKILL_PALETTE.length];
-}});
-if (leadSkillAllModels.includes('persistence')) leadSkillModelColors['persistence'] = '#aaaaaa';
-if (leadSkillAllModels.includes('bogo')) leadSkillModelColors['bogo'] = '#b0d8b0';
-
-let leadSkillActiveVar = 'temperature';
-
-function drawLeadSkillChart() {{
-    const varData = leadSkillData[leadSkillActiveVar] || {{}};
-    const allLeads = [...new Set(
-        Object.values(varData).flatMap(function(m){{return Object.keys(m.points).map(Number);}})
-    )].sort(function(a,b){{return a-b;}});
-    const traces = Object.entries(varData).map(function([model, info]) {{
-        const isPersistence = info.is_persistence;
-        const isEns = info.is_ensemble;
-        const color = leadSkillModelColors[model] || '#888888';
-        const y = allLeads.map(function(l) {{
-            const v = info.points[l];
-            return (v !== undefined && v !== null) ? v : null;
-        }});
-        return {{
-            type: 'scatter',
-            mode: 'lines+markers',
-            name: String(info.model_id),
-            x: allLeads,
-            y: y,
-            line: {{
-                width: 2,
-                dash: isPersistence ? 'dot' : (isEns ? 'dash' : 'solid'),
-                color: color
-            }},
-            marker: {{ size: isPersistence ? 5 : 6, color: color }},
-            connectgaps: false
-        }};
-    }});
-    Plotly.react('lead-skill-chart', traces, {{
-        title: {{ text: leadSkillFilterLabels[leadSkillActiveVar] || leadSkillActiveVar,
-                  font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-        margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-        xaxis: {{ title: 'Lead hours', tickvals: allLeads, tickfont: {{ size: 11 }} }},
-        yaxis: {{ title: 'Avg MAE', rangemode: 'tozero', tickfont: {{ size: 11 }} }},
-        height: 380,
-        showlegend: false,
-        paper_bgcolor: 'white',
-        plot_bgcolor: '#fafafa'
-    }}, {{responsive: true}});
-}}
-
-document.querySelectorAll('.lead-skill-filter-btn').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-        document.querySelectorAll('.lead-skill-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
-        btn.classList.add('active');
-        leadSkillActiveVar = btn.dataset.var;
-        drawLeadSkillChart();
-    }});
-}});
-
-drawLeadSkillChart();
-"""
-
-
 def _heatmap_js(heatmap_data: dict) -> str:
     data_json = json.dumps(heatmap_data)
     return f"""const heatmapData = {data_json};
@@ -2281,86 +1888,6 @@ document.getElementById('diurnal-mode-btn').addEventListener('click', function()
 
 drawDiurnalChart();
 """
-
-
-def _error_dist_js(dist_data: dict) -> str:
-    data_json = json.dumps(dist_data)
-    return f"""const errorDistData = {data_json};
-
-const ERROR_DIST_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
-const errorDistAllModels = [...new Set(
-    Object.values(errorDistData).flatMap(function(byLead){{
-        return Object.values(byLead).flatMap(function(d){{return Object.keys(d);}});
-    }})
-)].sort();
-const errorDistModelColors = {{}};
-errorDistAllModels.filter(function(m){{return m !== 'persistence';}}).forEach(function(m, i) {{
-    errorDistModelColors[m] = ERROR_DIST_PALETTE[i % ERROR_DIST_PALETTE.length];
-}});
-if (errorDistAllModels.includes('persistence')) errorDistModelColors['persistence'] = '#aaaaaa';
-if (errorDistAllModels.includes('bogo')) errorDistModelColors['bogo'] = '#b0d8b0';
-
-let errorDistActiveVar = 'temperature';
-let errorDistActiveLead = '6';
-
-function drawErrorDistChart() {{
-    const varData = (errorDistData[errorDistActiveVar] || {{}})[errorDistActiveLead] || {{}};
-    const traces = Object.entries(varData).map(function([model, info]) {{
-        const color = errorDistModelColors[model] || '#888888';
-        return {{
-            type: 'histogram',
-            name: String(info.model_id),
-            x: info.errors,
-            opacity: 0.55,
-            autobinx: true,
-            marker: {{ color: color, line: {{ color: color, width: 1 }} }}
-        }};
-    }});
-    const shapes = [{{
-        type: 'line', xref: 'x', x0: 0, x1: 0, yref: 'paper', y0: 0, y1: 1,
-        line: {{ color: '#333', width: 1.5, dash: 'dot' }}
-    }}];
-    const unitLabels = {{
-        temperature: '\u00b0F', dewpoint: '\u00b0F', pressure: 'hPa'
-    }};
-    Plotly.react('error-dist-chart', traces, {{
-        barmode: 'overlay',
-        title: {{ text: 'Error Distribution \u2014 ' + errorDistActiveVar.replace('_', ' ') + ' +' + errorDistActiveLead + 'h',
-                  font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-        margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-        xaxis: {{ title: 'Error (forecast \u2212 observed) (' + (unitLabels[errorDistActiveVar] || '') + ')',
-                  tickfont: {{ size: 11 }} }},
-        yaxis: {{ title: 'Count', tickfont: {{ size: 11 }} }},
-        height: 380,
-        showlegend: false,
-        shapes: shapes,
-        paper_bgcolor: 'white',
-        plot_bgcolor: '#fafafa'
-    }}, {{responsive: true}});
-}}
-
-document.querySelectorAll('.error-dist-var-btn').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-        document.querySelectorAll('.error-dist-var-btn').forEach(function(b) {{ b.classList.remove('active'); }});
-        btn.classList.add('active');
-        errorDistActiveVar = btn.dataset.var;
-        drawErrorDistChart();
-    }});
-}});
-
-document.querySelectorAll('.error-dist-lead-btn').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-        document.querySelectorAll('.error-dist-lead-btn').forEach(function(b) {{ b.classList.remove('active'); }});
-        btn.classList.add('active');
-        errorDistActiveLead = btn.dataset.lead;
-        drawErrorDistChart();
-    }});
-}});
-
-drawErrorDistChart();
-"""
-
-
 def _ensemble_forecast_section(
     mean_rows: list, tempest, elevation_m: float = 0.0, nws_forecast: dict | None = None
 ) -> str:
@@ -2389,13 +1916,10 @@ def _ensemble_forecast_section(
     # {variable: {lead_hours: (value, spread)}}
     table: dict[str, dict[int, tuple]] = {v: {} for v in VARIABLES}
     lead_valid_at: dict[int, int] = {}
-    issued_at = None
     for row in ens_rows:
         if row["variable"] in table:
             table[row["variable"]][row["lead_hours"]] = (row["value"], row["spread"])
         lead_valid_at.setdefault(row["lead_hours"], row["valid_at"])
-        if issued_at is None:
-            issued_at = row["issued_at"]
 
     # keep as raw SI (Celsius, m/s, hPa) so _fmt_value can apply display conversions uniformly
     slp_offset = _slp_correction(tempest, elevation_m)
@@ -2544,7 +2068,13 @@ def _ensemble_forecast_section(
     now_dew = now.get("dewpoint")
     now_pres = now.get("pressure")
     now_wind = now.get("wind_speed")
-    cards_html += _card("Now", True, now_temp, now_dew, now_pres, now_wind)
+    if tempest and tempest["timestamp"]:
+        now_label = "Now: " + datetime.fromtimestamp(
+            tempest["timestamp"], tz=fmt.CENTRAL
+        ).strftime("%H:%M %Z %b %-d, %Y")
+    else:
+        now_label = "Now"
+    cards_html += _card(now_label, True, now_temp, now_dew, now_pres, now_wind)
 
     for lead in [6, 12, 18, 24]:
         vat = lead_valid_at.get(lead)
@@ -2566,11 +2096,9 @@ def _ensemble_forecast_section(
         tf_entry = _tempest_fcst_at(lead)
         cards_html += _card(label, False, t_val, d_val, p_val, None, t_spread, nws_entry, tf_entry, pp_val)
 
-    issued_str = fmt.ts(issued_at) if issued_at else "&mdash;"
     return (
         '<section class="section" id="forecast">\n'
         '  <h2>Ensemble Forecast</h2>\n'
-        f'  <div class="obs-time">issued {issued_str}</div>\n'
         f'  <div class="forecast-rows">{cards_html}</div>\n'
         '</section>\n'
     )
@@ -2687,15 +2215,25 @@ def _ap_signal_state_html(signal_state: dict | None, member_rows: list) -> str:
         "</tr>"
     )
     body = ""
+    cards = ""
     for mid, name in _MEMBER_NAMES:
         state_cell = _ap_badge(signal_state.get(mid))
         sig = _AP_SIGNAL_DESC.get(mid, "")
         leads = ""
+        lead_spans = ""
         for lead in [6, 12, 18, 24]:
             v = by_mid.get(mid, {}).get(lead)
-            leads += (
-                f'<td data-label="+{lead}h" class="ap-none">–</td>' if v is None
-                else f'<td data-label="+{lead}h">{round(v * 100)}%</td>'
+            if v is None:
+                leads += f'<td data-label="+{lead}h" class="ap-none">–</td>'
+                val_html = '<span class="ap-none">–</span>'
+            else:
+                leads += f'<td data-label="+{lead}h">{round(v * 100)}%</td>'
+                val_html = f'{round(v * 100)}%'
+            lead_spans += (
+                f'<span class="ap-card-lead">'
+                f'<span class="ap-lead-lbl">+{lead}h</span>'
+                f'<span class="ap-card-lead-val">{val_html}</span>'
+                f'</span>'
             )
         body += (
             f'<tr><td data-label="#" class="model-id-cell">{mid}</td>'
@@ -2703,16 +2241,33 @@ def _ap_signal_state_html(signal_state: dict | None, member_rows: list) -> str:
             f'<td data-label="Signal" style="color:#888;font-size:12px">{sig}</td>'
             f'<td data-label="State">{state_cell}</td>{leads}</tr>'
         )
+        cards += (
+            f'<div class="ap-signal-card">'
+            f'<div class="ap-card-info">'
+            f'<span class="ap-card-num">{mid}</span>'
+            f'<span class="ap-card-name">{name}</span>'
+            f'<span class="ap-card-signal">{sig}</span>'
+            f'<span class="ap-card-state">{state_cell}</span>'
+            f'</div>'
+            f'<div class="ap-card-leads">{lead_spans}</div>'
+            f'</div>'
+        )
 
-    return (
+    intro = (
         '<p class="chart-legend-note">Signal state and precip probability at last forecast run. '
         "Blue = precip-favorable &nbsp;·&nbsp; "
         "Amber = unfavorable &nbsp;·&nbsp; "
         "Grey = neutral.</p>"
-        '<div class="table-scroll">'
-        f'<table class="ap-signal-table"><thead>{header}</thead>'
-        f"<tbody>{body}</tbody></table>"
-        '</div>'
+    )
+    return (
+        intro
+        + '<div class="ap-signal-container">'
+        + '<div class="table-scroll">'
+        + f'<table class="ap-signal-table"><thead>{header}</thead>'
+        + f"<tbody>{body}</tbody></table>"
+        + '</div>'
+        + f'<div class="ap-signal-cards">{cards}</div>'
+        + '</div>'
     )
 
 
@@ -3943,7 +3498,7 @@ def _acc_cls(pct: float | None) -> str:
     return " acc-poor"
 
 
-def _accuracy_lead_table_html(rows: list, lead_times: list) -> str:
+def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set | None = None) -> str:
     """Forecast skill table: rows=models, cols=lead times, filterable by variable."""
     if not rows:
         return '<p class="muted">no scored forecasts</p>'
@@ -4012,9 +3567,20 @@ def _accuracy_lead_table_html(rows: list, lead_times: list) -> str:
             display = f"{def_skill:.0f}%" if def_skill is not None else "—"
             cls = _acc_cls(def_skill)
             cells += f'<td class="acc-cell{cls}"{data_attrs}>{display}</td>'
+        mbtn = ""
+        if member_models and name in member_models:
+            mbtn = f' <button class="member-btn" data-model="{name}">members</button>'
         body_rows.append(
-            f'<tr{row_cls}><th class="model-name-cell">{name} {badge}</th>{cells}</tr>'
+            f'<tr{row_cls}><th class="model-name-cell">{name} {badge}{mbtn}</th>{cells}</tr>'
         )
+        if member_models and name in member_models:
+            safe = name.replace("_", "-").replace(" ", "-")
+            n_cols = 1 + len(lts)
+            body_rows.append(
+                f'<tr class="member-detail-row" id="mdr-{safe}" style="display:none">'
+                f'<td colspan="{n_cols}" id="md-{safe}"></td>'
+                f'</tr>'
+            )
 
     return (
         f'<table class="obs-history-table acc-lead-table">'
@@ -4024,14 +3590,25 @@ def _accuracy_lead_table_html(rows: list, lead_times: list) -> str:
     )
 
 
-def _overall_accuracy_html(rows: list) -> str:
-    """Avg forecast skill per model across all variables and lead times."""
+def _overall_accuracy_html(rows: list, precip_events: int = 0) -> str:
+    """Avg forecast skill per model across temperature/dewpoint/pressure.
+
+    When precip_events >= _MIN_PRECIP_BRIER, precip_prob (BSS) is also included.
+    Below that threshold the near-zero climo Brier denominator makes BSS
+    incomparable to MAESS and would corrupt this average.
+    Precip skill is always shown in the per-variable lead table regardless.
+    """
     if not rows:
         return '<p class="muted">no scored forecasts</p>'
 
+    _MIN_PRECIP_BRIER = 5
+    _OVERALL_VARS: tuple = ("temperature", "dewpoint", "pressure")
+    if precip_events >= _MIN_PRECIP_BRIER:
+        _OVERALL_VARS = _OVERALL_VARS + ("precip_prob",)
+
     climo_mae: dict = {}
     for r in rows:
-        if r["model"] == "climatological_mean" and r["variable"] in _ACC_VARIABLES:
+        if r["model"] == "climatological_mean" and r["variable"] in _OVERALL_VARS:
             climo_mae[(r["variable"], r["lead_hours"])] = r["avg_mae"]
 
     model_skills: dict[str, list] = {}
@@ -4039,7 +3616,7 @@ def _overall_accuracy_html(rows: list) -> str:
     for r in rows:
         name = r["model"]
         var = r["variable"]
-        if var not in _ACC_VARIABLES:
+        if var not in _OVERALL_VARS:
             continue
         ref = climo_mae.get((var, r["lead_hours"]))
         skill = _skill_score(r["avg_mae"], ref)
@@ -4121,31 +3698,34 @@ def _trend_values(ys: list) -> list | None:
 
 
 def _skill_timeseries_data(rows: list) -> dict:
-    """Pivot per-day avg_skill rows into per-model series.
-
-    Skill is already computed per (variable, lead_hours) and averaged in the DB query,
-    so this just reorganises the flat rows into parallel lists for Plotly.
-    """
+    """Pivot per-day avg_skill rows into per-model series for all models."""
     from collections import defaultdict
     by_day: dict = defaultdict(dict)
+    model_names: dict = {}
     for r in rows:
-        by_day[r["day"]][r["model_id"]] = r["avg_skill"]
-    days, ensemble, nws, tempest = [], [], [], []
-    for day in sorted(by_day):
-        days.append(day)
-        for out_list, mid in [(ensemble, 100), (nws, 200), (tempest, 201)]:
-            skill = by_day[day].get(mid)
-            out_list.append(round(skill, 1) if skill is not None else None)
-    return {"days": days, "ensemble": ensemble, "nws": nws, "tempest": tempest}
+        mid = r["model_id"]
+        by_day[r["day"]][mid] = r["avg_skill"]
+        model_names[mid] = r["model"]
+    days = sorted(by_day)
+    models: dict = {}
+    for mid, name in model_names.items():
+        skill = []
+        for day in days:
+            s = by_day[day].get(mid)
+            skill.append(round(s, 1) if s is not None else None)
+        trend = _trend_values(skill) if mid == 100 else None
+        models[mid] = {"name": name, "skill": skill, "trend": trend}
+    return {"days": days, "models": models}
 
 
-def _skill_timeseries_html(rows_14d: list, rows_120d: list, rows_alltime: list) -> str:
-    """Heading + three window-toggled chart containers for the skill-over-time section."""
+def _skill_timeseries_html() -> str:
+    """Heading + window-toggled chart containers + all-models toggle for skill-over-time."""
     windows = [("14d", ""), ("120d", ' style="display:none"'), ("alltime", ' style="display:none"')]
     parts = [
         '<h3 class="obs-subhead">Skill Over Time</h3>',
+        '<div class="mae-filter-bar"><button id="skill-all-models-toggle" class="mae-raw-btn">All models</button></div>',
         '<p class="chart-legend-note">Daily forecast skill vs. climatological mean (0% line). '
-        'Averaged across temperature, dew point, and pressure.</p>',
+        'Averaged across all variables. Default: ensemble, NWS, Tempest Forecast.</p>',
     ]
     for wid, hidden in windows:
         parts.append(
@@ -4156,45 +3736,66 @@ def _skill_timeseries_html(rows_14d: list, rows_120d: list, rows_alltime: list) 
     return "\n".join(parts)
 
 
-def _skill_timeseries_js(rows_14d: list, rows_120d: list, rows_alltime: list) -> str:
-    """Plotly initialization calls for the three skill-over-time charts."""
-    windows = [("14d", rows_14d), ("120d", rows_120d), ("alltime", rows_alltime)]
-    calls = []
-    for wid, rows in windows:
-        d = _skill_timeseries_data(rows)
-        eid = f"skill-timeseries-chart-{wid}"
-        days_j = json.dumps(d["days"])
-        ens_j = json.dumps(d["ensemble"])
-        nws_j = json.dumps(d["nws"])
-        tst_j = json.dumps(d["tempest"])
-        trend = _trend_values(d["ensemble"])
-        trend_j = json.dumps(trend) if trend else "[]"
-        calls.append(
-            f'Plotly.react("{eid}",['
-            f'{{x:{days_j},y:{ens_j},name:"barogram_ensemble",type:"scatter",'
-            f'mode:"lines+markers",connectgaps:false,line:{{color:"#1f77b4"}},'
-            f'marker:{{size:4}}}},'
-            f'{{x:{days_j},y:{nws_j},name:"nws",type:"scatter",'
-            f'mode:"lines+markers",connectgaps:false,line:{{color:"#ff7f0e"}},'
-            f'marker:{{size:4}}}},'
-            f'{{x:{days_j},y:{tst_j},name:"tempest_forecast",type:"scatter",'
-            f'mode:"lines+markers",connectgaps:false,line:{{color:"#2ca02c"}},'
-            f'marker:{{size:4}}}},'
-            f'{{x:{days_j},y:{trend_j},name:"ensemble trend",type:"scatter",'
-            f'mode:"lines",connectgaps:true,line:{{color:"#1f77b4",dash:"dash",width:1.5}},'
-            f'showlegend:true}}'
-            f'],{{'
-            f'height:340,margin:{{t:30,b:100,l:50,r:16}},'
-            f'paper_bgcolor:"white",plot_bgcolor:"#fafafa",'
-            f'yaxis:{{title:"Skill (%)",zeroline:true,zerolinecolor:"#888",zerolinewidth:2}},'
-            f'xaxis:{{type:"date"}},'
-            f'legend:{{orientation:"h",x:0,y:-0.18,xanchor:"left",yanchor:"top",font:{{size:10}}}},'
-            f'shapes:[{{type:"line",xref:"paper",x0:0,x1:1,y0:0,y1:0,'
-            f'line:{{color:"#888",width:2,dash:"dash"}}}}]'
-            f'}},{{responsive:true}});'
-        )
-    return "\n".join(calls)
+def _skill_timeseries_js(data_14d: dict, data_120d: dict, data_alltime: dict) -> str:
+    """Plotly + toggle logic for the three skill-over-time charts."""
+    import json as _json
+    windows = [("14d", data_14d), ("120d", data_120d), ("alltime", data_alltime)]
+    data_by_window: dict = {}
+    for wid, d in windows:
+        data_by_window[wid] = d
+    data_j = _json.dumps({
+        wid: {"days": d["days"], "models": {str(mid): m for mid, m in d["models"].items()}}
+        for wid, d in data_by_window.items()
+    })
+    return f"""const _skillRawData = {data_j};
+const SKILL_DEFAULT_MIDS = [100, 200, 201];
+const SKILL_KNOWN_COLORS = {{100: '#1f77b4', 200: '#ff7f0e', 201: '#2ca02c'}};
+const SKILL_EXTRA_PALETTE = ['#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+let skillShowAll = false;
 
+function renderSkillTimeseries(wid) {{
+    const raw = _skillRawData[wid];
+    if (!raw) return;
+    const days = raw.days;
+    const models = raw.models;
+    const allMids = Object.keys(models).map(Number);
+    // climatological_mean is always at 0% by definition — exclude from all-models view
+    const nonClimo = allMids.filter(function(m) {{ return models[String(m)].name !== 'climatological_mean'; }});
+    const show = skillShowAll ? nonClimo : nonClimo.filter(function(m) {{ return SKILL_DEFAULT_MIDS.includes(m); }});
+    let extIdx = 0;
+    const traces = [];
+    show.slice().sort(function(a, b) {{ return a - b; }}).forEach(function(mid) {{
+        const color = SKILL_KNOWN_COLORS[mid] || SKILL_EXTRA_PALETTE[extIdx++ % SKILL_EXTRA_PALETTE.length];
+        const mdata = models[String(mid)];
+        traces.push({{x: days, y: mdata.skill, name: mdata.name, type: 'scatter',
+            mode: 'lines+markers', connectgaps: false,
+            line: {{color: color}}, marker: {{size: 4}}}});
+    }});
+    const ens = models['100'];
+    if (ens && ens.trend && ens.trend.length) {{
+        traces.push({{x: days, y: ens.trend, name: 'ensemble trend', type: 'scatter',
+            mode: 'lines', connectgaps: true, showlegend: true,
+            line: {{color: '#1f77b4', dash: 'dash', width: 1.5}}}});
+    }}
+    Plotly.react('skill-timeseries-chart-' + wid, traces, {{
+        height: 340, margin: {{t: 30, b: 100, l: 50, r: 16}},
+        paper_bgcolor: 'white', plot_bgcolor: '#fafafa',
+        yaxis: {{title: 'Skill (%)', zeroline: true, zerolinecolor: '#888', zerolinewidth: 2}},
+        xaxis: {{type: 'date'}},
+        legend: {{orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{size: 10}}}},
+        shapes: [{{type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0, y1: 0,
+            line: {{color: '#888', width: 2, dash: 'dash'}}}}]
+    }}, {{responsive: true}});
+}}
+
+['14d', '120d', 'alltime'].forEach(function(wid) {{ renderSkillTimeseries(wid); }});
+
+document.getElementById('skill-all-models-toggle').addEventListener('click', function() {{
+    skillShowAll = !skillShowAll;
+    this.classList.toggle('active', skillShowAll);
+    ['14d', '120d', 'alltime'].forEach(function(wid) {{ renderSkillTimeseries(wid); }});
+}});
+"""
 
 def _accuracy_table_js() -> str:
     return """\
@@ -4218,20 +3819,27 @@ document.querySelectorAll('.acc-filter-btn').forEach(function(btn) {
         document.querySelectorAll('.acc-filter-btn').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
         updateAccTable(btn.dataset.var);
+        var bssWarn = document.getElementById('bss-warning');
+        if (bssWarn) bssWarn.style.display = btn.dataset.var === 'precip_prob' ? '' : 'none';
     });
 });
 
 function updateAccWindow(win) {
+    var skillWin = win === '10r' ? '14d' : win;
     ['14d', '120d', 'alltime'].forEach(function(w) {
-        ['acc-overall-', 'acc-lead-', 'skill-timeseries-'].forEach(function(pfx) {
-            var el = document.getElementById(pfx + w);
-            if (el) el.style.display = (w === win) ? '' : 'none';
-        });
+        var el = document.getElementById('skill-timeseries-' + w);
+        if (el) el.style.display = (w === skillWin) ? '' : 'none';
+    });
+    ['14d', '120d', 'alltime', '10r'].forEach(function(w) {
+        var el = document.getElementById('acc-overall-' + w);
+        if (el) el.style.display = (w === win) ? '' : 'none';
+        el = document.getElementById('acc-lead-' + w);
+        if (el) el.style.display = (w === win) ? '' : 'none';
     });
     var activeBtn = document.querySelector('.acc-filter-btn.active');
     if (activeBtn) updateAccTable(activeBtn.dataset.var);
     window.setTimeout(function() {
-        var c = document.getElementById('skill-timeseries-chart-' + win);
+        var c = document.getElementById('skill-timeseries-chart-' + skillWin);
         if (c) Plotly.Plots.resize(c);
     }, 0);
 }
@@ -4275,14 +3883,21 @@ def _recent_misses_html(rows: list) -> str:
             pred_str = f"{_to_f(val):.1f}\u00b0F" if val is not None else "\u2014"
             obs_str = f"{_to_f(obs):.1f}\u00b0F" if obs is not None else "\u2014"
             err_disp = _diff_to_f(err)
+            err_thresh = 3
+        elif var == "precip_prob":
+            pred_str = f"{val * 100:.0f}%" if val is not None else "\u2014"
+            obs_str = ("Yes" if obs == 1.0 else "No") if obs is not None else "\u2014"
+            err_disp = (err * 100) if err is not None else None
+            err_thresh = 30
         else:
             pred_str = f"{val:.1f} hPa" if val is not None else "\u2014"
             obs_str = f"{obs:.1f} hPa" if obs is not None else "\u2014"
             err_disp = err
+            err_thresh = 3
         if err_disp is not None:
             sign = "+" if err_disp >= 0 else ""
-            err_cls = "mae-worse" if abs(err_disp) >= 3 else ""
-            err_str = f'<span class="{err_cls}">{sign}{err_disp:.1f}</span>'
+            err_cls = "mae-worse" if abs(err_disp) >= err_thresh else ""
+            err_str = f'<span class="{err_cls}">{sign}{err_disp:.1f}{"pp" if var == "precip_prob" else ""}</span>'
         else:
             err_str = "\u2014"
         valid_label = fmt.short_ts(row["valid_at"])
@@ -4371,19 +3986,13 @@ def generate(
     midnight_7d_ago = int(
         datetime(today.year, today.month, today.day, tzinfo=timezone.utc).timestamp()
     ) - 7 * 86400
-    _scores_multi = db.score_summary_last_n_runs_multi(conn_out, [30, 10])
-    all_scores_30 = _scores_multi[30]
-    all_scores_10 = _scores_multi[10]
-    summary_30 = [r for r in all_scores_30 if r["member_id"] == 0]
-    summary_10 = [r for r in all_scores_10 if r["member_id"] == 0]
-    members_10 = [r for r in all_scores_10 if r["member_id"] > 0]
+    _scores_10 = db.score_summary_last_n_runs_multi(conn_out, [10])[10]
+    members_10 = [r for r in _scores_10 if r["member_id"] > 0]
     member_models = {r["model"] for r in members_10}
-    summary_7d = db.score_summary_since(conn_out, now - 7 * 86400)
     timeseries = db.score_timeseries(conn_out, since=midnight_7d_ago)
     all_time_summary = [r for r in db.score_summary(conn_out) if r["member_id"] == 0]
     bias_ts_rows = db.bias_timeseries(conn_out, since=midnight_7d_ago)
     diurnal_rows = db.diurnal_errors(conn_out)
-    error_dist_rows = db.error_distribution(conn_out)
     weight_rows = db.all_weights_with_members(conn_out)
     all_members = db.all_members_for_ensemble_models(conn_out)
     trajectory_rows = db.forecast_trajectory(conn_out, now - 72 * 3600)
@@ -4394,9 +4003,16 @@ def generate(
     acc_rows_14d = _acc[_14d]
     acc_rows_120d = _acc[_120d]
     acc_rows_alltime = _acc[0]
-    _skill_ts = db.skill_timeseries_multi(conn_out, [_14d, _120d, 0])
-    skill_ts_html = _skill_timeseries_html(_skill_ts[_14d], _skill_ts[_120d], _skill_ts[0])
-    skill_ts_js = _skill_timeseries_js(_skill_ts[_14d], _skill_ts[_120d], _skill_ts[0])
+    acc_rows_10r = db.accuracy_by_lead(conn_out, 10)
+    acc_count_10r = db.accuracy_run_count_last_n(conn_out, 10)
+    _precip_events = {s: db.precip_event_count(conn_out, s) for s in [_14d, _120d, 0]}
+    _skill_ts = db.skill_timeseries_multi(conn_out, [_14d, _120d, 0], precip_events=_precip_events)
+    skill_ts_html = _skill_timeseries_html()
+    skill_ts_js = _skill_timeseries_js(
+        _skill_timeseries_data(_skill_ts[_14d]),
+        _skill_timeseries_data(_skill_ts[_120d]),
+        _skill_timeseries_data(_skill_ts[0]),
+    )
     _counts = db.accuracy_run_count_multi(conn_out, [_14d, _120d, 0])
     acc_count_14d = _counts[_14d]
     acc_count_120d = _counts[_120d]
@@ -4406,32 +4022,41 @@ def generate(
     charts = _chart_data(mean_rows)
     mae_ts = _mae_timeseries_data(timeseries)
     bias_ts = _bias_timeseries_data(bias_ts_rows)
-    lead_skill = _lead_skill_data(all_time_summary)
     heatmap = _heatmap_data(all_time_summary)
     diurnal = _diurnal_data(diurnal_rows)
-    error_dist = _error_dist_data(error_dist_rows)
     trajectory = _trajectory_data(trajectory_rows)
     recent_misses_html = _recent_misses_html(misses_rows)
     acc_lead_times = sorted({r["lead_hours"] for r in acc_rows_14d}) or lead_times
+    # precip_events per time window; 10r uses the all-time count as approximation
+    _win_precip = {
+        "14d": _precip_events[_14d],
+        "120d": _precip_events[_120d],
+        "alltime": _precip_events[0],
+        "10r": _precip_events[0],
+    }
     _acc_windows = [
         ("14d", acc_rows_14d, acc_count_14d, "14 days"),
         ("120d", acc_rows_120d, acc_count_120d, "120 days"),
         ("alltime", acc_rows_alltime, acc_count_alltime, "all time"),
+        ("10r", acc_rows_10r, acc_count_10r, "last 10 runs"),
     ]
     overall_parts, lead_parts = [], []
     for wid, rows, n_runs, label in _acc_windows:
         hidden = ' style="display:none"' if wid != "14d" else ""
-        run_note = f'<p class="chart-legend-note acc-run-note">{label} \u00b7 {n_runs} runs</p>'
+        if wid == "10r":
+            run_note = f'<p class="chart-legend-note acc-run-note">last {n_runs} runs</p>'
+        else:
+            run_note = f'<p class="chart-legend-note acc-run-note">{label} \u00b7 {n_runs} runs</p>'
         overall_parts.append(
             f'<div id="acc-overall-{wid}"{hidden}>'
             f'{run_note}'
-            f'{_overall_accuracy_html(rows)}'
+            f'{_overall_accuracy_html(rows, precip_events=_win_precip[wid])}'
             f'</div>'
         )
         lead_parts.append(
             f'<div id="acc-lead-{wid}"{hidden}>'
             f'{run_note}'
-            f'{_accuracy_lead_table_html(rows, acc_lead_times)}'
+            f'{_accuracy_lead_table_html(rows, acc_lead_times, member_models if wid == "10r" else None)}'
             f'</div>'
         )
     overall_accuracy_html = "".join(overall_parts)
@@ -4480,10 +4105,6 @@ def generate(
     tempest_rows = [_tempest_obs_row(r, elevation_m) for r in tempest_history]
     nws_rows = [_nws_obs_row(r) for r in nws_history]
 
-    all_models = {r["model"]: {"model_id": r["model_id"], "type": r["type"]} for r in mean_rows}
-    table_30 = _score_summary_table(summary_30, "last 30 scored runs", member_models, all_models)
-    table_10 = _score_summary_table(summary_10, "last 10 scored runs", member_models, all_models)
-    table_7d = _score_summary_table(summary_7d, "last 7 days", member_models, all_models)
     weights_section = _weights_section_html(weight_rows, all_members)
     filter_btns = "".join(
         f'<button class="mae-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
@@ -4509,7 +4130,7 @@ def generate(
         f'<button class="acc-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
             ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-            ("pressure", "Pressure"), ("precip_prob", "Precip Prob"),
+            ("pressure", "Pressure"), ("precip_prob", "Precip Prob (Brier)"),
         ])
     )
     acc_window_btns = "".join(
@@ -4529,10 +4150,6 @@ def generate(
         f'<div class="chart-container"><div id="bias-chart-{lt}"></div></div>'
         for lt in lead_times
     )
-    lead_skill_filter_btns = "".join(
-        f'<button class="lead-skill-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
-        for i, (v, lbl) in enumerate(_var_btns)
-    )
     heatmap_filter_btns = "".join(
         f'<button class="heatmap-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate(_var_btns)
@@ -4540,14 +4157,6 @@ def generate(
     diurnal_filter_btns = "".join(
         f'<button class="diurnal-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate(_var_btns)
-    )
-    error_dist_var_btns = "".join(
-        f'<button class="error-dist-var-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
-        for i, (v, lbl) in enumerate(_var_btns)
-    )
-    error_dist_lead_btns = "".join(
-        f'<button class="error-dist-lead-btn{" active" if i == 0 else ""}" data-lead="{lt}">+{lt}h</button>'
-        for i, lt in enumerate(lead_times)
     )
     _traj_vars = [("temperature", "Temperature"), ("dewpoint", "Dew Point"),
                   ("pressure", "Pressure"), ("precip_prob", "Precip Prob")]
@@ -4591,6 +4200,9 @@ def generate(
   </nav>
 </header>
 {staleness_banner}
+<div id="stale-age-banner" class="stale-banner stale-age-banner" style="display:none">
+  <strong>Heads up:</strong> this dashboard was generated more than 6 hours ago and may not reflect current conditions. Run <code>barogram dashboard</code> to regenerate.
+</div>
 <section class="section" id="about">
   <p>Barogram is a pet forecast ensemble, a small collection of models I run for fun and to learn more about how forecasting actually works. Every three hours, they look at the latest readings from a backyard Tempest weather station and a nearby NWS airport station, then each independently predict local temperature, dew point, pressure, and precipitation probability for the next 6 to 24 hours.</p>
   <p style="margin-top:10px">After each run, the previous predictions get scored against what actually happened. Models that have been performing better lately carry more weight in the ensemble&#x2019;s combined output. The base models use simple approaches and none of them are impressive on their own. The ensemble is what makes them useful.</p>
@@ -4610,7 +4222,7 @@ def generate(
   <h2>Verification</h2>
   <div class="mae-filter-bar">{acc_window_btns}</div>
   <h3 class="obs-subhead">Overall Forecast Skill</h3>
-  <p class="chart-legend-note">Skill score vs. climatological mean, averaged across all variables and lead times. 100% = perfect · 0% = matches climatological mean · negative = worse than climatological mean.</p>
+  <p class="chart-legend-note">Skill score vs. climatological mean, averaged across temperature, dewpoint, and pressure (plus Precip Prob BSS once enough rain events have been observed). 100% = perfect · 0% = matches climatological mean · negative = worse than climatological mean.</p>
   <div class="table-scroll">{overall_accuracy_html}</div>
   {skill_ts_html}
   <details class="collapsible-section">
@@ -4621,18 +4233,11 @@ def generate(
   <h3 class="obs-subhead">Forecast Skill by Lead Time</h3>
   <p class="chart-legend-note">Skill score vs. climatological mean at each lead time for the selected variable. Negative = worse than climatology.</p>
   <div class="mae-filter-bar">{acc_filter_btns}</div>
+  <p id="bss-warning" class="chart-legend-note" style="display:none;color:#b45309">Brier Skill Score values are unreliable until enough precipitation events have been observed. With few or no rain events, the climo Brier reference approaches zero and scores become extreme.</p>
   <div class="table-scroll">{acc_lead_table_html}</div>
-  <h3 class="obs-subhead section-dig-deeper">Detailed MAE</h3>
-  <div class="verification-primary">
-    {table_30}
-  </div>
-  <div class="verification-windows">
-    {table_10}
-    {table_7d}
-  </div>
-  <h3 class="obs-subhead">MAE over time</h3>
-  <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button><button id="raw-toggle" class="mae-raw-btn">Raw values</button></div>
-  <p class="chart-legend-note">Grey: reference lines (climo = long-dash, persistence = dotted) &nbsp;·&nbsp; Per-run detail: solid with dash-dot rolling avg overlay</p>
+  <h3 class="obs-subhead">Skill over time</h3>
+  <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button></div>
+  <p class="chart-legend-note">Y-axis: MAE ÷ climo MAE per run. 1.0 = same error as climatological mean · below 1.0 = better · above 1.0 = worse. Grey: climo (long-dash) and persistence (dotted). Per-run detail: solid with rolling average overlay.</p>
   <div class="mae-charts-grid">
     {mae_chart_divs}
   </div>
@@ -4646,10 +4251,6 @@ def generate(
   <div class="mae-charts-grid">
     {bias_chart_divs}
   </div>
-
-  <h3 class="obs-subhead">Lead-Time Skill Curves</h3>
-  <div class="mae-filter-bar">{lead_skill_filter_btns}</div>
-  <div class="chart-container"><div id="lead-skill-chart"></div></div>
 
   <h3 class="obs-subhead">Score Heatmap</h3>
   <div class="mae-filter-bar">{heatmap_filter_btns}</div>
@@ -4666,10 +4267,6 @@ def generate(
     <button id="diurnal-mode-btn" class="mae-raw-btn">Show MAE</button>
   </div>
   <div class="chart-container"><div id="diurnal-chart"></div></div>
-
-  <h3 class="obs-subhead">Error Distribution</h3>
-  <div class="mae-filter-bar"><span class="filter-label">Variable</span>{error_dist_var_btns}<span class="filter-label filter-sep-left">Lead</span>{error_dist_lead_btns}</div>
-  <div class="chart-container"><div id="error-dist-chart"></div></div>
 
   <h3 class="obs-subhead">airmass_precip &mdash; Signal State</h3>
   {ap_signal_html}
@@ -4697,17 +4294,21 @@ def generate(
 </div>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2/plotly.min.js"></script>
 <script>
+const GENERATED_AT = {now};
+(function() {{
+  if (Date.now() / 1000 - GENERATED_AT > 6 * 3600) {{
+    document.getElementById('stale-age-banner').style.display = '';
+  }}
+}})();
 {_chart_js(charts)}
 {_obs_history_js(tempest_rows, nws_rows)}
 {_mae_timeseries_js(mae_ts)}
 {_member_forecast_js(member_forecast_rows, lead_times)}
 {_member_detail_js(members_10)}
 {_bias_timeseries_js(bias_ts)}
-{_lead_skill_js(lead_skill)}
 {_heatmap_js(heatmap)}
 {_trajectory_js(trajectory)}
 {_diurnal_js(diurnal)}
-{_error_dist_js(error_dist)}
 {_learnings_js(learnings)}
 {_accuracy_table_js()}
 {skill_ts_js}
