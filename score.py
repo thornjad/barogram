@@ -135,11 +135,12 @@ def run(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
                 continue
 
         error = row["value"] - observed
+        mae_val = error ** 2 if row["variable"] == "precip_prob" else abs(error)
         scored_rows.append({
             "id": row["id"],
             "observed": observed,
             "error": error,
-            "mae": abs(error),
+            "mae": mae_val,
             "scored_at": now,
         })
 
