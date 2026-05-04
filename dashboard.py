@@ -263,7 +263,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 }
 .obs-history-table thead th { background: #f9f9f9; font-weight: 600; color: #1a1a1a; }
 .obs-history-table tbody tr:last-child td { border-bottom: none; }
-.table-scroll { overflow-x: auto; margin-bottom: 8px; }
+.table-scroll { overflow-x: auto; margin-bottom: 8px; max-width: 100%; }
 .more-btn {
     padding: 5px 14px;
     font-size: 13px;
@@ -384,6 +384,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     border-radius: 3px;
     cursor: pointer;
     color: #444;
+    white-space: nowrap;
 }
 .member-btn:hover { background: #f0f0f0; }
 .member-detail-row td { padding: 6px 10px; }
@@ -423,6 +424,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 10px; }
 .learnings-intro { margin-bottom: 14px; color: #555; font-size: 13px; line-height: 1.6; }
 .learnings-desc { margin: 8px 0 14px; font-size: 13px; color: #444; line-height: 1.6; padding: 10px 14px; background: #f9f9f9; border-left: 3px solid #ddd; border-radius: 0 3px 3px 0; }
+.learnings-status { margin: -8px 0 14px; font-size: 13px; color: #2a5; line-height: 1.6; padding: 8px 14px; background: #f4fbf6; border-left: 3px solid #6c9; border-radius: 0 3px 3px 0; }
 .learnings-hyp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; margin-bottom: 14px; }
 .no-data { color: #888; font-style: italic; font-size: 13px; margin: 8px 0 16px; }
 .filter-label { font-size: 11px; color: #888; white-space: nowrap; align-self: center; }
@@ -434,17 +436,111 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     .verification-windows { grid-template-columns: 1fr; }
     .learnings-hyp-grid { grid-template-columns: 1fr; }
     .weights-section { grid-template-columns: 1fr; }
+    .conditions-grid > *, .charts-grid > *, .verification-windows > *,
+    .learnings-hyp-grid > *, .weights-section > * { min-width: 0; }
     .section { scroll-margin-top: 70px; }
-    .score-table, .mae-summary-table, .obs-history-table { font-size: 12px; }
-    .forecast-table th, .forecast-table td { padding: 6px 8px; }
     .fcst-row-refs { gap: 12px; }
     .model-run-header { flex-wrap: wrap; gap: 6px; }
     .mae-raw-btn { margin-left: 0; }
     .jump-nav a { font-size: 11px; padding: 3px 8px; }
-    #analysis, #weights, #obs-history { display: none; }
-    .model-runs { display: none; }
-    .jump-nav a[href="#analysis"],
-    .jump-nav a[href="#weights"] { display: none; }
+    table { font-size: 11px; width: 100%; }
+    table th, table td { padding: 4px 5px; }
+    .obs-history-table { min-width: unset; width: 100%; }
+    .obs-history-table th, .obs-history-table td { overflow-wrap: break-word; white-space: normal; }
+    .mae-summary-table, .score-table, .weight-table,
+    .member-detail-table, .acc-lead-table { width: 100%; }
+    .mae-summary-table th, .mae-summary-table td,
+    .score-table th, .score-table td,
+    .weight-table th, .weight-table td,
+    .member-detail-table th, .member-detail-table td,
+    .acc-lead-table th, .acc-lead-table td { overflow-wrap: break-word; white-space: normal; }
+    .mae-summary-table tbody th,
+    .acc-lead-table th.model-name-cell,
+    .weight-table tbody th,
+    .score-table tbody th { word-break: break-word; }
+    .mae-summary-table .model-id-cell,
+    .acc-lead-table .model-id-cell,
+    .score-table .model-id-cell { white-space: nowrap; overflow-wrap: normal; }
+    .member-btn { white-space: nowrap; }
+    .recent-misses-table { table-layout: fixed; width: 100%; }
+    .recent-misses-table th, .recent-misses-table td { word-break: break-word; white-space: normal; }
+    .tempest-obs thead, .nws-obs thead { display: none; }
+    .tempest-obs tbody, .nws-obs tbody { display: block; width: 100%; }
+    .tempest-obs tr, .nws-obs tr {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        padding: 8px 10px;
+        margin-bottom: 6px;
+        gap: 5px 12px;
+        background: #fff;
+    }
+    .tempest-obs td, .nws-obs td {
+        display: block;
+        padding: 0;
+        border: none;
+        font-size: 12px;
+        line-height: 1.4;
+    }
+    .tempest-obs td::before, .nws-obs td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 9px;
+        color: #999;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 600;
+        margin-bottom: 1px;
+    }
+    .tempest-obs td:first-child, .nws-obs td:first-child {
+        grid-column: 1 / -1;
+        font-size: 11px;
+        font-weight: 600;
+        color: #555;
+        padding-bottom: 3px;
+        border-bottom: 1px solid #f0f0f0;
+        margin-bottom: 2px;
+    }
+    .tempest-obs td:first-child::before, .nws-obs td:first-child::before { display: none; }
+    .ap-signal-table thead { display: none; }
+    .ap-signal-table tbody { display: block; width: 100%; }
+    .ap-signal-table tr {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        padding: 8px 10px;
+        margin-bottom: 6px;
+        gap: 5px 12px;
+        background: #fff;
+    }
+    .ap-signal-table td {
+        display: block;
+        padding: 0;
+        border: none;
+        font-size: 12px;
+        line-height: 1.4;
+    }
+    .ap-signal-table td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 9px;
+        color: #999;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 600;
+        margin-bottom: 1px;
+    }
+    .ap-signal-table td:nth-child(2) {
+        grid-column: 1 / -1;
+        font-size: 13px;
+        font-weight: 700;
+        padding-bottom: 3px;
+        border-bottom: 1px solid #f0f0f0;
+        margin-bottom: 2px;
+    }
+    .ap-signal-table td:nth-child(2)::before { display: none; }
 }
 .forecast-rows { display: flex; flex-direction: column; gap: 6px; }
 .fcst-row {
@@ -678,10 +774,12 @@ def _weights_section_html(rows: list, all_members: list | None = None) -> str:
             f'<h3>{model_names[model_id]}{untrained_note}'
             f' <span class="model-id-cell">(model {model_id})</span></h3>'
             f'<p class="window-label">equal weight: {equal_w:.1%} per member</p>'
+            f'<div class="table-scroll">'
             f'<table class="weight-table">'
             f'{thead}'
             f'<tbody>{"".join(table_rows)}</tbody>'
             f'</table>'
+            f'</div>'
             f'</div>'
         )
         blocks.append((model_id, block_inner))
@@ -919,17 +1017,17 @@ def _tempest_obs_row(row, elevation_m: float = 0.0) -> str:
         slp = row["sea_level_pressure"]
         if slp is None and sp is not None and row["air_temp"] is not None:
             slp = fmt.to_slp(sp, row["air_temp"], elevation_m)
-        slp_cell = f"<td>{fmt.val(slp, '.1f', ' hPa')}</td>"
+        slp_cell = f'<td data-label="SLP">{fmt.val(slp, ".1f", " hPa")}</td>'
     return (
         "<tr>"
-        f"<td>{fmt.ts(row['timestamp'])}</td>"
-        f"<td>{fmt.temp(row['air_temp'])}</td>"
-        f"<td>{fmt.temp(row['dew_point'])}</td>"
-        f"<td>{fmt.val(sp, '.1f', ' hPa')}</td>"
+        f"<td>{fmt.short_ts(row['timestamp'])}</td>"
+        f'<td data-label="Temp">{fmt.temp(row["air_temp"])}</td>'
+        f'<td data-label="Dew Pt">{fmt.temp(row["dew_point"])}</td>'
+        f'<td data-label="Station P">{fmt.val(sp, ".1f", " hPa")}</td>'
         f"{slp_cell}"
-        f"<td>{wind}</td>"
-        f"<td>{fmt.val(_to_in(row['precip_accum_day']), '.2f', ' in')}</td>"
-        f"<td>{lc if lc is not None else 0}</td>"
+        f'<td data-label="Wind">{wind}</td>'
+        f'<td data-label="Precip">{fmt.val(_to_in(row["precip_accum_day"]), ".2f", " in")}</td>'
+        f'<td data-label="Lightning">{lc if lc is not None else 0}</td>'
         "</tr>"
     )
 
@@ -937,12 +1035,12 @@ def _tempest_obs_row(row, elevation_m: float = 0.0) -> str:
 def _nws_obs_row(row) -> str:
     return (
         "<tr>"
-        f"<td>{fmt.ts(row['timestamp'])}</td>"
-        f"<td>{fmt.temp(row['air_temp'])}</td>"
-        f"<td>{fmt.temp(row['dew_point'])}</td>"
-        f"<td>{fmt.wind_dir(row['wind_direction'])} {fmt.val(_to_mph(row['wind_speed']), '.1f', ' mph')}</td>"
-        f"<td>{fmt.val(row['sea_level_pressure'], '.1f', ' hPa')}</td>"
-        f"<td>{row['sky_cover'] or '\u2014'}</td>"
+        f"<td>{fmt.short_ts(row['timestamp'])}</td>"
+        f'<td data-label="Temp">{fmt.temp(row["air_temp"])}</td>'
+        f'<td data-label="Dew Pt">{fmt.temp(row["dew_point"])}</td>'
+        f'<td data-label="Wind">{fmt.wind_dir(row["wind_direction"])} {fmt.val(_to_mph(row["wind_speed"]), ".1f", " mph")}</td>'
+        f'<td data-label="Pressure">{fmt.val(row["sea_level_pressure"], ".1f", " hPa")}</td>'
+        f'<td data-label="Sky">{row["sky_cover"] or "\u2014"}</td>'
         "</tr>"
     )
 
@@ -958,21 +1056,20 @@ def _obs_history_section(tempest_obs: list, nws_obs: list, elevation_m: float = 
         sid = r["station_id"]
         return f'{label}: {name} <span class="station-id">({sid})</span>'
 
-    def table_block(label: str, obs_list: list, tbody_id: str, btn_id: str, headers: list) -> str:
+    def table_block(label: str, obs_list: list, tbody_id: str, btn_id: str, headers: list, extra_class: str = "") -> str:
         heading = station_heading(label, obs_list)
         header_html = "".join(f"<th>{h}</th>" for h in headers)
         empty = (
             f'<tr><td colspan="{len(headers)}" class="muted">no data</td></tr>'
             if not obs_list else ""
         )
+        cls = f"obs-history-table {extra_class}".strip()
         return (
             f'<h3 class="obs-subhead">{heading}</h3>'
-            f'<div class="table-scroll">'
-            f'<table class="obs-history-table">'
+            f'<table class="{cls}">'
             f'<thead><tr>{header_html}</tr></thead>'
             f'<tbody id="{tbody_id}">{empty}</tbody>'
             f'</table>'
-            f'</div>'
             f'<button class="more-btn" id="{btn_id}">Load more</button>'
         )
 
@@ -983,11 +1080,12 @@ def _obs_history_section(tempest_obs: list, nws_obs: list, elevation_m: float = 
     )
     tempest_block = table_block(
         "Tempest", tempest_obs, "tempest-obs-tbody", "tempest-more-btn",
-        tempest_headers,
+        tempest_headers, extra_class="tempest-obs",
     )
     nws_block = table_block(
         "NWS", nws_obs, "nws-obs-tbody", "nws-more-btn",
         ["Time", "Temperature", "Dew Point", "Wind", "Pressure", "Sky"],
+        extra_class="nws-obs",
     )
 
     return (
@@ -1524,6 +1622,7 @@ def _mae_timeseries_js(timeseries_data: dict) -> str:
         "temperature": "Temperature MAE (°F)",
         "dewpoint": "Dew Point MAE (°F)",
         "pressure": "Pressure MAE (hPa)",
+        "precip_prob": "Precip Prob MAE",
     })
     return f"""const maeLeadData = {data_json};
 const maeFilterLabels = {filter_labels_json};
@@ -1599,7 +1698,7 @@ function drawMaeCharts() {{
         Plotly.react('mae-chart-' + lead, traces, {{
             title: {{ text: title, font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
             margin: {{ t: 40, b: 100, l: 50, r: 16 }},
-            xaxis: {{ tickangle: 0, tickfont: {{ size: 10 }}, nticks: 5 }},
+            xaxis: {{ tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
             yaxis: Object.assign({{ tickfont: {{ size: 11 }} }}, yRange),
             height: 380,
             showlegend: true,
@@ -1839,11 +1938,8 @@ let fcstActiveVar = fcstVariables[0];
 
 function drawFcstChart() {{
     const isMobile = window.innerWidth < 768;
-    const mobileModels = new Set(['persistence', 'barogram_ensemble', 'nws', 'tempest_forecast']);
     const varData = fcstData[fcstActiveVar] || {{}};
-    const entries = Object.entries(varData).filter(function([model]) {{
-        return !isMobile || mobileModels.has(model);
-    }});
+    const entries = Object.entries(varData);
     const traces = entries.map(function([model, d]) {{
         const isPersistence = model === 'persistence';
         const color = fcstModelColors[model] || '#888888';
@@ -1860,7 +1956,7 @@ function drawFcstChart() {{
     Plotly.react('chart-forecast', traces, {{
         title: {{ text: fcstVarLabels[fcstActiveVar], font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
         margin: {{ t: 40, b: isMobile ? 120 : 100, l: 50, r: 16 }},
-        xaxis: {{ type: 'date', tickformat: '%b %e %H:%M', tickangle: 0, tickfont: {{ size: 10 }}, nticks: 5 }},
+        xaxis: {{ type: 'date', tickformat: '%b %e', tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
         yaxis: {{ tickfont: {{ size: 11 }} }},
         height: isMobile ? 360 : 420,
         showlegend: true,
@@ -1889,6 +1985,7 @@ def _bias_timeseries_js(bias_data: dict) -> str:
         "temperature": "Temperature Bias (\u00b0F)",
         "dewpoint": "Dew Point Bias (\u00b0F)",
         "pressure": "Pressure Bias (hPa)",
+        "precip_prob": "Precip Prob Bias",
     })
     return f"""const biasLeadData = {data_json};
 const biasFilterLabels = {filter_labels_json};
@@ -1934,7 +2031,7 @@ function drawBiasCharts() {{
             title: {{ text: '+' + lead + 'h \u2014 ' + (biasFilterLabels[biasActiveVar] || biasActiveVar),
                       font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
             margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-            xaxis: {{ tickangle: 0, tickfont: {{ size: 10 }}, nticks: 5 }},
+            xaxis: {{ tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
             yaxis: {{ tickfont: {{ size: 11 }} }},
             height: 380,
             showlegend: false,
@@ -1964,6 +2061,7 @@ def _lead_skill_js(skill_data: dict) -> str:
         "temperature": "Temperature MAE (\u00b0F)",
         "dewpoint": "Dew Point MAE (\u00b0F)",
         "pressure": "Pressure MAE (hPa)",
+        "precip_prob": "Precip Prob MAE",
     })
     return f"""const leadSkillData = {data_json};
 const leadSkillFilterLabels = {filter_labels_json};
@@ -2102,6 +2200,7 @@ def _diurnal_js(diurnal_data: dict) -> str:
         "temperature": "Temperature (\u00b0F)",
         "dewpoint": "Dew Point (\u00b0F)",
         "pressure": "Pressure (hPa)",
+        "precip_prob": "Precip Prob",
     })
     return f"""const diurnalData = {data_json};
 const diurnalFilterLabels = {filter_labels_json};
@@ -2591,14 +2690,14 @@ def _ap_signal_state_html(signal_state: dict | None, member_rows: list) -> str:
         for lead in [6, 12, 18, 24]:
             v = by_mid.get(mid, {}).get(lead)
             leads += (
-                '<td class="ap-none">–</td>' if v is None
-                else f"<td>{round(v * 100)}%</td>"
+                f'<td data-label="+{lead}h" class="ap-none">–</td>' if v is None
+                else f'<td data-label="+{lead}h">{round(v * 100)}%</td>'
             )
         body += (
-            f'<tr><td class="model-id-cell">{mid}</td>'
+            f'<tr><td data-label="#" class="model-id-cell">{mid}</td>'
             f"<td>{name}</td>"
-            f'<td style="color:#888;font-size:12px">{sig}</td>'
-            f"<td>{state_cell}</td>{leads}</tr>"
+            f'<td data-label="Signal" style="color:#888;font-size:12px">{sig}</td>'
+            f'<td data-label="State">{state_cell}</td>{leads}</tr>'
         )
 
     return (
@@ -2606,8 +2705,10 @@ def _ap_signal_state_html(signal_state: dict | None, member_rows: list) -> str:
         "Blue = precip-favorable &nbsp;·&nbsp; "
         "Amber = unfavorable &nbsp;·&nbsp; "
         "Grey = neutral.</p>"
+        '<div class="table-scroll">'
         f'<table class="ap-signal-table"><thead>{header}</thead>'
         f"<tbody>{body}</tbody></table>"
+        '</div>'
     )
 
 
@@ -2892,13 +2993,288 @@ def _learnings_weights_table_html(weight_rows: list) -> str:
     return (
         '<div class="learnings-weights">'
         "<h4>Current tuning weights (members 1 and 3)</h4>"
+        '<div class="table-scroll">'
         '<table class="score-table"><thead>'
         "<tr><th>variable</th><th>lead</th>"
         "<th>member 1<br><small>clearness-only</small></th>"
         "<th>member 3<br><small>clearness-pressure-projected</small></th>"
         "</tr></thead>"
-        f"<tbody>{tbody}</tbody></table></div>"
+        f"<tbody>{tbody}</tbody></table>"
+        '</div></div>'
     )
+
+
+def _last_nonnone(series: list) -> float | None:
+    return next((v for v in reversed(series) if v is not None), None)
+
+
+def _recent_slope(series: list, window: int = 8) -> float | None:
+    recent = [v for v in series[-window:] if v is not None]
+    if len(recent) < 3:
+        return None
+    return recent[-1] - recent[0]
+
+
+def _hyp_a_status(data: dict) -> str:
+    mae_by_lead = data["mae_by_lead"]
+    weight_rows = data["weight_rows"]
+    parts = []
+    for lead in [6, 12]:
+        lead_data = mae_by_lead.get(lead, {})
+        last_m1 = _last_nonnone(lead_data.get(1, {}).get("y", []))
+        last_m3 = _last_nonnone(lead_data.get(3, {}).get("y", []))
+        if last_m1 is None or last_m3 is None:
+            continue
+        diff = last_m3 - last_m1
+        if diff > 0.05:
+            winner = "m1 (clearness-only)"
+        elif diff < -0.05:
+            winner = "m3 (pressure-projected)"
+        else:
+            winner = "tied"
+        if winner == "tied":
+            parts.append(f"+{lead}h: tied ({last_m1:.1f}°F MAE)")
+        else:
+            parts.append(f"+{lead}h: {winner} leads by {abs(diff):.1f}°F MAE")
+    wt_note = ""
+    if weight_rows:
+        wt_map = {(r["variable"], r["lead_hours"], r["member_id"]): r["weight"] for r in weight_rows}
+        w1 = wt_map.get(("temperature", 6, 1))
+        w3 = wt_map.get(("temperature", 6, 3))
+        if w1 is not None and w3 is not None:
+            if w1 > w3:
+                wt_note = " The ensemble is currently leaning on m1 (clearness-only) for temperature."
+            elif w3 > w1:
+                wt_note = " The ensemble is currently leaning on m3 (pressure-projected) for temperature."
+            else:
+                wt_note = " The ensemble is weighting m1 and m3 equally for temperature."
+    if not parts:
+        return ""
+    return f"<strong>Status:</strong> {'; '.join(parts)}.{wt_note}"
+
+
+def _hyp_b_status(data: dict) -> str:
+    cd = {d: k for d, k in data["clearness_daily"]}
+    sd = {d: f for d, f in data["sky_daily"]}
+    common = sorted(set(cd) & set(sd))
+    n = len(common)
+    if n < 5:
+        return ""
+    ks = [cd[d] for d in common]
+    ss = [sd[d] for d in common]
+    mean_k = sum(ks) / n
+    mean_s = sum(ss) / n
+    num = sum((ks[i] - mean_k) * (ss[i] - mean_s) for i in range(n))
+    denom_sq = sum((x - mean_k) ** 2 for x in ks) * sum((x - mean_s) ** 2 for x in ss)
+    if denom_sq <= 0:
+        return ""
+    r = num / denom_sq ** 0.5
+    if r < -0.7:
+        verdict = (
+            f"clearness and sky cover are moving in opposite directions as expected "
+            f"— cloudier days show lower clearness. Relationship is consistent ({n} days of data)."
+        )
+    elif r < -0.4:
+        verdict = (
+            f"clearness and sky cover tend to move in opposite directions, "
+            f"but the pattern is noisy ({n} days of data). Relationship is forming."
+        )
+    elif r < 0.2:
+        verdict = (
+            f"clearness and sky cover aren't clearly moving in opposite directions yet "
+            f"({n} days of data). Could be thin data, or the Tempest site and KMSP "
+            f"are genuinely seeing different skies."
+        )
+    else:
+        verdict = (
+            f"clearness and sky cover are both going up and down together ({n} days of data) "
+            f"— they should be moving in opposite directions. Worth investigating."
+        )
+    return f"<strong>Status:</strong> {verdict}"
+
+
+def _hyp_c_status(data: dict) -> str:
+    parts = []
+    for lead in [6, 24]:
+        y = data["hyp_c_gap"].get(("temperature", lead), {}).get("y", [])
+        last = _last_nonnone(y)
+        if last is None:
+            continue
+        slope = _recent_slope(y)
+        if slope is not None:
+            if slope < -0.15:
+                trend = "↓ converging"
+            elif slope > 0.15:
+                trend = "↑ diverging"
+            else:
+                trend = "→ flat"
+        else:
+            trend = ""
+        sign = "+" if last >= 0 else ""
+        parts.append(f"+{lead}h gap {sign}{last:.1f}°F ({trend})" if trend else f"+{lead}h gap {sign}{last:.1f}°F")
+    if not parts:
+        return ""
+    last_6 = _last_nonnone(data["hyp_c_gap"].get(("temperature", 6), {}).get("y", []))
+    if last_6 is not None:
+        if last_6 <= 0:
+            verdict = "Ensemble is matching or beating climo_deviation."
+        elif last_6 < 0.3:
+            verdict = "Gap is small."
+        else:
+            verdict = "Ensemble still trails climo_deviation."
+    else:
+        verdict = ""
+    return f"<strong>Status:</strong> {'; '.join(parts)}. {verdict}".strip()
+
+
+def _hyp_d_status(data: dict) -> str:
+    dew_y = data["hyp_d"].get(("dewpoint", 12), {}).get("y", [])
+    pres_y = data["hyp_d"].get(("pressure", 12), {}).get("y", [])
+    last_dew = _last_nonnone(dew_y)
+    last_pres = _last_nonnone(pres_y)
+    if last_dew is None and last_pres is None:
+        return ""
+    parts = []
+    if last_dew is not None:
+        parts.append(f"dewpoint MAE {last_dew:.1f}°F")
+    if last_pres is not None:
+        parts.append(f"pressure MAE {last_pres:.1f} hPa")
+    verdict = ""
+    if last_dew is not None and last_pres is not None:
+        if last_pres > 15:
+            verdict = (
+                " Trade-off confirmed — pressure error is large, "
+                "but this model was built to ignore pressure accuracy in favor of dewpoint."
+            )
+        elif last_pres > 6:
+            verdict = " Pressure error is elevated but modest. Trade-off is present."
+        else:
+            verdict = (
+                " Pressure error is surprisingly low. "
+                "If it stays this close to normal, the model's pressure sacrifice may have shrunk."
+            )
+    return f"<strong>Status</strong> at +12h: {', '.join(parts)}.{verdict}"
+
+
+def _hyp_e_status(data: dict) -> str:
+    gaps: dict[int, float] = {}
+    vals: dict[int, tuple[float, float]] = {}
+    for lead in [6, 24]:
+        e = data["hyp_e"].get(lead, {})
+        last_cd = _last_nonnone(e.get("climo_deviation", {}).get("y", []))
+        last_ps = _last_nonnone(e.get("persistence", {}).get("y", []))
+        if last_cd is not None and last_ps is not None:
+            gaps[lead] = last_ps - last_cd
+            vals[lead] = (last_cd, last_ps)
+    if not gaps:
+        return ""
+    parts = []
+    for lead in sorted(gaps):
+        cd_v, ps_v = vals[lead]
+        parts.append(f"+{lead}h: climo {cd_v:.1f}°F vs persistence {ps_v:.1f}°F (gap {gaps[lead]:+.1f}°F)")
+    verdict = ""
+    if 6 in gaps and 24 in gaps:
+        if gaps[6] > 0 and gaps[24] < 0:
+            verdict = " Advantage reverses at longer leads — persistence beats climo_deviation at +24h."
+        elif gaps[6] < 0 and gaps[24] < 0:
+            verdict = " Persistence beats climo_deviation at both leads."
+        elif gaps[6] > gaps[24] + 0.15:
+            verdict = " Advantage decaying with lead as expected."
+        elif abs(gaps[6] - gaps[24]) <= 0.15:
+            verdict = " Gap roughly constant across leads — recency signal not decaying."
+        else:
+            verdict = " Advantage grows with lead — unexpected pattern."
+    return f"<strong>Status:</strong> {'; '.join(parts)}.{verdict}"
+
+
+def _hyp_f_status(data: dict) -> str:
+    hyp_f = data["hyp_f"]
+    ensemble_weights = data["ensemble_weights"]
+    if not hyp_f:
+        return ""
+    model_counts: dict[str, int] = {}
+    for info in hyp_f.values():
+        model_counts[info["model"]] = model_counts.get(info["model"], 0) + 1
+    dominant = max(model_counts, key=lambda m: model_counts[m])
+    dom_count = model_counts[dominant]
+    total_cells = len(hyp_f)
+    if not ensemble_weights:
+        return (
+            f"<strong>Status:</strong> {dominant} has the lowest error in "
+            f"{dom_count} of {total_cells} variable/lead combinations. No ensemble weights computed yet."
+        )
+    matches = total = 0
+    for (var, lead), winner_info in hyp_f.items():
+        cell_wts = {k[0]: v for k, v in ensemble_weights.items() if k[1] == var and k[2] == lead}
+        if not cell_wts:
+            continue
+        top_ens = max(cell_wts, key=lambda m: cell_wts[m])
+        total += 1
+        if top_ens == winner_info["model"]:
+            matches += 1
+    if total == 0:
+        return (
+            f"<strong>Status:</strong> {dominant} has the lowest error in "
+            f"{dom_count} of {total_cells} variable/lead combinations."
+        )
+    pct = matches / total * 100
+    if pct >= 75:
+        alignment = "mostly giving extra weight to the right model"
+    elif pct >= 50:
+        alignment = "partially giving extra weight to the right model"
+    else:
+        alignment = "not giving extra weight to the model that's actually winning"
+    return (
+        f"<strong>Status:</strong> {dominant} has the lowest error in "
+        f"{dom_count} of {total_cells} variable/lead combinations. "
+        f"The ensemble is {alignment} ({matches} of {total} combinations agree, {pct:.0f}%)."
+    )
+
+
+def _hyp_g_status(data: dict) -> str:
+    gaps: dict[int, float] = {}
+    vals: dict[int, tuple[float, float]] = {}
+    for lead in [6, 24]:
+        e = data["hyp_g"].get(lead, {})
+        last_dc = _last_nonnone(e.get("diurnal_curve", {}).get("y", []))
+        last_cd = _last_nonnone(e.get("climo_deviation", {}).get("y", []))
+        if last_dc is not None and last_cd is not None:
+            gaps[lead] = last_dc - last_cd
+            vals[lead] = (last_dc, last_cd)
+    if not gaps:
+        return ""
+    parts = []
+    for lead in sorted(gaps):
+        dc_v, cd_v = vals[lead]
+        parts.append(f"+{lead}h: diurnal {dc_v:.1f}°F vs climo_dev {cd_v:.1f}°F (gap {gaps[lead]:+.1f}°F)")
+    verdict = ""
+    if 6 in gaps and 24 in gaps:
+        both_negative = gaps[6] < 0 and gaps[24] < 0
+        if both_negative and gaps[24] < gaps[6] - 0.15:
+            verdict = " diurnal_curve beats climo_deviation at both leads, advantage growing with time."
+        elif both_negative:
+            verdict = " diurnal_curve is beating climo_deviation at both leads."
+        elif gaps[6] > 0 and gaps[24] < 0:
+            verdict = " diurnal_curve closes gap and leads at longer horizons."
+        elif gaps[24] < gaps[6] - 0.15:
+            verdict = " Gap shrinks at longer leads — diurnal explanation has some support."
+        elif abs(gaps[24] - gaps[6]) <= 0.15:
+            verdict = " Gap constant across leads — recency signal, not diurnal cycle, is the driver."
+        else:
+            verdict = " Gap grows at longer leads — diurnal_curve worsens with time."
+    elif gaps:
+        only_gap = list(gaps.values())[0]
+        if only_gap <= 0:
+            verdict = " diurnal_curve is matching or beating climo_deviation."
+        elif only_gap < 0.3:
+            verdict = " Gap is small."
+    return f"<strong>Status:</strong> {'; '.join(parts)}.{verdict}"
+
+
+def _status_p(text: str) -> str:
+    if not text:
+        return ""
+    return f'  <p class="learnings-status">{text}</p>\n'
 
 
 def _learnings_section_html(data: dict) -> str:
@@ -2910,6 +3286,15 @@ def _learnings_section_html(data: dict) -> str:
     has_hyp_f = bool(data["hyp_f"])
     has_hyp_g = any(data["hyp_g"])
     weights_html = _learnings_weights_table_html(data["weight_rows"])
+
+    sta = _status_p
+    status_a = sta(_hyp_a_status(data))
+    status_b = sta(_hyp_b_status(data))
+    status_c = sta(_hyp_c_status(data))
+    status_d = sta(_hyp_d_status(data))
+    status_e = sta(_hyp_e_status(data))
+    status_f = sta(_hyp_f_status(data))
+    status_g = sta(_hyp_g_status(data))
 
     no_data = '<p class="no-data">Not enough scored data yet. Check back after several forecast cycles.</p>'
 
@@ -2927,6 +3312,7 @@ def _learnings_section_html(data: dict) -> str:
         "simply persisting it (member 1)? The weights table shows whether "
         "<code>barogram tune</code> tracks the better performer over time."
         "</p>\n"
+        + status_a
         + (
             (
                 '  <details class="collapsible-section">\n'
@@ -2953,6 +3339,7 @@ def _learnings_section_html(data: dict) -> str:
         "difference between the Tempest site and KMSP. "
         "NWS sky cover is never used as a model input &mdash; this is validation only."
         "</p>\n"
+        + status_b
         + (
             '  <details class="collapsible-section">\n'
             '  <summary>show chart</summary>\n'
@@ -2973,6 +3360,7 @@ def _learnings_section_html(data: dict) -> str:
         "that means the ensemble is learning to match or beat its best member. "
         "A flat or rising line means the weighting is not converging."
         "</p>\n"
+        + status_c
         + (
             '  <details class="collapsible-section">\n'
             '  <summary>show charts</summary>\n'
@@ -2995,6 +3383,7 @@ def _learnings_section_html(data: dict) -> str:
         "high pressure. That&rsquo;s expected and confirms the model design trade-off. "
         "If pressure MAE starts dropping back toward dewpoint level, something has changed."
         "</p>\n"
+        + status_d
         + (
             '  <details class="collapsible-section">\n'
             '  <summary>show chart</summary>\n'
@@ -3014,6 +3403,7 @@ def _learnings_section_html(data: dict) -> str:
         "signal has lost value. A seasonal shift (gap changes in summer vs winter) would also "
         "be meaningful."
         "</p>\n"
+        + status_e
         + (
             '  <details class="collapsible-section">\n'
             '  <summary>show charts</summary>\n'
@@ -3034,6 +3424,7 @@ def _learnings_section_html(data: dict) -> str:
         "reflect this map? If the ensemble underperforms for a variable, check whether "
         "the dominant model here gets high weight in that column."
         "</p>\n"
+        + status_f
         + (
             '  <details class="collapsible-section">\n'
             '  <summary>show chart</summary>\n'
@@ -3054,6 +3445,7 @@ def _learnings_section_html(data: dict) -> str:
         "If it never closes, the recency signal in <code>climo_deviation</code> is the "
         "explanation &mdash; not the diurnal cycle."
         "</p>\n"
+        + status_g
         + (
             '  <details class="collapsible-section">\n'
             '  <summary>show charts</summary>\n'
@@ -3073,7 +3465,7 @@ def _learnings_js(data: dict) -> str:
     _font = "'-apple-system, sans-serif'"
     _base_layout = (
         f"margin:{{t:40,b:100,l:50,r:16}},"
-        f"xaxis:{{tickangle:0,tickfont:{{size:10}},nticks:5}},"
+        f"xaxis:{{tickangle:0,tickfont:{{size:10}},nticks:4}},"
         f"yaxis:{{rangemode:'tozero',tickfont:{{size:11}}}},"
         f"height:320,showlegend:true,"
         f"legend:{{orientation:'h',x:0,y:-0.18,xanchor:'left',yanchor:'top',font:{{size:10}}}},"
@@ -3145,7 +3537,7 @@ def _learnings_js(data: dict) -> str:
             f"{{title:{{text:'Daily avg clearness (Tempest) vs sky cover fraction (NWS KMSP)',"
             f"font:{{size:13,family:{_font}}}}},"
             f"margin:{{t:50,b:110,l:60,r:16}},"
-            f"xaxis:{{tickangle:0,tickfont:{{size:10}},nticks:5,title:'date'}},"
+            f"xaxis:{{tickangle:0,tickfont:{{size:10}},nticks:4,title:'date'}},"
             f"yaxis:{{title:'clearness index k (1=clear, 0=overcast)',"
             f"range:[0,1.05],tickfont:{{size:11}}}},"
             f"yaxis2:{{title:'sky cover fraction (1=OVC, 0=CLR)',"
@@ -3853,7 +4245,7 @@ def _recent_misses_html(rows: list) -> str:
 
     # rows are pre-sorted by model then mae desc; emit a group header on model change
     header = (
-        '<table class="obs-history-table">'
+        '<table class="obs-history-table recent-misses-table">'
         '<thead><tr>'
         '<th>Variable</th><th>Lead</th><th>Valid</th>'
         '<th>Predicted</th><th>Observed</th><th>Error</th>'
@@ -4117,7 +4509,7 @@ def generate(
 
     _var_btns = [
         ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-        ("pressure", "Pressure"),
+        ("pressure", "Pressure"), ("precip_prob", "Precip Prob"),
     ]
     bias_filter_btns = "".join(
         f'<button class="bias-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
