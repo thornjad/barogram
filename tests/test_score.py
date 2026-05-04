@@ -1,6 +1,7 @@
 import time
 
 import score
+from score import _precip_occurred
 from tests.conftest import make_input_db, make_output_db
 
 _NOW = int(time.time())
@@ -156,3 +157,47 @@ def test_score_precip_prob_no_rain():
     row = conn_out.execute("select observed, mae from forecasts").fetchone()
     assert row["observed"] == 0.0
     assert abs(row["mae"] - 0.16) < 1e-6  # (0.4 - 0.0)^2
+
+
+# --- _precip_occurred ---
+
+_DAY1 = 1_700_000_000          # 2023-11-14 (UTC); same local date in any ±12h tz
+_DAY2 = _DAY1 + 86_400         # 24h later — always a different local date
+
+
+def _obs(ts, accum):
+    return {"timestamp": ts, "precip_accum_day": accum}
+
+
+def test_precip_occurred_above_threshold():
+    assert _precip_occurred(_obs(_DAY1, 0.0), _obs(_DAY1, 0.2)) == 1.0
+
+
+def test_precip_occurred_below_threshold():
+    assert _precip_occurred(_obs(_DAY1, 0.0), _obs(_DAY1, 0.05)) == 0.0
+
+
+def test_precip_occurred_exactly_at_threshold():
+    # threshold is > 0.1, so exactly 0.1mm returns 0.0
+    assert _precip_occurred(_obs(_DAY1, 0.0), _obs(_DAY1, 0.1)) == 0.0
+
+
+def test_precip_occurred_negative_delta_returns_zero():
+    # gauge reset or correction — max(0, negative) treated as dry
+    assert _precip_occurred(_obs(_DAY1, 5.0), _obs(_DAY1, 0.0)) == 0.0
+
+
+def test_precip_occurred_midnight_crossing_returns_none():
+    assert _precip_occurred(_obs(_DAY1, 0.0), _obs(_DAY2, 1.0)) is None
+
+
+def test_precip_occurred_none_pre_obs():
+    assert _precip_occurred(None, _obs(_DAY1, 1.0)) is None
+
+
+def test_precip_occurred_none_post_obs():
+    assert _precip_occurred(_obs(_DAY1, 0.0), None) is None
+
+
+def test_precip_occurred_null_precip_column():
+    assert _precip_occurred(_obs(_DAY1, None), _obs(_DAY1, 1.0)) is None

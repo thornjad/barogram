@@ -256,3 +256,38 @@ def test_climo_precip_probability_insufficient(make_input_db_with_precip):
     t = datetime.datetime.fromtimestamp(ts)
     result = db.climo_precip_probability(conn, t.month, t.hour, min_obs=9999)
     assert result is None
+
+
+# --- precip_event_count ---
+
+def _insert_scored_precip(conn, issued_at, observed):
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours,
+             variable, value, observed, mae, scored_at)
+        values (200, 'nws', 0, ?, ?, 6, 'precip_prob', 0.1, ?, 0.0, ?)
+        """,
+        (issued_at, issued_at + 21600, observed, issued_at + 100),
+    )
+
+
+def test_precip_event_count_zero_when_no_rain():
+    conn = make_output_db()
+    _insert_scored_precip(conn, 1_700_000_000, 0.0)
+    assert db.precip_event_count(conn) == 0
+
+
+def test_precip_event_count_counts_rain_events():
+    conn = make_output_db()
+    _insert_scored_precip(conn, 1_700_000_000, 1.0)
+    _insert_scored_precip(conn, 1_700_010_000, 1.0)
+    _insert_scored_precip(conn, 1_700_020_000, 0.0)
+    assert db.precip_event_count(conn) == 2
+
+
+def test_precip_event_count_since_filter():
+    conn = make_output_db()
+    _insert_scored_precip(conn, 1_700_000_000, 1.0)  # before cutoff
+    _insert_scored_precip(conn, 1_700_100_000, 1.0)  # after cutoff
+    assert db.precip_event_count(conn, since=1_700_050_000) == 1

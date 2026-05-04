@@ -103,3 +103,48 @@ def test_timeseries_rolling_present():
     pers = result["24"]["persistence"]["series"]["pressure"]
     assert "y_ratio_rolling" in pers
     assert len(pers["y_ratio_rolling"]) == len(pers["y_ratio"])
+
+
+# --- _overall_accuracy_html precip gating ---
+
+def _make_acc_row(model_id, model, model_type, variable, lead_hours, avg_mae):
+    return {
+        "model_id": model_id,
+        "model": model,
+        "type": model_type,
+        "variable": variable,
+        "lead_hours": lead_hours,
+        "avg_mae": avg_mae,
+    }
+
+
+def _base_rows():
+    """Minimal rows: climo + one other model, temperature + precip_prob."""
+    return [
+        _make_acc_row(2, "climatological_mean", "base", "temperature", 24, 5.0),
+        _make_acc_row(2, "climatological_mean", "base", "precip_prob", 24, 0.001),
+        _make_acc_row(200, "nws", "external", "temperature", 24, 2.0),
+        _make_acc_row(200, "nws", "external", "precip_prob", 24, 0.05),
+    ]
+
+
+def test_overall_accuracy_excludes_precip_below_threshold():
+    html = dashboard._overall_accuracy_html(_base_rows(), precip_events=0)
+    # skill computed only from temperature; precip_prob row absent from average
+    assert "nws" in html
+    # 2.0/5.0 = 60% skill for temperature only
+    assert "60%" in html
+
+
+def test_overall_accuracy_excludes_precip_at_threshold_minus_one():
+    html = dashboard._overall_accuracy_html(_base_rows(), precip_events=4)
+    assert "60%" in html
+
+
+def test_overall_accuracy_includes_precip_at_threshold():
+    # with precip_events=5, precip_prob is also included
+    # temperature skill = (1 - 2.0/5.0)*100 = 60%
+    # precip_prob skill = (1 - 0.05/0.001)*100 = -4900%
+    # average = (60 + (-4900)) / 2 = -2420%
+    html = dashboard._overall_accuracy_html(_base_rows(), precip_events=5)
+    assert "-2420%" in html
