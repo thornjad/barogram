@@ -4303,8 +4303,10 @@ def _write_fragment(html: str, out_dir: Path) -> None:
     css = re.sub(r"(?m)^header \{", ".barogram-header {", css)
     css = re.sub(r"(?m)^h2 \{", ".barogram h2 {", css)
     css = re.sub(r"(?m)^h3 \{", ".barogram h3 {", css)
-    # disable sticky header when embedded — site nav already handles that
-    css += "\n.barogram-header { position: relative; top: auto; z-index: auto; }\n"
+    # .barogram inherits host page background; strip hardcoded value
+    css = re.sub(r"(?m)^(    color: #1a1a1a;\n)    background: #f5f5f5;\n(    padding:)", r"\1\2", css)
+    # .barogram-header must be opaque (sticky), but should match host page bg
+    css = re.sub(r"(?m)^(    z-index: 100;\n)    background: #f5f5f5;\n(    display: flex;)", r"\1    background: var(--bg, #f5f5f5);\n\2", css)
 
     body_start = html.index("<body>\n") + len("<body>\n")
     script_anchor = '\n<script src="https://cdn.jsdelivr.net/'
