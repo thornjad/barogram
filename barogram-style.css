@@ -315,6 +315,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .no-data { color: #888; font-style: italic; font-size: 13px; margin: 8px 0 16px; }
 .filter-label { font-size: 11px; color: #888; white-space: nowrap; align-self: center; }
 .filter-sep-left { margin-left: 8px; }
+.ap-signal-cards { display: none; }
 @media (max-width: 768px) {
     body { padding: 12px 10px; }
     .generated { font-size: 11px; }
@@ -497,7 +498,6 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     margin-top: 8px;
 }
 .analysis-section > h2 { color: #555; }
-.ap-signal-cards { display: none; }
 .ap-signal-table {
     width: 100%;
     border-collapse: collapse;
