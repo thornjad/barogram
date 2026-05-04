@@ -4,12 +4,12 @@ from tests.conftest import make_input_db, make_obs
 
 
 class TestNoHistoricalData:
-    def test_returns_36_rows(self):
+    def test_returns_56_rows(self):
         conn_in = make_input_db()
         obs = make_obs()
         rows = ap_mod.run(obs, obs["timestamp"], conn_in=conn_in)
-        # 8 named members + member_id=0, each with 4 lead times = 36 rows
-        assert len(rows) == 36
+        # 13 named members + member_id=0, each with 4 lead times = 56 rows
+        assert len(rows) == 56
 
     def test_all_values_none(self):
         conn_in = make_input_db()
@@ -56,6 +56,6 @@ class TestModelConstants:
         assert ap_mod.NEEDS_ALL_OBS is True
 
     def test_member_count(self):
-        # 8 named members (1-8); member_id=0 is ensemble mean produced at runtime
-        assert len(ap_mod._MEMBER_NAMES) == 8
-        assert all(mid in {m[0] for m in ap_mod._MEMBER_NAMES} for mid in range(1, 9))
+        # 13 named members (1-13); member_id=0 is ensemble mean produced at runtime
+        assert len(ap_mod._MEMBER_NAMES) == 13
+        assert all(mid in {m[0] for m in ap_mod._MEMBER_NAMES} for mid in range(1, 14))
