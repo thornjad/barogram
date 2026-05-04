@@ -521,6 +521,38 @@ def accuracy_windows(conn: sqlite3.Connection, since_epochs: list[int]) -> dict[
     return result
 
 
+def accuracy_run_count_last_n(conn: sqlite3.Connection, n: int) -> int:
+    """Count of distinct scored runs actually included in accuracy_by_lead(n)."""
+    row = conn.execute(
+        """
+        select count(*) as cnt from (
+            select distinct issued_at
+            from forecasts
+            where scored_at is not null
+            order by issued_at desc
+            limit ?
+        )
+        """,
+        (n,),
+    ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def precip_event_count(conn: sqlite3.Connection, since: int = 0) -> int:
+    """Count of scored precip_prob rows where precipitation was observed (observed=1.0)."""
+    row = conn.execute(
+        """
+        select count(*) as n from forecasts
+        where variable = 'precip_prob'
+          and scored_at is not null
+          and observed = 1.0
+          and issued_at >= ?
+        """,
+        (since,),
+    ).fetchone()
+    return row["n"] if row else 0
+
+
 def accuracy_run_count_multi(conn: sqlite3.Connection, since_epochs: list[int]) -> dict[int, int]:
     """accuracy_run_count for multiple since-epoch values in a single query.
 
@@ -558,20 +590,34 @@ def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list
     ).fetchall()
 
 
-def skill_timeseries_multi(conn: sqlite3.Connection, since_epochs: list) -> dict:
+_MIN_PRECIP_EVENTS = 5  # rain events required before BSS is included in averages
+
+
+def skill_timeseries_multi(
+    conn: sqlite3.Connection, since_epochs: list, precip_events: dict | None = None
+) -> dict:
     """Per-day avg skill for ensemble/nws/tempest vs climo, across multiple time windows.
 
     Skill is computed per (variable, lead_hours) pair first, then averaged — matching
     the table calculation exactly. Mixing MAE across variables before computing skill
     is wrong because temperature (°C) and pressure (hPa) are on different scales.
 
+    precip_events: {since_epoch: count} of observed rain events per window. When a
+    window has >= _MIN_PRECIP_EVENTS rain events, precip_prob (BSS) is included in the
+    average. Otherwise it is excluded: the near-zero climo Brier denominator during dry
+    spells makes BSS incomparable with MAESS and corrupts the cross-variable mean.
+
     Returns {since_epoch: list of row dicts with keys day, model_id, model, avg_skill}.
     Since = 0 is the all-time sentinel; issued_at >= 0 is always true for any valid epoch.
     """
     result = {}
     for since in since_epochs:
+        n_precip = (precip_events or {}).get(since, 0)
+        base_vars = "('temperature', 'dewpoint', 'pressure')"
+        all_vars = "('temperature', 'dewpoint', 'pressure', 'precip_prob')"
+        var_clause = all_vars if n_precip >= _MIN_PRECIP_EVENTS else base_vars
         rows = conn.execute(
-            """
+            f"""
             with climo_ref as (
                 -- window-wide average climo MAE; stable denominator matching the table
                 select
@@ -582,7 +628,7 @@ def skill_timeseries_multi(conn: sqlite3.Connection, since_epochs: list) -> dict
                 where scored_at is not null
                   and member_id = 0
                   and model_id = 2
-                  and variable in ('temperature', 'dewpoint', 'pressure', 'precip_prob')
+                  and variable in {var_clause}
                   and issued_at >= ?
                 group by variable, lead_hours
             ),
@@ -597,8 +643,7 @@ def skill_timeseries_multi(conn: sqlite3.Connection, since_epochs: list) -> dict
                 from forecasts
                 where scored_at is not null
                   and member_id = 0
-                  and model_id in (100, 200, 201)
-                  and variable in ('temperature', 'dewpoint', 'pressure', 'precip_prob')
+                  and variable in {var_clause}
                   and issued_at >= ?
                 group by day, model_id, model, variable, lead_hours
             )
@@ -918,17 +963,31 @@ def forecast_trajectory(conn: sqlite3.Connection, since_ts: int) -> list:
 def recent_misses(conn: sqlite3.Connection, since_ts: int, per_model: int = 10) -> list:
     """Top per_model largest errors per source within the lookback window.
 
-    Uses a window function to rank rows within each model group, so every model
-    gets representation regardless of alphabetical ordering.
+    Ranks by mae/climo_mae so that precip_prob (Brier, range [0,1]) competes
+    fairly against continuous variables (MAE in physical units).
     """
     return conn.execute(
         """
+        with climo as (
+            select variable, lead_hours, avg(mae) as climo_mae
+            from forecasts
+            where model = 'climatological_mean'
+              and scored_at is not null
+              and member_id = 0
+            group by variable, lead_hours
+        )
         select model_id, model, variable, lead_hours, valid_at, value, observed, error, mae
         from (
             select f.model_id, f.model, f.variable, f.lead_hours,
                    f.valid_at, f.value, f.observed, f.error, f.mae,
-                   row_number() over (partition by f.model_id order by f.mae desc) as rn
+                   row_number() over (
+                       partition by f.model_id
+                       order by case when c.climo_mae > 0
+                           then f.mae / c.climo_mae else f.mae
+                       end desc
+                   ) as rn
             from forecasts f
+            left join climo c on c.variable = f.variable and c.lead_hours = f.lead_hours
             where f.scored_at is not null
               and f.member_id = 0
               and f.valid_at >= ?
