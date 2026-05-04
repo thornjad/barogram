@@ -4312,7 +4312,7 @@ def _write_fragment(html: str, out_dir: Path) -> None:
     script_anchor = '\n<script src="https://cdn.jsdelivr.net/'
     body_end = html.index(script_anchor)
     body_html = html[body_start:body_end]
-    body_html = body_html.replace("<header>", '<div class="barogram-header">', 1)
+    body_html = re.sub(r"<header\b[^>]*>", '<div class="barogram-header" id="barogram-top">', body_html, count=1)
     body_html = body_html.replace("</header>", "</div>", 1)
     body_html = f'<div class="barogram">\n{body_html}\n</div>'
 
@@ -4562,7 +4562,7 @@ def generate(
 <body>
 <div class="container">
 
-<header>
+<header id="barogram-top">
   <div class="header-top">
     <h1>barogram</h1>
     <div class="generated">
@@ -4572,6 +4572,7 @@ def generate(
     </div>
   </div>
   <nav class="jump-nav">
+    <a href="#barogram-top">Top</a>
     <a href="#conditions">Conditions</a>
     <a href="#forecast">Forecast</a>
     <a href="#verification">Verification</a>
