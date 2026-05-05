@@ -636,6 +636,136 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .ap-dry { background: #fef3c7; color: #92400e; }
 .ap-neutral { background: #f3f4f6; color: #4b5563; }
 .ap-none { color: #bbb; font-style: italic; }
+.zambretti-tendency { font-size: 13px; color: #555; margin-top: 4px; }
+.zambretti-algo { font-size: 11px; color: #888; margin-top: 4px; }
+.mf-member-label { font-size: 11px; font-weight: 600; color: #6b3fa0; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 4px; }
+@media (prefers-color-scheme: dark) {
+    body { color: #e0e0e0; background: #1a1a1a; }
+    header { background: #1a1a1a; border-bottom-color: #e0e0e0; }
+    .generated { color: #888; }
+    .stale-banner { background: #2a2200; border-color: #6a4800; border-left-color: #8a6000; }
+    .stale-banner code { background: #3a3000; }
+    .stale-age-banner { background: #2a1500; border-color: #7a3500; border-left-color: #aa4500; }
+    .stale-age-banner code { background: #3a2000; }
+    .card { background: #252525; border-color: #3a3a3a; }
+    .station-id { color: #888; }
+    .obs-time { color: #888; }
+    .obs-table th { color: #888; }
+    .run-meta { color: #ccc; background: #252525; border-color: #3a3a3a; }
+    table.forecast-table { background: #252525; border-color: #3a3a3a; }
+    table.forecast-table th, table.forecast-table td { border-bottom-color: #333; }
+    table.forecast-table th { color: #888; }
+    table.forecast-table thead th { background: #2d2d2d; color: #e0e0e0; }
+    .chart-container { background: #252525; border-color: #3a3a3a; }
+    .mae-filter-btn, .fcst-filter-btn,
+    .bias-filter-btn, .lead-skill-filter-btn, .heatmap-filter-btn,
+    .diurnal-filter-btn, .error-dist-var-btn, .error-dist-lead-btn,
+    .trajectory-filter-btn, .acc-filter-btn, .acc-window-btn { background: #252525; border-color: #444; color: #ccc; }
+    .mae-filter-btn:hover, .fcst-filter-btn:hover,
+    .bias-filter-btn:hover, .lead-skill-filter-btn:hover, .heatmap-filter-btn:hover,
+    .diurnal-filter-btn:hover, .error-dist-var-btn:hover, .error-dist-lead-btn:hover,
+    .trajectory-filter-btn:hover, .acc-filter-btn:hover, .acc-window-btn:hover { background: #333; }
+    .mae-filter-btn.active, .fcst-filter-btn.active,
+    .bias-filter-btn.active, .lead-skill-filter-btn.active, .heatmap-filter-btn.active,
+    .diurnal-filter-btn.active, .error-dist-var-btn.active, .error-dist-lead-btn.active,
+    .trajectory-filter-btn.active, .acc-filter-btn.active, .acc-window-btn.active { background: #e0e0e0; color: #1a1a1a; border-color: #e0e0e0; }
+    .mae-raw-btn { background: #252525; border-color: #444; color: #aaa; }
+    .mae-raw-btn:hover { background: #333; }
+    .mae-raw-btn.active { background: #888; color: #fff; border-color: #888; }
+    .obs-history-table { background: #252525; border-color: #3a3a3a; }
+    .obs-history-table th, .obs-history-table td { border-bottom-color: #333; }
+    .obs-history-table thead th { background: #2d2d2d; color: #e0e0e0; }
+    .more-btn { background: #252525; border-color: #444; color: #ccc; }
+    .more-btn:hover { background: #333; }
+    .score-table { background: #252525; border-color: #3a3a3a; }
+    .score-table th, .score-table td { border-bottom-color: #333; }
+    .score-table th { color: #888; }
+    .score-table thead th { background: #2d2d2d; color: #e0e0e0; }
+    .score-table td small { color: #888; }
+    .window-label { color: #888; }
+    .model-header th { background: #2d2d2d; color: #aaa; }
+    .ensemble-header th { background: #1a2440; color: #7a9be0; }
+    .external-header th { background: #2a1800; color: #cc7040; }
+    .ensemble-row th, .ensemble-row td { background: #1e2440; }
+    .external-row th, .external-row td { background: #221800; }
+    .model-run-card { background: #252525; border-color: #3a3a3a; }
+    .model-run-header { background: #2d2d2d; border-bottom-color: #3a3a3a; }
+    .base-badge { background: #1a3a1a; color: #6db56d; }
+    .ensemble-badge { background: #1a2440; color: #7a9be0; }
+    .baseline-badge { background: #2d2d25; color: #888; }
+    .external-badge { background: #2a1800; color: #cc7040; }
+    .fun-badge { background: #1a3a1a; color: #6db56d; }
+    .member-badge { background: #2a1540; color: #b07de0; }
+    .run-detail { color: #888; }
+    .mae-summary-table { background: #252525; border-color: #3a3a3a; }
+    .mae-summary-table th, .mae-summary-table td { border-bottom-color: #333; }
+    .mae-summary-table th { color: #888; }
+    .mae-summary-table thead th { background: #2d2d2d; color: #e0e0e0; }
+    .model-id-cell { color: #666; }
+    .mae-better { color: #5ab55a; }
+    .mae-worse { color: #cc5555; }
+    .mae-baseline-val { color: #666; }
+    .chart-legend-note { color: #666; }
+    .score-details summary { color: #888; }
+    .score-details summary:hover { color: #e0e0e0; }
+    .member-detail-table { background: #222; border-color: #3a3a3a; }
+    .member-detail-table th, .member-detail-table td { border-bottom-color: #333; }
+    .member-detail-table th { color: #888; }
+    .member-detail-table thead th { background: #2d2d2d; color: #e0e0e0; }
+    .member-btn { background: #252525; border-color: #444; color: #ccc; }
+    .member-btn:hover { background: #333; }
+    .mf-btn { background: #2a1540; color: #b07de0; border-color: #6040a0; }
+    .mf-btn:hover { background: #351a50; }
+    .mf-member-label { color: #b07de0; }
+    .member-forecast-panel { background: #1e1e2a; border-top-color: #3a3a3a; }
+    .weight-table { background: #222; border-color: #3a3a3a; }
+    .weight-table th, .weight-table td { border-bottom-color: #333; }
+    .weight-table thead th { background: #2d2d2d; color: #e0e0e0; }
+    .weight-group-hdr th { background: #252525; color: #777; }
+    .learnings-desc { background: #252525; border-left-color: #555; color: #ccc; }
+    .learnings-status { background: #1a2a1a; border-left-color: #4a9; color: #5ca; }
+    .learnings-intro { color: #888; }
+    .no-data { color: #666; }
+    .filter-label { color: #666; }
+    .collapsible-section > summary::before { color: #666; }
+    .acc-excellent { color: #5abe5a; }
+    .acc-high { color: #4aaa4a; }
+    .acc-mid { color: #90b020; }
+    .acc-ok { color: #aaa; }
+    .acc-low { color: #cc8844; }
+    .acc-poor { color: #cc6666; }
+    .acc-lead-table .baseline-row th.model-name-cell { color: #555; }
+    .baseline-row td { color: #555; }
+    .baseline-row .model-id-cell { color: #444; }
+    .fcst-row { background: #252525; border-color: #3a3a3a; }
+    .fcst-row.now-row { border-color: #3a5070; background: #1e2a3a; }
+    .fcst-temp { color: #e0e0e0; }
+    .fcst-details { color: #aaa; }
+    .fcst-details .detail-label { color: #666; }
+    .fcst-ref { color: #666; }
+    .fcst-ref-lbl { color: #555; }
+    .fcst-ref .detail-label { color: #555; }
+    .fcst-delta { color: #666; }
+    .jump-nav a { background: #252525; border-color: #3a3a3a; color: #ccc; }
+    .jump-nav a:hover { background: #333; color: #e0e0e0; }
+    .section-dig-deeper { border-top-color: #3a3a3a; color: #666; }
+    .analysis-section { border-top-color: #3a3a3a; }
+    .analysis-section > h2 { color: #aaa; }
+    .ap-signal-table { background: #252525; border-color: #3a3a3a; }
+    .ap-signal-table th, .ap-signal-table td { border-bottom-color: #333; }
+    .ap-signal-table th { background: #2d2d2d; color: #e0e0e0; }
+    .ap-wet { background: #1a2a40; color: #6090d0; }
+    .ap-dry { background: #2a2000; color: #c09030; }
+    .ap-neutral { background: #252525; color: #aaa; }
+    .zambretti-tendency { color: #aaa; }
+    .zambretti-algo { color: #666; }
+    .tempest-obs tr, .nws-obs tr { background: #252525; border-color: #3a3a3a; }
+    .tempest-obs td:first-child, .nws-obs td:first-child { color: #aaa; border-bottom-color: #333; }
+    .tempest-obs td::before, .nws-obs td::before { color: #666; }
+    .ap-signal-card { background: #252525; border-color: #3a3a3a; }
+    .ap-card-leads { border-top-color: #333; }
+    .ap-card-lead-val { color: #ccc; }
+}
 """
 
 
@@ -863,10 +993,10 @@ def _zambretti_panel_html(z: dict | None) -> str:
         f'<div class="card" style="margin-top:12px">'
         f'<h3>Barometer says: {z["description"]}'
         f' <span class="station-id">({z["letter"]})</span></h3>'
-        f'<p style="font-size:13px;color:#555;margin-top:4px">'
+        f'<p class="zambretti-tendency">'
         f'Tendency: {cat} &mdash; {rate_str}'
         f'</p>'
-        f'<p style="font-size:11px;color:#888;margin-top:4px">'
+        f'<p class="zambretti-algo">'
         f'Zambretti algorithm &mdash; sea-level pressure'
         f'</p>'
         f'</div>'
@@ -1415,8 +1545,9 @@ function drawMaeCharts() {{
                 line: {{ color: '#888', width: 1.5, dash: 'dot' }},
                 label: {{ text: 'climo baseline', font: {{ size: 9 }}, xanchor: 'right', yanchor: 'bottom' }}
             }}],
-            paper_bgcolor: 'white',
-            plot_bgcolor: '#fafafa'
+            font: {{ color: plotBg().font }},
+            paper_bgcolor: plotBg().paper,
+            plot_bgcolor: plotBg().plot
         }}, {{responsive: true}});
     }});
 }}
@@ -1491,8 +1622,7 @@ function buildMemberForecastTables(modelId) {{
         }}).join('');
         parts.push(
             '<div style="margin-bottom:10px">'
-            + '<div style="font-size:11px;font-weight:600;color:#6b3fa0;text-transform:uppercase;'
-            + 'letter-spacing:0.03em;margin-bottom:4px">' + m.name + '</div>'
+            + '<div class="mf-member-label">' + m.name + '</div>'
             + '<table class="forecast-table" style="font-size:12px">'
             + '<thead><tr><th>Variable</th>' + headerCells + '</tr></thead>'
             + '<tbody>' + bodyRows + '</tbody>'
@@ -1652,8 +1782,9 @@ function drawFcstChart() {{
         height: isMobile ? 360 : 420,
         showlegend: true,
         legend: {{ orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{ size: 10 }} }},
-        paper_bgcolor: 'white',
-        plot_bgcolor: '#fafafa'
+        font: {{ color: plotBg().font }},
+        paper_bgcolor: plotBg().paper,
+        plot_bgcolor: plotBg().plot
     }}, {{responsive: true}});
 }}
 
@@ -1716,7 +1847,7 @@ function drawBiasCharts() {{
         }});
         const shapes = [{{
             type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 0, y1: 0,
-            line: {{ color: '#dddddd', width: 1, dash: 'dot' }}
+            line: {{ color: plotBg().zero, width: 1, dash: 'dot' }}
         }}];
         Plotly.react('bias-chart-' + lead, traces, {{
             title: {{ text: '+' + lead + 'h \u2014 ' + (biasFilterLabels[biasActiveVar] || biasActiveVar),
@@ -1727,8 +1858,9 @@ function drawBiasCharts() {{
             height: 380,
             showlegend: false,
             shapes: shapes,
-            paper_bgcolor: 'white',
-            plot_bgcolor: '#fafafa'
+            font: {{ color: plotBg().font }},
+            paper_bgcolor: plotBg().paper,
+            plot_bgcolor: plotBg().plot
         }}, {{responsive: true}});
     }});
 }}
@@ -1787,8 +1919,9 @@ function drawHeatmapChart() {{
         height: 300,
         showlegend: false,
         annotations: annotations,
-        paper_bgcolor: 'white',
-        plot_bgcolor: '#fafafa'
+        font: {{ color: plotBg().font }},
+        paper_bgcolor: plotBg().paper,
+        plot_bgcolor: plotBg().plot
     }}, {{responsive: true}});
 }}
 
@@ -1853,7 +1986,7 @@ function drawDiurnalChart() {{
     }});
     const shapes = diurnalMode === 'bias' ? [{{
         type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 0, y1: 0,
-        line: {{ color: '#dddddd', width: 1, dash: 'dot' }}
+        line: {{ color: plotBg().zero, width: 1, dash: 'dot' }}
     }}] : [];
     const modeLabel = diurnalMode === 'bias' ? 'Bias' : 'MAE';
     Plotly.react('diurnal-chart', traces, {{
@@ -1865,8 +1998,9 @@ function drawDiurnalChart() {{
         height: 380,
         showlegend: false,
         shapes: shapes,
-        paper_bgcolor: 'white',
-        plot_bgcolor: '#fafafa'
+        font: {{ color: plotBg().font }},
+        paper_bgcolor: plotBg().paper,
+        plot_bgcolor: plotBg().plot
     }}, {{responsive: true}});
 }}
 
@@ -1891,19 +2025,10 @@ drawDiurnalChart();
 def _ensemble_forecast_section(
     mean_rows: list, tempest, elevation_m: float = 0.0, nws_forecast: dict | None = None
 ) -> str:
-    """Render the barogram_ensemble forecast section HTML.
-
-    Returns a muted placeholder if no ensemble rows exist yet.
-    """
     ens_rows = [
         r for r in mean_rows
         if r["model"] == "barogram_ensemble" and r["member_id"] == 0
     ]
-    # {lead_hours: {variable: value}} for tempest_forecast reference
-    tempest_fcst_by_lead: dict[int, dict[str, float | None]] = {}
-    for row in mean_rows:
-        if row["model"] == "tempest_forecast" and row["member_id"] == 0:
-            tempest_fcst_by_lead.setdefault(row["lead_hours"], {})[row["variable"]] = row["value"]
 
     if not ens_rows:
         return (
@@ -1913,15 +2038,25 @@ def _ensemble_forecast_section(
             '</section>\n'
         )
 
-    # {variable: {lead_hours: (value, spread)}}
-    table: dict[str, dict[int, tuple]] = {v: {} for v in VARIABLES}
+    # {variable: {lead_hours: (value, spread)}} for barogram ensemble
+    ens_table: dict[str, dict[int, tuple]] = {v: {} for v in VARIABLES}
     lead_valid_at: dict[int, int] = {}
     for row in ens_rows:
-        if row["variable"] in table:
-            table[row["variable"]][row["lead_hours"]] = (row["value"], row["spread"])
+        if row["variable"] in ens_table:
+            ens_table[row["variable"]][row["lead_hours"]] = (row["value"], row["spread"])
         lead_valid_at.setdefault(row["lead_hours"], row["valid_at"])
 
-    # keep as raw SI (Celsius, m/s, hPa) so _fmt_value can apply display conversions uniformly
+    # {lead_hours: {variable: value}} for reference models
+    tempest_by_lead: dict[int, dict] = {}
+    for row in mean_rows:
+        if row["model"] == "tempest_forecast" and row["member_id"] == 0:
+            tempest_by_lead.setdefault(row["lead_hours"], {})[row["variable"]] = row["value"]
+
+    corrected_by_lead: dict[int, dict] = {}
+    for row in mean_rows:
+        if row["model"] == "external_corrected" and row["member_id"] == 0:
+            corrected_by_lead.setdefault(row["lead_hours"], {})[row["variable"]] = row["value"]
+
     slp_offset = _slp_correction(tempest, elevation_m)
     now: dict[str, float | None] = {}
     if tempest:
@@ -1937,7 +2072,6 @@ def _ensemble_forecast_section(
         }
 
     def _nws_at(target_ts: int) -> dict | None:
-        """Return NWS forecast entry nearest to target_ts, within 90 min."""
         if not nws_forecast:
             return None
         best = min(nws_forecast, key=lambda t: abs(t - target_ts))
@@ -1945,161 +2079,141 @@ def _ensemble_forecast_section(
             return None
         return nws_forecast[best]
 
-    def _tempest_fcst_at(lead: int) -> dict | None:
-        entry = tempest_fcst_by_lead.get(lead)
-        return entry if entry else None
+    def _lead_label(lead: int) -> str:
+        vat = lead_valid_at.get(lead)
+        if vat:
+            return datetime.fromtimestamp(vat, tz=fmt.CENTRAL).strftime("%-I %p").lstrip("0")
+        return f"+{lead}h"
 
-    def _card(label: str, is_now: bool, temp_val, dew_val, pres_val, wind_val,
-              temp_spread=None, nws=None, tempest_fcst=None, precip_val=None) -> str:
-        cls = 'fcst-row now-row' if is_now else 'fcst-row'
-        # temperature — always the hero
+    def _ref_panel(label: str, temp_val, dew_val, precip_val, ens_temp_val=None) -> str:
+        lines = []
         if temp_val is not None:
-            temp_disp = f"{_to_f(temp_val):.0f}\u00b0F"
-            spread_html = ""
-            if temp_spread is not None and temp_spread > 0:
-                spread_disp = _diff_to_f(temp_spread)
-                spread_html = (
-                    f'<div class="fcst-temp-spread">&pm;{spread_disp:.1f}\u00b0</div>'
-                )
-            else:
-                spread_html = '<div class="fcst-temp-spread"></div>'
-            temp_html = f'<div class="fcst-temp">{temp_disp}</div>{spread_html}'
-        else:
-            temp_html = '<div class="fcst-no-data">&mdash;</div><div class="fcst-temp-spread"></div>'
-
-        # secondary details
-        details = []
+            ref_temp_f = _to_f(temp_val)
+            delta_html = ''
+            if ens_temp_val is not None:
+                delta_f = ref_temp_f - _to_f(ens_temp_val)
+                sign = '+' if delta_f >= 0 else ''
+                delta_html = f' <span class="fcst-delta">{sign}{delta_f:.0f}\u00b0</span>'
+            lines.append(
+                f'<span class="detail-label">Temp</span>'
+                f' <span class="fcst-ref-temp">{ref_temp_f:.0f}\u00b0F</span>{delta_html}'
+            )
         if dew_val is not None:
-            details.append(
-                f'<span class="detail-label">Dew</span> {_to_f(dew_val):.0f}\u00b0F'
-            )
-        if pres_val is not None:
-            details.append(
-                f'<span class="detail-label">Pres</span> {pres_val:.1f} hPa'
-            )
-        if wind_val is not None:
-            details.append(
-                f'<span class="detail-label">Wind</span> {_to_mph(wind_val):.0f} mph'
-            )
+            lines.append(f'<span class="detail-label">Dew</span> {_to_f(dew_val):.0f}\u00b0F')
         if precip_val is not None:
-            details.append(
-                f'<span class="detail-label">Precip</span> {round(precip_val * 100)}%'
-            )
-        details_html = (
-            '<div class="fcst-details">' + "<br>".join(details) + "</div>"
-            if details else ""
+            lines.append(f'<span class="detail-label">Precip</span> {max(0, round(precip_val * 100))}%')
+        if not lines:
+            return ''
+        return (
+            f'<div class="fcst-ref">'
+            f'<span class="fcst-ref-lbl">{label}</span>'
+            + '<br>'.join(lines)
+            + '</div>'
         )
 
-        tempest_fcst_html = ""
-        if tempest_fcst:
-            tf_lines = []
-            if tempest_fcst.get("temperature") is not None:
-                tf_temp_f = _to_f(tempest_fcst["temperature"])
-                delta_f = tf_temp_f - _to_f(temp_val) if temp_val is not None else None
-                delta_html = ""
-                if delta_f is not None:
-                    sign = "+" if delta_f >= 0 else ""
-                    delta_html = f' <span class="fcst-delta">{sign}{delta_f:.0f}\u00b0</span>'
-                tf_lines.append(
-                    f'<span class="detail-label">Temp</span> <span class="fcst-ref-temp">{tf_temp_f:.0f}\u00b0F</span>{delta_html}'
-                )
-            if tempest_fcst.get("dewpoint") is not None:
-                tf_lines.append(
-                    f'<span class="detail-label">Dew</span> {_to_f(tempest_fcst["dewpoint"]):.0f}\u00b0F'
-                )
-            if tempest_fcst.get("precip_prob") is not None:
-                tf_lines.append(
-                    f'<span class="detail-label">Precip</span> {round(tempest_fcst["precip_prob"] * 100)}%'
-                )
-            if tf_lines:
-                tempest_fcst_html = (
-                    '<div class="fcst-ref">'
-                    '<span class="fcst-ref-lbl">Tempest</span>'
-                    + "<br>".join(tf_lines)
-                    + "</div>"
-                )
-
-        nws_html = ""
-        if nws:
-            nws_lines = []
-            if nws.get("temperature") is not None:
-                nws_temp_f = _to_f(nws["temperature"])
-                delta_f = nws_temp_f - _to_f(temp_val) if temp_val is not None else None
-                delta_html = ""
-                if delta_f is not None:
-                    sign = "+" if delta_f >= 0 else ""
-                    delta_html = f' <span class="fcst-delta">{sign}{delta_f:.0f}\u00b0</span>'
-                nws_lines.append(
-                    f'<span class="detail-label">Temp</span> <span class="fcst-ref-temp">{nws_temp_f:.0f}\u00b0F</span>{delta_html}'
-                )
-            if nws.get("dewpoint") is not None:
-                nws_lines.append(
-                    f'<span class="detail-label">Dew</span> {_to_f(nws["dewpoint"]):.0f}\u00b0F'
-                )
-            if nws.get("precip_prob") is not None:
-                nws_lines.append(
-                    f'<span class="detail-label">Precip</span> {round(nws["precip_prob"] * 100)}%'
-                )
-            if nws_lines:
-                nws_html = (
-                    '<div class="fcst-ref">'
-                    '<span class="fcst-ref-lbl">NWS</span>'
-                    + "<br>".join(nws_lines)
-                    + "</div>"
-                )
-
-        return (
-            f'<div class="{cls}">'
+    def _card(label: str, is_now: bool,
+              temp_val, dew_val, pres_val, wind_val,
+              temp_spread=None, precip_val=None,
+              tempest_ref=None, nws_ref=None, corrected_ref=None) -> str:
+        cls = 'fcst-row now-row' if is_now else 'fcst-row'
+        if temp_val is not None:
+            if temp_spread is not None and temp_spread > 0:
+                spread_disp = _diff_to_f(temp_spread)
+                spread_html = f'<div class="fcst-temp-spread">&pm;{spread_disp:.1f}\u00b0</div>'
+            else:
+                spread_html = '<div class="fcst-temp-spread"></div>'
+            temp_html = (
+                f'<div class="fcst-temp">{_to_f(temp_val):.0f}\u00b0F</div>'
+                f'{spread_html}'
+            )
+        else:
+            temp_html = '<div class="fcst-no-data">&mdash;</div><div class="fcst-temp-spread"></div>'
+        details = []
+        if dew_val is not None:
+            details.append(f'<span class="detail-label">Dew</span> {_to_f(dew_val):.0f}\u00b0F')
+        if pres_val is not None:
+            details.append(f'<span class="detail-label">Pres</span> {pres_val:.1f} hPa')
+        if wind_val is not None:
+            details.append(f'<span class="detail-label">Wind</span> {_to_mph(wind_val):.0f} mph')
+        if precip_val is not None:
+            details.append(f'<span class="detail-label">Precip</span> {max(0, round(precip_val * 100))}%')
+        details_html = (
+            '<div class="fcst-details">' + '<br>'.join(details) + '</div>'
+            if details else ''
+        )
+        main_html = (
             f'<div class="fcst-row-main">'
             f'<div class="fcst-label">{label}</div>'
             f'{temp_html}'
             f'{details_html}'
             f'</div>'
-            f'<div class="fcst-row-refs">'
-            f'{tempest_fcst_html}'
-            f'{nws_html}'
-            f'</div>'
-            f'</div>'
         )
+        refs = []
+        if tempest_ref is not None:
+            refs.append(_ref_panel(
+                'Tempest',
+                tempest_ref.get('temperature'), tempest_ref.get('dewpoint'),
+                tempest_ref.get('precip_prob'),
+                temp_val,
+            ))
+        if nws_ref is not None:
+            refs.append(_ref_panel(
+                'NWS',
+                nws_ref.get('temperature'), nws_ref.get('dewpoint'),
+                nws_ref.get('precip_prob'),
+                temp_val,
+            ))
+        if corrected_ref is not None:
+            refs.append(_ref_panel(
+                'Corrected',
+                corrected_ref.get('temperature'), corrected_ref.get('dewpoint'),
+                corrected_ref.get('precip_prob'),
+                temp_val,
+            ))
+        refs_html = (
+            '<div class="fcst-row-refs">' + ''.join(refs) + '</div>'
+            if refs else ''
+        )
+        return f'<div class="{cls}">{main_html}{refs_html}</div>\n'
 
-    cards_html = ""
-    # Now card — from live Tempest obs
-    now_temp = now.get("temperature")
-    now_dew = now.get("dewpoint")
-    now_pres = now.get("pressure")
-    now_wind = now.get("wind_speed")
     if tempest and tempest["timestamp"]:
         now_label = "Now: " + datetime.fromtimestamp(
             tempest["timestamp"], tz=fmt.CENTRAL
         ).strftime("%H:%M %Z %b %-d, %Y")
     else:
         now_label = "Now"
-    cards_html += _card(now_label, True, now_temp, now_dew, now_pres, now_wind)
+    cards = _card(
+        now_label, True,
+        now.get("temperature"), now.get("dewpoint"), now.get("pressure"), now.get("wind_speed"),
+    )
 
     for lead in [6, 12, 18, 24]:
-        vat = lead_valid_at.get(lead)
-        label = (
-            datetime.fromtimestamp(vat, tz=fmt.CENTRAL).strftime("%-I %p").lstrip("0")
-            if vat else f"+{lead}h"
-        )
-        t_cell = table.get("temperature", {}).get(lead)
-        d_cell = table.get("dewpoint", {}).get(lead)
-        p_cell = table.get("pressure", {}).get(lead)
-        pp_cell = table.get("precip_prob", {}).get(lead)
-        t_val = t_cell[0] if t_cell else None
-        t_spread = t_cell[1] if t_cell else None
-        d_val = d_cell[0] if d_cell else None
+        t_cell = ens_table.get("temperature", {}).get(lead)
+        d_cell = ens_table.get("dewpoint", {}).get(lead)
+        p_cell = ens_table.get("pressure", {}).get(lead)
+        pp_cell = ens_table.get("precip_prob", {}).get(lead)
         p_raw = p_cell[0] if p_cell else None
-        p_val = p_raw + slp_offset if p_raw is not None else None
-        pp_val = pp_cell[0] if pp_cell else None
+        vat = lead_valid_at.get(lead)
         nws_entry = _nws_at(vat) if vat else None
-        tf_entry = _tempest_fcst_at(lead)
-        cards_html += _card(label, False, t_val, d_val, p_val, None, t_spread, nws_entry, tf_entry, pp_val)
+        cards += _card(
+            _lead_label(lead), False,
+            t_cell[0] if t_cell else None,
+            d_cell[0] if d_cell else None,
+            p_raw + slp_offset if p_raw is not None else None,
+            None,
+            t_cell[1] if t_cell else None,
+            pp_cell[0] if pp_cell else None,
+            tempest_by_lead.get(lead) or None,
+            nws_entry,
+            corrected_by_lead.get(lead) or None,
+        )
 
     return (
         '<section class="section" id="forecast">\n'
         '  <h2>Ensemble Forecast</h2>\n'
-        f'  <div class="forecast-rows">{cards_html}</div>\n'
+        '  <div class="forecast-rows">\n'
+        f'{cards}'
+        '  </div>\n'
         '</section>\n'
     )
 
@@ -3028,7 +3142,7 @@ def _learnings_js(data: dict) -> str:
         f"yaxis:{{rangemode:'tozero',tickfont:{{size:11}}}},"
         f"height:320,showlegend:true,"
         f"legend:{{orientation:'h',x:0,y:-0.18,xanchor:'left',yanchor:'top',font:{{size:10}}}},"
-        f"paper_bgcolor:'white',plot_bgcolor:'#fafafa'"
+        f"font:{{color:plotBg().font}},paper_bgcolor:plotBg().paper,plot_bgcolor:plotBg().plot"
     )
 
     def _line_trace(name, series, color, dash="solid", width=2, marker_size=5):
@@ -3103,7 +3217,7 @@ def _learnings_js(data: dict) -> str:
             f"range:[0,1.05],overlaying:'y',side:'right',tickfont:{{size:11}}}},"
             f"height:380,showlegend:true,"
             f"legend:{{orientation:'h',x:0,y:-0.18,xanchor:'left',yanchor:'top',font:{{size:10}}}},"
-            f"paper_bgcolor:'white',plot_bgcolor:'#fafafa'}}"
+            f"font:{{color:plotBg().font}},paper_bgcolor:plotBg().paper,plot_bgcolor:plotBg().plot}}"
         )
         lines.append(
             f"if(document.getElementById('learnings-clearness-chart'))"
@@ -3274,7 +3388,7 @@ def _learnings_js(data: dict) -> str:
             f"xaxis:{{tickfont:{{size:12}}}},"
             f"yaxis:{{tickfont:{{size:12}}}},"
             f"annotations:{annotations_js},"
-            f"height:320,paper_bgcolor:'white',plot_bgcolor:'#fafafa'}}"
+            f"height:320,font:{{color:plotBg().font}},paper_bgcolor:plotBg().paper,plot_bgcolor:plotBg().plot}}"
         )
         lines.append(
             f"if(document.getElementById('learnings-hyp-f-chart'))"
@@ -3453,8 +3567,9 @@ function drawTrajectoryChart() {{
         height: 380,
         showlegend: true,
         legend: {{ orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{ size: 10 }} }},
-        paper_bgcolor: 'white',
-        plot_bgcolor: '#fafafa'
+        font: {{ color: plotBg().font }},
+        paper_bgcolor: plotBg().paper,
+        plot_bgcolor: plotBg().plot
     }}, {{responsive: true}});
 }}
 
@@ -3779,7 +3894,7 @@ function renderSkillTimeseries(wid) {{
     }}
     Plotly.react('skill-timeseries-chart-' + wid, traces, {{
         height: 340, margin: {{t: 30, b: 100, l: 50, r: 16}},
-        paper_bgcolor: 'white', plot_bgcolor: '#fafafa',
+        font: {{ color: plotBg().font }}, paper_bgcolor: plotBg().paper, plot_bgcolor: plotBg().plot,
         yaxis: {{title: 'Skill (%)', zeroline: true, zerolinecolor: '#888', zerolinewidth: 2}},
         xaxis: {{type: 'date'}},
         legend: {{orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{size: 10}}}},
@@ -3919,16 +4034,21 @@ def _write_fragment(html: str, out_dir: Path) -> None:
     css_end = html.index("\n</style>")
     css = html[css_start:css_end]
 
-    # scope bare-element selectors so they don't bleed into the host site
-    css = re.sub(r"(?m)^body \{", ".barogram {", css)
-    css = re.sub(r"(?m)^header h1 \{", ".barogram-header h1 {", css)
-    css = re.sub(r"(?m)^header \{", ".barogram-header {", css)
-    css = re.sub(r"(?m)^h2 \{", ".barogram h2 {", css)
-    css = re.sub(r"(?m)^h3 \{", ".barogram h3 {", css)
-    # .barogram inherits host page background; strip hardcoded value
+    # scope bare-element selectors so they don't bleed into the host site;
+    # capture leading whitespace so rules inside @media blocks are also rewritten
+    css = re.sub(r"(?m)^( *)body \{", r"\1.barogram {", css)
+    css = re.sub(r"(?m)^( *)header h1 \{", r"\1.barogram-header h1 {", css)
+    css = re.sub(r"(?m)^( *)header \{", r"\1.barogram-header {", css)
+    css = re.sub(r"(?m)^( *)h2 \{", r"\1.barogram h2 {", css)
+    css = re.sub(r"(?m)^( *)h3 \{", r"\1.barogram h3 {", css)
+    # .barogram inherits host page background; strip hardcoded values in both
+    # light and dark mode so the host site background always shows through
     css = re.sub(r"(?m)^(    color: #1a1a1a;\n)    background: #f5f5f5;\n(    padding:)", r"\1\2", css)
+    css = re.sub(r"(\.barogram \{ color: #e0e0e0;) background: #1a1a1a;( \})", r"\1\2", css)
     # .barogram-header must be opaque (sticky), but should match host page bg
     css = re.sub(r"(?m)^(    z-index: 100;\n)    background: #f5f5f5;\n(    display: flex;)", r"\1    background: var(--bg, #f5f5f5);\n\2", css)
+    # dark mode .barogram-header: use site bg var so sticky header stays opaque
+    css = css.replace(".barogram-header { background: #1a1a1a;", ".barogram-header { background: var(--bg, #1a1a1a);")
 
     body_start = html.index("<body>\n") + len("<body>\n")
     script_anchor = '\n<script src="https://cdn.jsdelivr.net/'
@@ -4300,6 +4420,12 @@ const GENERATED_AT = {now};
     document.getElementById('stale-age-banner').style.display = '';
   }}
 }})();
+function plotBg() {{
+    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return dark
+        ? {{ paper: '#252525', plot: '#252525', font: '#cccccc', zero: '#555555' }}
+        : {{ paper: 'white', plot: '#fafafa', font: '#333333', zero: '#dddddd' }};
+}}
 {_chart_js(charts)}
 {_obs_history_js(tempest_rows, nws_rows)}
 {_mae_timeseries_js(mae_ts)}
