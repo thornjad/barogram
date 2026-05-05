@@ -12,6 +12,24 @@ import models.pressure_tendency as pressure_tendency
 
 VARIABLES = ["temperature", "dewpoint", "pressure", "precip_prob"]
 
+_MODEL_TOOLTIPS: dict[str, str] = {
+    "persistence": "Current observed value held constant across all lead times. The null hypothesis — any useful model has to beat this.",
+    "climatological_mean": "Historical average for this month and hour from the local Tempest archive. Ignores current conditions entirely.",
+    "weighted_climatological_mean": "Like climatological_mean, but recent observations carry more weight. Multiple members test different recency weighting strategies.",
+    "climo_deviation": "Adds the current anomaly (how today differs from climatology) to the future baseline, with multiple decay rates for how fast the anomaly fades.",
+    "pressure_tendency": "Extrapolates from the recent pressure time series using polynomial regression and a categorical Zambretti classifier.",
+    "diurnal_curve": "Fits a daily temperature/dewpoint cycle to recent observations and projects it forward using sine, piecewise, and asymmetric cosine curves.",
+    "airmass_diurnal": "Scales the diurnal curve by solar clearness index and other Tempest signals — wind sector, dewpoint depression, pressure departure, cloud character.",
+    "analog": "Finds historical days most similar to current conditions and uses their subsequent weather as the forecast. Improves as the local archive grows.",
+    "surface_signs": "Reads physical cues (wind rotation, moisture trend, solar cover, convective activity) and applies historically learned conditional deltas for each signal independently.",
+    "synoptic_state_machine": "Classifies current conditions as a joint state from four signals (wind rotation, moisture trend, solar cover, convective activity), so signal interactions — not just each signal in isolation — shape the learned deltas.",
+    "bogo": "A collection of deliberately wrong forecasting strategies. Scored for entertainment; expected to perform poorly.",
+    "barogram_ensemble": "Weighted average of all base models, with weights set by recent inverse-MAE performance per variable, lead, and time-of-day sector.",
+    "nws": "NWS hourly forecast from api.weather.gov, snapped to the standard 6/12/18/24h lead times. Not included in the barogram ensemble.",
+    "tempest_forecast": "Tempest station's built-in forecast from the Tempest API, snapped to the standard lead times. Not included in the barogram ensemble.",
+    "external_corrected": "NWS and Tempest forecasts with bias corrections learned from historical scoring, conditioned on time of day, season, and airmass state. Not included in the barogram ensemble.",
+}
+
 _VARIABLE_LABEL = {
     "temperature": "Temperature",
     "dewpoint": "Dew Point",
@@ -1203,7 +1221,7 @@ def _obs_history_section(tempest_obs: list, nws_obs: list, elevation_m: float = 
         sid = r["station_id"]
         return f'{label}: {name} <span class="station-id">({sid})</span>'
 
-    def table_block(label: str, obs_list: list, tbody_id: str, btn_id: str, headers: list, extra_class: str = "") -> str:
+    def table_block(label: str, obs_list: list, tbody_id: str, headers: list, extra_class: str = "") -> str:
         heading = station_heading(label, obs_list)
         header_html = "".join(f"<th>{h}</th>" for h in headers)
         empty = (
@@ -1217,7 +1235,6 @@ def _obs_history_section(tempest_obs: list, nws_obs: list, elevation_m: float = 
             f'<thead><tr>{header_html}</tr></thead>'
             f'<tbody id="{tbody_id}">{empty}</tbody>'
             f'</table>'
-            f'<button class="more-btn" id="{btn_id}">Load more</button>'
         )
 
     tempest_headers = (
@@ -1226,11 +1243,11 @@ def _obs_history_section(tempest_obs: list, nws_obs: list, elevation_m: float = 
         ["Time", "Temperature", "Dew Point", "Pressure", "Wind", "Precip (day)", "Lightning"]
     )
     tempest_block = table_block(
-        "Tempest", tempest_obs, "tempest-obs-tbody", "tempest-more-btn",
+        "Tempest", tempest_obs, "tempest-obs-tbody",
         tempest_headers, extra_class="tempest-obs",
     )
     nws_block = table_block(
-        "NWS", nws_obs, "nws-obs-tbody", "nws-more-btn",
+        "NWS", nws_obs, "nws-obs-tbody",
         ["Time", "Temperature", "Dew Point", "Wind", "Pressure", "Sky"],
         extra_class="nws-obs",
     )
@@ -1251,23 +1268,12 @@ def _obs_history_js(tempest_rows: list, nws_rows: list) -> str:
 const tempestHistory = {t_json};
 const nwsHistory = {n_json};
 
-function makeLoader(rows, tbodyId, btnId) {{
-    let n = 10;
-    const tbody = document.getElementById(tbodyId);
-    const btn = document.getElementById(btnId);
-    function render() {{
-        tbody.innerHTML = rows.slice(0, n).join('');
-        if (n >= rows.length) btn.style.display = 'none';
-    }}
-    render();
-    btn.addEventListener('click', function() {{
-        n = Math.min(n + 10, rows.length);
-        render();
-    }});
+function renderAll(rows, tbodyId) {{
+    document.getElementById(tbodyId).innerHTML = rows.join('');
 }}
 
-makeLoader(tempestHistory, 'tempest-obs-tbody', 'tempest-more-btn');
-makeLoader(nwsHistory, 'nws-obs-tbody', 'nws-more-btn');
+renderAll(tempestHistory, 'tempest-obs-tbody');
+renderAll(nwsHistory, 'nws-obs-tbody');
 """
 
 
@@ -2038,6 +2044,11 @@ def _ensemble_forecast_section(
             '</section>\n'
         )
 
+    issued_at = ens_rows[0]["issued_at"]
+    issued_str = datetime.fromtimestamp(issued_at, tz=fmt.CENTRAL).strftime(
+        "Generated at %H:%M on %B %-d, %Y"
+    )
+
     # {variable: {lead_hours: (value, spread)}} for barogram ensemble
     ens_table: dict[str, dict[int, tuple]] = {v: {} for v in VARIABLES}
     lead_valid_at: dict[int, int] = {}
@@ -2179,7 +2190,7 @@ def _ensemble_forecast_section(
     if tempest and tempest["timestamp"]:
         now_label = "Now: " + datetime.fromtimestamp(
             tempest["timestamp"], tz=fmt.CENTRAL
-        ).strftime("%H:%M %Z %b %-d, %Y")
+        ).strftime("%H:%M %Z")
     else:
         now_label = "Now"
     cards = _card(
@@ -2210,7 +2221,7 @@ def _ensemble_forecast_section(
 
     return (
         '<section class="section" id="forecast">\n'
-        '  <h2>Ensemble Forecast</h2>\n'
+        f'  <h2>Ensemble Forecast &mdash; {issued_str}</h2>\n'
         '  <div class="forecast-rows">\n'
         f'{cards}'
         '  </div>\n'
@@ -3778,9 +3789,11 @@ def _overall_accuracy_html(rows: list, precip_events: int = 0) -> str:
             badge = ""
             row_cls = ""
         cls = _acc_cls(avg_skill)
+        tooltip = _MODEL_TOOLTIPS.get(name, "")
+        title_attr = f' title="{tooltip}"' if tooltip else ""
         body_rows.append(
             f'<tr{row_cls}>'
-            f'<td class="model-name-cell" style="text-align:left;font-weight:500">{name} {badge}</td>'
+            f'<td class="model-name-cell" style="text-align:left;font-weight:500"><span{title_attr}>{name}</span> {badge}</td>'
             f'<td class="acc-cell{cls}" style="font-size:15px;font-weight:600">{avg_skill:.0f}%</td>'
             f'</tr>'
         )
@@ -4324,11 +4337,12 @@ def generate(
   <strong>Heads up:</strong> this dashboard was generated more than 6 hours ago and may not reflect current conditions. Run <code>barogram dashboard</code> to regenerate.
 </div>
 <section class="section" id="about">
-  <p>Barogram is a pet forecast ensemble, a small collection of models I run for fun and to learn more about how forecasting actually works. Every three hours, they look at the latest readings from a backyard Tempest weather station and a nearby NWS airport station, then each independently predict local temperature, dew point, pressure, and precipitation probability for the next 6 to 24 hours.</p>
+  <p>Barogram is a pet forecast ensemble, a small collection of models I run for fun and to learn more about how forecasting actually works. Every three hours, they look at the latest readings from a backyard Tempest weather station in the Twin Cities, MN and a nearby NWS airport station, then each independently predict local temperature, dew point, pressure, and precipitation probability for the next 6 to 24 hours.</p>
   <p style="margin-top:10px">After each run, the previous predictions get scored against what actually happened. Models that have been performing better lately carry more weight in the ensemble&#x2019;s combined output. The base models use simple approaches and none of them are impressive on their own. The ensemble is what makes them useful.</p>
+  <p style="margin-top:10px">These forecasts are specific to that one station. This is a personal project running on data from my own equipment; it says nothing about conditions where you are.</p>
 </section>
 <section class="section" id="conditions">
-  <h2>Latest Conditions</h2>
+  <h2>Latest conditions in the Twin Cities</h2>
   <div class="conditions-grid">
     {tempest_card}
     {nws_card}
