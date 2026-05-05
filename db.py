@@ -61,8 +61,8 @@ def validate_schema(conn: sqlite3.Connection) -> None:
             )
 
 
-def latest_tempest_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
-    return conn.execute(
+def latest_tempest_obs(conn: sqlite3.Connection) -> dict | None:
+    row = conn.execute(
         """
         select t.*, s.name
         from tempest_obs t
@@ -72,10 +72,11 @@ def latest_tempest_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
         limit 1
         """
     ).fetchone()
+    return dict(row) if row is not None else None
 
 
-def latest_nws_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
-    return conn.execute(
+def latest_nws_obs(conn: sqlite3.Connection) -> dict | None:
+    row = conn.execute(
         """
         select n.*, s.name
         from nws_obs n
@@ -85,10 +86,11 @@ def latest_nws_obs(conn: sqlite3.Connection) -> sqlite3.Row | None:
         limit 1
         """
     ).fetchone()
+    return dict(row) if row is not None else None
 
 
-def recent_tempest_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
-    return conn.execute(
+def recent_tempest_obs(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    return [dict(r) for r in conn.execute(
         """
         select t.*, s.name
         from tempest_obs t
@@ -98,11 +100,11 @@ def recent_tempest_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
         limit ?
         """,
         (limit,),
-    ).fetchall()
+    ).fetchall()]
 
 
-def recent_nws_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
-    return conn.execute(
+def recent_nws_obs(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    return [dict(r) for r in conn.execute(
         """
         select n.*, s.name
         from nws_obs n
@@ -112,13 +114,13 @@ def recent_nws_obs(conn: sqlite3.Connection, limit: int = 50) -> list:
         limit ?
         """,
         (limit,),
-    ).fetchall()
+    ).fetchall()]
 
 
 def nearest_tempest_obs(
     conn: sqlite3.Connection, timestamp: int, window_sec: int = 1800
-) -> sqlite3.Row | None:
-    return conn.execute(
+) -> dict | None:
+    row = conn.execute(
         """
         select t.air_temp, t.dew_point, t.station_pressure, t.wind_avg,
                t.wind_direction, t.solar_radiation, t.uv_index, t.wind_gust,
@@ -132,17 +134,18 @@ def nearest_tempest_obs(
         """,
         (timestamp - window_sec, timestamp + window_sec, timestamp),
     ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def tempest_obs_range_for_scoring(
     conn: sqlite3.Connection, earliest: int, latest: int, window_sec: int = 1800
-) -> list:
+) -> list[dict]:
     """Fetch all Tempest obs that could match forecasts with valid_at in [earliest, latest].
 
     Returns rows ordered by timestamp asc. Includes t.timestamp so callers can
     build an in-memory index for O(log n) nearest-neighbor lookup.
     """
-    return conn.execute(
+    return [dict(r) for r in conn.execute(
         """
         select t.timestamp, t.air_temp, t.dew_point, t.station_pressure, t.wind_avg,
                t.wind_direction, t.solar_radiation, t.wind_gust,
@@ -154,7 +157,7 @@ def tempest_obs_range_for_scoring(
         order by t.timestamp asc
         """,
         (earliest - window_sec, latest + window_sec),
-    ).fetchall()
+    ).fetchall()]
 
 
 def tempest_station_location(conn: sqlite3.Connection) -> tuple[float, float] | None:
@@ -272,7 +275,7 @@ def climo_bucket_obs(
     conn: sqlite3.Connection,
     month: int,
     hour: int,
-) -> list[sqlite3.Row]:
+) -> list:
     rows = conn.execute(
         """
         select t.timestamp, t.air_temp, t.dew_point,
@@ -835,8 +838,8 @@ def save_weights(
         raise
 
 
-def tempest_obs_in_range(conn: sqlite3.Connection, start_ts: int, end_ts: int) -> list:
-    return conn.execute(
+def tempest_obs_in_range(conn: sqlite3.Connection, start_ts: int, end_ts: int) -> list[dict]:
+    return [dict(r) for r in conn.execute(
         """
         select t.timestamp, t.air_temp, t.dew_point, t.station_pressure, t.wind_avg,
                t.wind_direction, t.solar_radiation, t.uv_index, t.wind_gust,
@@ -848,7 +851,7 @@ def tempest_obs_in_range(conn: sqlite3.Connection, start_ts: int, end_ts: int) -
         order by t.timestamp asc
         """,
         (start_ts, end_ts),
-    ).fetchall()
+    ).fetchall()]
 
 
 def tempest_solar_history(

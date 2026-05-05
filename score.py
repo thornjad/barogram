@@ -64,7 +64,7 @@ def _precip_occurred(pre_obs, post_obs) -> float | None:
 
 def _find_nearest_obs(
     sorted_ts: list, obs_by_ts: dict, target: int, window_sec: int = 1800
-) -> sqlite3.Row | None:
+) -> dict | None:
     """Return the obs row nearest to target within window_sec, or None.
 
     Replicates nearest_tempest_obs semantics: inclusive window endpoints,
