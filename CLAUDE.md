@@ -40,7 +40,7 @@ Flags: `--input` targets wxlog; `--format json` emits JSON instead of a table.
    - `MODEL_ID: int` — next unused ID
    - `MODEL_NAME: str`
    - `NEEDS_CONN_IN = True` if the model needs historical input DB access, else omit
-   - `NEEDS_CONN_OUT = True` if the model needs output DB access (ensemble only), else omit
+   - `NEEDS_CONN_OUT = True` if the model needs output DB access (ensemble and external_corrected), else omit
    - `NEEDS_WEIGHTS = True` if the model accepts inverse-MAE member weights, else omit
    - `NEEDS_CONF = True` if the model needs the barogram config (e.g. external API URLs), else omit
    - `run(obs, issued_at, *, conn_in=None, conn_out=None, weights=None, conf=None) -> list[dict]` returning forecast dicts
@@ -109,6 +109,7 @@ lowercase as well.
 | 100 | barogram_ensemble            | ensemble | done   |
 | 200 | nws                          | external | done   |
 | 201 | tempest_forecast             | external | done   |
+| 202 | external_corrected           | external | done   |
 
 ## Database schemas
 

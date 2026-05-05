@@ -1,0 +1,207 @@
+# external_corrected: bias-corrected NWS and Tempest forecast.
+# learns systematic error patterns from historical scored rows and applies
+# corrections conditioned on time-of-day, season, and current airmass state.
+# type='external' — excluded from the barogram ensemble, for comparison only.
+#
+# members 1-5: nws + flat/diurnal/seasonal/airmass/joint correction
+# members 6-10: tempest_forecast + same five correction strategies
+# member 0: ensemble mean of all members that produced values
+
+import datetime
+import statistics
+from collections import defaultdict
+
+import db
+from models.nws import _fetch as _fetch_nws, _nearest as _snap_nearest
+from models.tempest_forecast import _fetch as _fetch_tempest
+from models.surface_signs import _find_nearest_ts
+
+MODEL_ID = 202
+MODEL_NAME = "external_corrected"
+NEEDS_CONN_IN = True
+# NEEDS_CONN_OUT used here to read historical scored external forecasts — an exception to
+# the convention that only the ensemble model uses this flag.
+NEEDS_CONN_OUT = True
+NEEDS_CONF = True
+
+LEAD_HOURS = [6, 12, 18, 24]
+_VARIABLES = ["temperature", "dewpoint", "precip_prob"]
+_MIN_SAMPLES = 3
+_OBS_WINDOW = 600  # ±10 min for matching historical obs to issued_at
+
+_SEASON_MAP = {12: 0, 1: 0, 2: 0, 3: 1, 4: 1, 5: 1,
+               6: 2, 7: 2, 8: 2, 9: 3, 10: 3, 11: 3}
+
+# (member_id, source_model_name, conditioning_strategy)
+_MEMBERS = [
+    (1, "nws", "flat"),
+    (2, "nws", "diurnal"),
+    (3, "nws", "seasonal"),
+    (4, "nws", "airmass"),
+    (5, "nws", "joint"),
+    (6, "tempest_forecast", "flat"),
+    (7, "tempest_forecast", "diurnal"),
+    (8, "tempest_forecast", "seasonal"),
+    (9, "tempest_forecast", "airmass"),
+    (10, "tempest_forecast", "joint"),
+]
+
+
+def _hour_bucket(ts: int) -> int:
+    return datetime.datetime.fromtimestamp(ts).hour // 6
+
+
+def _season(ts: int) -> int:
+    return _SEASON_MAP[datetime.datetime.fromtimestamp(ts).month]
+
+
+def _airmass_cat(obs) -> str | None:
+    if obs is None:
+        return None
+    t = obs["air_temp"]
+    d = obs["dew_point"]
+    if t is None or d is None:
+        return None
+    spread = t - d
+    if spread < 3.0:
+        return "moist"
+    if spread > 8.0:
+        return "dry"
+    return "moderate"
+
+
+def _load_errors(conn_out, model_name: str) -> list:
+    return conn_out.execute(
+        """
+        select issued_at, valid_at, lead_hours, variable, error
+        from forecasts
+        where model = ? and scored_at is not null and member_id = 0
+          and error is not null
+        """,
+        (model_name,),
+    ).fetchall()
+
+
+def _build_tables(errors: list, obs_by_ts: dict, sorted_ts: list) -> dict:
+    flat = defaultdict(list)
+    diurnal = defaultdict(list)
+    seasonal = defaultdict(list)
+    airmass = defaultdict(list)
+    joint = defaultdict(list)
+
+    for row in errors:
+        issued_at = row["issued_at"]
+        valid_at = row["valid_at"]
+        lead = row["lead_hours"]
+        variable = row["variable"]
+        error = row["error"]
+        hb = _hour_bucket(valid_at)
+        sea = _season(valid_at)
+
+        flat[(variable, lead)].append(error)
+        diurnal[(variable, lead, hb)].append(error)
+        seasonal[(variable, lead, sea)].append(error)
+        joint[(variable, lead, hb, sea)].append(error)
+
+        nearest_ts = _find_nearest_ts(sorted_ts, issued_at, max_delta=_OBS_WINDOW)
+        if nearest_ts is not None:
+            cat = _airmass_cat(obs_by_ts[nearest_ts])
+            if cat is not None:
+                airmass[(variable, lead, cat)].append(error)
+
+    def to_means(d):
+        return {k: statistics.mean(v) for k, v in d.items() if len(v) >= _MIN_SAMPLES}
+
+    return {
+        "flat": to_means(flat),
+        "diurnal": to_means(diurnal),
+        "seasonal": to_means(seasonal),
+        "airmass": to_means(airmass),
+        "joint": to_means(joint),
+    }
+
+
+def _get_correction(t: dict, cond: str, variable: str, lead: int,
+                    hb: int, sea: int, airmass_cat: str | None) -> float:
+    flat = t["flat"].get((variable, lead), 0.0)
+    if cond == "flat":
+        return flat
+    if cond == "diurnal":
+        return t["diurnal"].get((variable, lead, hb), flat)
+    if cond == "seasonal":
+        return t["seasonal"].get((variable, lead, sea), flat)
+    if cond == "airmass":
+        if airmass_cat is None:
+            return flat
+        return t["airmass"].get((variable, lead, airmass_cat), flat)
+    if cond == "joint":
+        c = t["joint"].get((variable, lead, hb, sea))
+        if c is None:
+            c = t["diurnal"].get((variable, lead, hb), flat)
+        return c
+    return 0.0
+
+
+def _make_row(member_id: int, lead: int, valid_at: int, variable: str,
+              value: float | None, issued_at: int) -> dict:
+    return {
+        "model_id": MODEL_ID,
+        "model": MODEL_NAME,
+        "member_id": member_id,
+        "issued_at": issued_at,
+        "valid_at": valid_at,
+        "lead_hours": lead,
+        "variable": variable,
+        "value": value,
+    }
+
+
+def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
+    all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
+    obs_by_ts = {r["timestamp"]: r for r in all_obs}
+    sorted_ts = sorted(obs_by_ts)
+
+    nws_errors = _load_errors(conn_out, "nws")
+    tempest_errors = _load_errors(conn_out, "tempest_forecast")
+    tables = {
+        "nws": _build_tables(nws_errors, obs_by_ts, sorted_ts),
+        "tempest_forecast": _build_tables(tempest_errors, obs_by_ts, sorted_ts),
+    }
+
+    location = db.tempest_station_location(conn_in)
+    nws_hourly = _fetch_nws(location[0], location[1]) if location else {}
+    tempest_hourly = {}
+    if conf and conf.tempest_token and conf.tempest_station_id:
+        tempest_hourly = _fetch_tempest(conf.tempest_station_id, conf.tempest_token)
+
+    current_airmass = _airmass_cat(obs)
+
+    rows = []
+    for lead in LEAD_HOURS:
+        valid_at = issued_at + lead * 3600
+        hb = _hour_bucket(valid_at)
+        sea = _season(valid_at)
+
+        source_entries = {
+            "nws": _snap_nearest(nws_hourly, valid_at),
+            "tempest_forecast": _snap_nearest(tempest_hourly, valid_at),
+        }
+
+        for variable in _VARIABLES:
+            member_vals = []
+            for member_id, source, cond in _MEMBERS:
+                entry = source_entries[source]
+                raw_val = entry.get(variable) if entry else None
+                if raw_val is None:
+                    continue
+                correction = _get_correction(
+                    tables[source], cond, variable, lead, hb, sea, current_airmass
+                )
+                corrected = raw_val - correction
+                rows.append(_make_row(member_id, lead, valid_at, variable, corrected, issued_at))
+                member_vals.append(corrected)
+
+            mean_val = statistics.mean(member_vals) if member_vals else None
+            rows.append(_make_row(0, lead, valid_at, variable, mean_val, issued_at))
+
+    return rows

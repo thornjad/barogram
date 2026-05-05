@@ -22,6 +22,7 @@ import models.climatological_mean as climatological_mean
 import models.climo_deviation as climo_deviation
 import models.diurnal_curve as diurnal_curve
 import models.ensemble as barogram_ensemble
+import models.external_corrected as external_corrected
 import models.nws as nws_model
 import models.persistence as persistence
 import models.pressure_tendency as pressure_tendency
@@ -45,6 +46,7 @@ _MODELS = [
     bogo,
     nws_model,
     tempest_forecast_model,
+    external_corrected,
     barogram_ensemble,  # must be last: reads base model rows from current run
 ]
 import score as scorer
@@ -643,8 +645,8 @@ def main():
         help="min scored rows per (member, variable, lead) to include (default: 3)",
     )
     p.add_argument(
-        "--floor", type=float, default=0.5, metavar="F",
-        help="min weight as a multiple of equal weight share (default: 0.5)",
+        "--floor", type=float, default=0.3, metavar="F",
+        help="min weight as a multiple of equal weight share (default: 0.3)",
     )
     p.add_argument(
         "--pool-alpha", type=float, default=0.10, metavar="A",

@@ -1,0 +1,12 @@
+insert or ignore into models (id, name, type) values (202, 'external_corrected', 'external');
+insert or ignore into members (model_id, member_id, name) values (202, 0, null);
+insert or ignore into members (model_id, member_id, name) values (202, 1, 'nws-flat');
+insert or ignore into members (model_id, member_id, name) values (202, 2, 'nws-diurnal');
+insert or ignore into members (model_id, member_id, name) values (202, 3, 'nws-seasonal');
+insert or ignore into members (model_id, member_id, name) values (202, 4, 'nws-airmass');
+insert or ignore into members (model_id, member_id, name) values (202, 5, 'nws-joint');
+insert or ignore into members (model_id, member_id, name) values (202, 6, 'tempest-flat');
+insert or ignore into members (model_id, member_id, name) values (202, 7, 'tempest-diurnal');
+insert or ignore into members (model_id, member_id, name) values (202, 8, 'tempest-seasonal');
+insert or ignore into members (model_id, member_id, name) values (202, 9, 'tempest-airmass');
+insert or ignore into members (model_id, member_id, name) values (202, 10, 'tempest-joint');
