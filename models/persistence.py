@@ -14,6 +14,11 @@ VARIABLES = {
 }
 
 
+def _precip_prob(obs) -> float:
+    accum = obs["precip_accum_day"]
+    return 100.0 if accum and accum > 0 else 0.0
+
+
 def run(obs, issued_at: int) -> list[dict]:
     """
     Produce persistence forecasts from a single observation row.
@@ -35,4 +40,13 @@ def run(obs, issued_at: int) -> list[dict]:
                 "variable": variable,
                 "value": obs[col],
             })
+        rows.append({
+            "model_id": MODEL_ID,
+            "model": MODEL_NAME,
+            "issued_at": issued_at,
+            "valid_at": valid_at,
+            "lead_hours": lead,
+            "variable": "precip_prob",
+            "value": _precip_prob(obs),
+        })
     return rows
