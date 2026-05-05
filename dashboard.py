@@ -1155,10 +1155,12 @@ def _model_runs_html(
             f'<div class="member-forecast-panel" id="mfp-{model_id}" style="display:none"></div>'
             if n_members else ""
         )
+        tooltip = _MODEL_TOOLTIPS.get(model, "")
+        title_attr = f' title="{tooltip}"' if tooltip else ""
         cards.append(
             f'<div class="model-run-card">'
             f'<div class="model-run-header">'
-            f'<strong><span class="model-id-cell">{model_id}</span> {model}</strong>'
+            f'<strong><span class="model-id-cell">{model_id}</span> <span{title_attr}>{model}</span></strong>'
             f'{type_badge}'
             f'{member_toggle}'
             f'<span class="run-detail">issued {fmt.ts(issued_at)} &mdash; {len(model_rows)} rows</span>'
@@ -3793,6 +3795,7 @@ def _overall_accuracy_html(rows: list, precip_events: int = 0) -> str:
         title_attr = f' title="{tooltip}"' if tooltip else ""
         body_rows.append(
             f'<tr{row_cls}>'
+            f'<td class="model-id-cell">{meta["model_id"]}</td>'
             f'<td class="model-name-cell" style="text-align:left;font-weight:500"><span{title_attr}>{name}</span> {badge}</td>'
             f'<td class="acc-cell{cls}" style="font-size:15px;font-weight:600">{avg_skill:.0f}%</td>'
             f'</tr>'
@@ -3800,7 +3803,7 @@ def _overall_accuracy_html(rows: list, precip_events: int = 0) -> str:
 
     return (
         f'<table class="obs-history-table acc-overall-table">'
-        f'<thead><tr><th>Model</th><th>Forecast Skill</th></tr></thead>'
+        f'<thead><tr><th>#</th><th>Model</th><th>Forecast Skill</th></tr></thead>'
         f'<tbody>{"".join(body_rows)}</tbody>'
         f'</table>'
     )
