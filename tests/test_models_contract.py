@@ -69,8 +69,14 @@ def test_all_models_satisfy_contract():
                 for h in [6, 12, 18, 24]
             }
             mod = importlib.import_module(f"models.{model.MODEL_NAME}")
-            with patch.object(mod, "_fetch", return_value=canned):
-                rows = model.run(obs, issued_at, **kwargs)
+            if hasattr(mod, "_fetch"):
+                with patch.object(mod, "_fetch", return_value=canned):
+                    rows = model.run(obs, issued_at, **kwargs)
+            else:
+                # multi-source models (e.g. external_corrected) import named fetchers
+                with patch.object(mod, "_fetch_nws", return_value=canned):
+                    with patch.object(mod, "_fetch_tempest", return_value=canned):
+                        rows = model.run(obs, issued_at, **kwargs)
         else:
             rows = model.run(obs, issued_at, **kwargs)
 
