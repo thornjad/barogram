@@ -21,10 +21,9 @@
 }
 .header-top {
     display: flex;
-    align-items: flex-end;
+    align-items: flex-start;
     flex-wrap: wrap;
-    gap: 16px;
-    row-gap: 8px;
+    row-gap: 6px;
 }
 .header-top .generated { margin-left: auto; }
 .barogram-header h1 { font-size: 22px; letter-spacing: -0.5px; }
@@ -476,6 +475,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
+    flex: 0 0 100%;
 }
 .jump-nav a {
     font-size: 12px;

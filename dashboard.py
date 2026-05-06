@@ -155,10 +155,9 @@ header {
 }
 .header-top {
     display: flex;
-    align-items: flex-end;
+    align-items: flex-start;
     flex-wrap: wrap;
-    gap: 16px;
-    row-gap: 8px;
+    row-gap: 6px;
 }
 .header-top .generated { margin-left: auto; }
 header h1 { font-size: 22px; letter-spacing: -0.5px; }
@@ -610,6 +609,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
+    flex: 0 0 100%;
 }
 .jump-nav a {
     font-size: 12px;
@@ -4348,6 +4348,11 @@ def generate(
 <header>
   <div class="header-top">
     <h1>barogram</h1>
+    <div class="generated">
+      <span>generated {generated_at}</span>
+      <span>last forecast: {last_forecast_str}</span>
+      <span>last tune: {last_tune_str}</span>
+    </div>
     <nav class="jump-nav">
       <a href="#">Top</a>
       <a href="#verification">Verification</a>
@@ -4356,11 +4361,6 @@ def generate(
       <a href="#learnings">Learnings</a>
       <a href="#latest-run">Latest Run</a>
     </nav>
-    <div class="generated">
-      <span>generated {generated_at}</span>
-      <span>last forecast: {last_forecast_str}</span>
-      <span>last tune: {last_tune_str}</span>
-    </div>
   </div>
 </header>
 {staleness_banner}
