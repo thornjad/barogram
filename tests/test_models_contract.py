@@ -22,19 +22,27 @@ _BASE_MODEL_SEED = [
 ]
 
 
+_SEED_VALUE = {
+    "temperature": 20.0,
+    "dewpoint": 12.0,
+    "pressure": 1013.0,
+    "precip_prob": 0.2,
+}
+
+
 def _make_seeded_output_db(issued_at: int):
     """Output DB pre-populated with base model member_id=0 rows for ensemble testing."""
     conn = make_output_db()
     valid_at = issued_at + 6 * 3600
     for mid, name in _BASE_MODEL_SEED:
-        for var in ("temperature", "dewpoint", "pressure", "precip_prob"):
+        for var, val in _SEED_VALUE.items():
             conn.execute(
                 """
                 insert into forecasts
                     (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value)
-                values (?, ?, 0, ?, ?, 6, ?, 20.0)
+                values (?, ?, 0, ?, ?, 6, ?, ?)
                 """,
-                (mid, name, issued_at, valid_at, var),
+                (mid, name, issued_at, valid_at, var, val),
             )
     return conn
 
@@ -101,3 +109,9 @@ def test_all_models_satisfy_contract():
             assert triple not in seen_triples, \
                 f"{model.MODEL_NAME}: duplicate (lead_hours, variable, member_id) {triple}"
             seen_triples.add(triple)
+
+            if row["variable"] == "precip_prob" and row["value"] is not None:
+                assert 0.0 <= row["value"] <= 1.0, (
+                    f"{model.MODEL_NAME}: precip_prob value {row['value']} outside [0, 1]; "
+                    f"expected probability, not percentage"
+                )

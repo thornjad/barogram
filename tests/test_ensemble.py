@@ -149,3 +149,21 @@ def test_required_keys_present():
     for row in rows:
         missing = required - row.keys()
         assert not missing, f"row missing keys: {missing}"
+
+
+def test_partial_weights_falls_back_to_equal():
+    """When weights exist for some members but not all, equal weighting is used."""
+    conn = make_output_db()
+    _seed(conn, 1, "persistence", "temperature", 10.0)
+    _seed(conn, 2, "climatological_mean", "temperature", 20.0)
+    _seed(conn, 3, "weighted_climatological_mean", "temperature", 30.0)
+    obs = make_obs()
+    s = ens._sector(_VALID_AT)
+    # only models 1 and 2 have weights; model 3 is absent
+    weights = {(1, "temperature", 6, s): 0.9, (2, "temperature", 6, s): 0.1}
+
+    rows = ens.run(obs, _ISSUED_AT, conn_out=conn, weights=weights)
+
+    mean_row = next(r for r in rows if r["member_id"] == 0)
+    # should fall back to equal weighting: (10+20+30)/3 = 20
+    assert abs(mean_row["value"] - 20.0) < 1e-9

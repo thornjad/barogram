@@ -101,9 +101,9 @@ def test_already_scored_not_counted():
 def test_multiple_forecasts():
     conn_in = make_input_db()
     conn_out = make_output_db()
-    for _ in range(3):
-        _insert_obs(conn_in, _PAST, air_temp=18.5)
-        _insert_forecast(conn_out, "temperature", 20.0, _PAST)
+    _insert_obs(conn_in, _PAST, air_temp=18.5, dew_point=10.0, station_pressure=1013.0)
+    for variable in ("temperature", "dewpoint", "pressure"):
+        _insert_forecast(conn_out, variable, 20.0, _PAST)
 
     result = score.run(conn_in, conn_out)
 
@@ -201,3 +201,65 @@ def test_precip_occurred_none_post_obs():
 
 def test_precip_occurred_null_precip_column():
     assert _precip_occurred(_obs(_DAY1, None), _obs(_DAY1, 1.0)) is None
+
+
+# --- _find_nearest_obs window boundary ---
+
+from score import _find_nearest_obs, _build_obs_index
+
+
+def _make_obs_index(ts_list):
+    rows = [{"timestamp": ts, "air_temp": 20.0, "dew_point": 10.0,
+             "station_pressure": 1013.0} for ts in ts_list]
+    return _build_obs_index(rows)
+
+
+def test_find_nearest_obs_exactly_at_boundary():
+    sorted_ts, obs_by_ts = _make_obs_index([_PAST])
+    assert _find_nearest_obs(sorted_ts, obs_by_ts, _PAST + 1800) is not None
+    assert _find_nearest_obs(sorted_ts, obs_by_ts, _PAST - 1800) is not None
+
+
+def test_find_nearest_obs_one_second_past_boundary():
+    sorted_ts, obs_by_ts = _make_obs_index([_PAST])
+    assert _find_nearest_obs(sorted_ts, obs_by_ts, _PAST + 1801) is None
+    assert _find_nearest_obs(sorted_ts, obs_by_ts, _PAST - 1801) is None
+
+
+def test_find_nearest_obs_empty_index():
+    sorted_ts, obs_by_ts = _make_obs_index([])
+    assert _find_nearest_obs(sorted_ts, obs_by_ts, _PAST) is None
+
+
+# --- NULL obs column ---
+
+def test_unknown_variable_is_skipped():
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    _insert_obs(conn_in, _PAST, air_temp=18.5)
+    _insert_forecast(conn_out, "humidity", 50.0, _PAST)
+
+    result = score.run(conn_in, conn_out)
+
+    assert result == {"scored": 0, "skipped": 1}
+
+
+def test_null_obs_column_is_skipped():
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    # insert obs where air_temp is NULL
+    conn_in.execute(
+        """
+        insert into tempest_obs
+            (station_id, timestamp, air_temp, dew_point,
+             station_pressure, wind_avg, wind_gust, wind_direction,
+             precip_accum_day, solar_radiation, uv_index, lightning_count)
+        values ('KTEST', ?, null, 10.0, 1013.0, 3.0, null, null, null, null, null, null)
+        """,
+        (_PAST,),
+    )
+    _insert_forecast(conn_out, "temperature", 20.0, _PAST)
+
+    result = score.run(conn_in, conn_out)
+
+    assert result == {"scored": 0, "skipped": 1}
