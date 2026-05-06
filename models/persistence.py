@@ -16,7 +16,7 @@ VARIABLES = {
 
 def _precip_prob(obs) -> float:
     accum = obs["precip_accum_day"]
-    return 100.0 if accum and accum > 0 else 0.0
+    return 1.0 if accum and accum > 0 else 0.0
 
 
 def run(obs, issued_at: int) -> list[dict]:
