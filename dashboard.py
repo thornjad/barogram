@@ -24,7 +24,7 @@ _MODEL_TOOLTIPS: dict[str, str] = {
     "surface_signs": "Reads physical cues (wind rotation, moisture trend, solar cover, convective activity) and applies historically learned conditional deltas for each signal independently.",
     "synoptic_state_machine": "Classifies current conditions as a joint state from four signals (wind rotation, moisture trend, solar cover, convective activity), so signal interactions — not just each signal in isolation — shape the learned deltas.",
     "bogo": "A collection of deliberately wrong forecasting strategies. Scored for entertainment; expected to perform poorly.",
-    "barogram_ensemble": "Weighted average of all base models, with weights set by recent inverse-MAE performance per variable, lead, and time-of-day sector.",
+    "barogram_ensemble": "Weighted average of all base models, with weights set by Huber skill scores per variable, lead, and time-of-day sector.",
     "nws": "NWS hourly forecast from api.weather.gov, snapped to the standard 6/12/18/24h lead times. Not included in the barogram ensemble.",
     "tempest_forecast": "Tempest station's built-in forecast from the Tempest API, snapped to the standard lead times. Not included in the barogram ensemble.",
     "external_corrected": "NWS and Tempest forecasts with bias corrections learned from historical scoring, conditioned on time of day, season, and airmass state. Not included in the barogram ensemble.",
@@ -805,7 +805,11 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 """
 
 
-def _weights_section_html(rows: list, all_members: list | None = None) -> str:
+def _weights_section_html(
+    rows: list,
+    all_members: list | None = None,
+    ext_corrected_html: str = "",
+) -> str:
     from collections import defaultdict
 
     _SECTOR_LABELS = ["night", "morning", "afternoon", "evening"]
@@ -865,8 +869,11 @@ def _weights_section_html(rows: list, all_members: list | None = None) -> str:
         if name.startswith("solar"): return "solar"
         return ""
 
+    _EXT_CORRECTED_ID = 202
     blocks = []
     for model_id in sorted(avg_weights):
+        if model_id == _EXT_CORRECTED_ID:
+            continue
         members_data = avg_weights[model_id]
         sectored = has_sectors.get(model_id, False)
         n = len(members_data)
@@ -985,7 +992,111 @@ def _weights_section_html(rows: list, all_members: list | None = None) -> str:
         for mid, b in other_blocks
     )
 
-    return ensemble_html + others_html
+    return ensemble_html + others_html + ext_corrected_html
+
+
+def _external_corrected_source_weights_html(rows: list) -> str:
+    """Build a source-skill weight table for external_corrected.
+
+    Shows NWS vs. Tempest group weights per (variable, lead_hours, hour_bucket) cell,
+    derived from historical MAE of each group's corrected forecasts.
+    """
+    _MIN_SAMPLES = 3
+    _SOURCE_FLOOR = 0.10
+    _VARIABLES = ["temperature", "dewpoint", "precip_prob"]
+    _LEADS = [6, 12, 18, 24]
+    _BUCKET_LABELS = [
+        ("night", "00-05"),
+        ("morning", "06-11"),
+        ("afternoon", "12-17"),
+        ("evening", "18-23"),
+    ]
+
+    mae: dict = {}
+    for r in rows:
+        if r["n"] >= _MIN_SAMPLES:
+            mae[(r["src"], r["variable"], r["lead_hours"], r["hour_bucket"])] = r["avg_mae"]
+
+    def cell_weights(variable, lead, hb):
+        nm = mae.get(("nws", variable, lead, hb))
+        tm = mae.get(("tempest", variable, lead, hb))
+        if nm is None and tm is None:
+            return None, None
+        if nm is None:
+            return 0.0, 1.0
+        if tm is None:
+            return 1.0, 0.0
+        ni = 1.0 / nm if nm > 0 else 1e9
+        ti = 1.0 / tm if tm > 0 else 1e9
+        total = ni + ti
+        nw, tw = ni / total, ti / total
+        if nw < _SOURCE_FLOOR:
+            nw = _SOURCE_FLOOR
+            tw = 1.0 - nw
+        elif tw < _SOURCE_FLOOR:
+            tw = _SOURCE_FLOOR
+            nw = 1.0 - tw
+        return nw, tw
+
+    header_cells = "".join(
+        f'<th class="wt-pct">{label}<br>'
+        f'<span style="font-weight:400;color:#999">{hours}</span></th>'
+        for label, hours in _BUCKET_LABELS
+    )
+    thead = f'<thead><tr><th>Variable / Lead</th>{header_cells}</tr></thead>'
+
+    table_rows = []
+    for variable in _VARIABLES:
+        for lead in _LEADS:
+            cells = []
+            for hb in range(4):
+                nw, tw = cell_weights(variable, lead, hb)
+                if nw is None:
+                    cells.append('<td class="wt-pct" style="color:#bbb">—</td>')
+                    continue
+                deviation = abs(nw - 0.5)
+                opacity = min(deviation / 0.4, 1.0) * 0.45
+                if nw > 0.5 + 0.02:
+                    color = f'background:rgba(59,91,219,{opacity:.3f})'
+                    label = f'NWS {nw:.0%}'
+                elif tw > 0.5 + 0.02:
+                    color = f'background:rgba(219,120,59,{opacity:.3f})'
+                    label = f'Tmp {tw:.0%}'
+                else:
+                    color = ''
+                    label = '50 / 50'
+                style = f' style="{color}"' if color else ''
+                cells.append(f'<td class="wt-pct"{style}>{label}</td>')
+            row_label = f'{variable}&nbsp;{lead}h'
+            table_rows.append(
+                f'<tr><th>{row_label}</th>{"".join(cells)}</tr>'
+            )
+
+    table_html = (
+        f'<div class="weights-model-block">'
+        f'<h3>external_corrected'
+        f' <span class="model-id-cell">(model 202)</span></h3>'
+        f'<p class="window-label" style="margin-bottom:6px">'
+        f'NWS group (members 1–5) vs. Tempest group (members 6–10) — '
+        f'inverse-MAE weighting per variable, lead, and time of day. '
+        f'Blue = NWS leads, orange = Tempest leads. — = insufficient history.'
+        f'</p>'
+        f'<div class="table-scroll">'
+        f'<table class="weight-table">'
+        f'{thead}'
+        f'<tbody>{"".join(table_rows)}</tbody>'
+        f'</table>'
+        f'</div>'
+        f'</div>'
+    )
+    return (
+        f'<details class="collapsible-section" style="margin-top:12px">'
+        f'<summary>external_corrected'
+        f' <span class="model-id-cell" style="font-weight:400">(model 202)</span>'
+        f'</summary>'
+        f'<div class="weights-section" style="margin-top:8px">{table_html}</div>'
+        f'</details>'
+    )
 
 
 def _table_data(rows) -> dict:
@@ -1378,6 +1489,8 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
                 for var, ts in vars_.items():
                     if issued not in ts:
                         continue
+                    if var == "precip_prob":
+                        continue  # Brier scale is incomparable with temperature/pressure MAE
                     mae = ts[issued]
                     c_var = c_ts.get(var, {})
                     c = c_var.get(issued)
@@ -1748,6 +1861,7 @@ function buildMemberTable(rows) {{
         return rows.some(function(r) {{ return r.variable === v; }});
     }});
     const headerCells = varCols.map(function(v) {{
+        if (v === 'precip_prob') return '<th>Avg Brier</th>';
         const unit = memberUnits[v] ? ' (' + memberUnits[v] + ')' : '';
         return '<th>Avg MAE' + unit + '</th>';
     }}).join('');
@@ -1962,7 +2076,7 @@ function drawHeatmapChart() {{
         colorscale: 'RdYlGn',
         reversescale: false,
         showscale: true,
-        hovertemplate: '%{{y}}<br>+%{{x}}h<br>MAE: %{{z:.2f}}<extra></extra>'
+        hovertemplate: '%{{y}}<br>+%{{x}}h<br>' + (heatmapActiveVar === 'precip_prob' ? 'Brier: ' : 'MAE: ') + '%{{z:.2f}}<extra></extra>'
     }}], {{
         title: {{ text: 'Score Heatmap \u2014 ' + heatmapActiveVar.replace('_', ' '),
                   font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
@@ -4174,6 +4288,7 @@ def generate(
     diurnal_rows = db.diurnal_errors(conn_out)
     weight_rows = db.all_weights_with_members(conn_out)
     all_members = db.all_members_for_ensemble_models(conn_out)
+    ext_corrected_mae_rows = db.external_corrected_source_mae(conn_out)
     trajectory_rows = db.forecast_trajectory(conn_out, now - 72 * 3600)
     misses_rows = db.recent_misses(conn_out, now - 14 * 86400)
     _14d = now - 14 * 86400
@@ -4284,7 +4399,8 @@ def generate(
     tempest_rows = [_tempest_obs_row(r, elevation_m) for r in tempest_history]
     nws_rows = [_nws_obs_row(r) for r in nws_history]
 
-    weights_section = _weights_section_html(weight_rows, all_members)
+    ext_corrected_html = _external_corrected_source_weights_html(ext_corrected_mae_rows)
+    weights_section = _weights_section_html(weight_rows, all_members, ext_corrected_html)
     filter_btns = "".join(
         f'<button class="mae-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
@@ -4319,7 +4435,7 @@ def generate(
 
     _var_btns = [
         ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-        ("pressure", "Pressure"), ("precip_prob", "Precip Prob"),
+        ("pressure", "Pressure"), ("precip_prob", "Precip Prob (Brier)"),
     ]
     bias_filter_btns = "".join(
         f'<button class="bias-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
@@ -4382,7 +4498,7 @@ def generate(
 </div>
 <section class="section" id="about">
   <p>Barogram is a pet forecast ensemble, a small collection of models I run for fun and to learn more about how forecasting actually works. Every three hours, they look at the latest readings from a backyard Tempest weather station in the Twin Cities, MN and a nearby NWS airport station, then each independently predict local temperature, dew point, pressure, and precipitation probability for the next 6 to 24 hours.</p>
-  <p style="margin-top:10px">After each run, the previous predictions get scored against what actually happened. Models that have been performing better lately carry more weight in the ensemble&#x2019;s combined output. The base models use simple approaches and none of them are impressive on their own. The ensemble is what makes them useful.</p>
+  <p style="margin-top:10px">After each run, the previous predictions get scored against what actually happened. Models that beat a naive baseline earn more weight in the ensemble&#x2019;s combined output; models that don&#x2019;t are demoted toward a floor. The base models use simple approaches and none of them are impressive on their own. The ensemble is what makes them useful.</p>
   <p style="margin-top:10px">These forecasts are specific to that one station. This is a personal project running on data from my own equipment; it says nothing about conditions where you are.</p>
 </section>
 <section class="section" id="conditions">
@@ -4452,7 +4568,7 @@ def generate(
 
 <section class="section" id="weights">
   <h2>Weights</h2>
-  <p class="learnings-intro">Inverse-MAE member weights computed by <code>barogram tune</code>. Higher weight means the tuner is trusting that member more based on recent scoring history. Sector columns show how trust shifts across time-of-day.</p>
+  <p class="learnings-intro">Skill-score weights computed by <code>barogram tune</code>. Each member is scored by how much it improves over a naive baseline; members that beat the baseline earn proportional weight, and those that don&#x2019;t are floored or subfloored. Sector columns show how trust shifts across time-of-day.</p>
   {weights_section}
 </section>
 
