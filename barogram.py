@@ -11,6 +11,7 @@ from pathlib import Path
 
 import config as cfg
 import dashboard as dash
+import score as scorer
 import db
 import fmt
 import sync as _sync
@@ -31,6 +32,15 @@ import models.synoptic_state_machine as synoptic_state_machine
 import models.tempest_forecast as tempest_forecast_model
 import models.weighted_climatological_mean as weighted_climatological_mean
 
+def _huber(e: float, delta: float) -> float:
+    ae = abs(e)
+    return 0.5 * e * e if ae <= delta else delta * (ae - 0.5 * delta)
+
+
+def _mean_huber(errors: list, delta: float) -> float:
+    return sum(_huber(e, delta) for e in errors) / len(errors)
+
+
 _MODELS = [
     persistence,
     climatological_mean,
@@ -49,7 +59,6 @@ _MODELS = [
     external_corrected,
     barogram_ensemble,  # must be last: reads base model rows from current run
 ]
-import score as scorer
 
 _LOCAL_ENV = Path(__file__).parent / "barogram.local.toml"
 
@@ -498,65 +507,135 @@ def cmd_tune(args, conf):
     conn_out = db.open_output_db(conf.output_db)
     db.run_migrations(conn_out, migrations_dir)
 
+    if args.min_runs < 1:
+        print("error: --min-runs must be >= 1")
+        return
+    if args.floor <= 0:
+        print("error: --floor must be > 0")
+        return
+    if not (0.0 <= args.pool_alpha <= 1.0):
+        print("error: --pool-alpha must be between 0 and 1")
+        return
+    if not (0.0 < args.subfloor_fraction <= 1.0):
+        print("error: --subfloor-fraction must be between 0 (exclusive) and 1")
+        return
+    if not (0.0 < args.huber_percentile <= 100.0):
+        print("error: --huber-percentile must be between 0 (exclusive) and 100")
+        return
+
     _SECTOR_LABELS = {0: "night 00-05", 1: "morning 06-11", 2: "afternoon 12-17", 3: "evening 18-23"}
-
-    ensemble_model_ids = {m.MODEL_ID for m in _MODELS if getattr(m, "NEEDS_WEIGHTS", False)}
-
-    summary = db.score_summary(conn_out)
-    sector_summary = db.score_summary_by_sector(conn_out)
-
-    # pooled MAE across all sectors; only qualifying cells
-    pooled_mae = {
-        (r["model_id"], r["member_id"], r["variable"], r["lead_hours"]): r["avg_mae"]
-        for r in summary
-        if r["model_id"] in ensemble_model_ids
-        and r["member_id"] > 0
-        and r["n"] >= args.min_runs
-        and r["avg_mae"] is not None
-        and r["avg_mae"] > 0
+    # skill reference members per (model_id, variable); only defined for models where
+    # member_id maps to another model's MODEL_ID (currently only barogram_ensemble)
+    _SKILL_REF = {
+        barogram_ensemble.MODEL_ID: {
+            "temperature":  climatological_mean.MODEL_ID,
+            "dewpoint":     climatological_mean.MODEL_ID,
+            "precip_prob":  climatological_mean.MODEL_ID,
+            "pressure":     persistence.MODEL_ID,
+        }
     }
-    model_names = {r["model_id"]: r["model"] for r in summary if r["model_id"] in ensemble_model_ids}
 
-    if not pooled_mae:
+    weighted_model_ids = {m.MODEL_ID for m in _MODELS if getattr(m, "NEEDS_WEIGHTS", False)}
+    model_names = {m.MODEL_ID: m.MODEL_NAME for m in _MODELS if getattr(m, "NEEDS_WEIGHTS", False)}
+
+    huber_deltas = db.huber_delta_per_variable(conn_out, args.huber_percentile)
+    print(f"Huber deltas ({args.huber_percentile:.0f}th percentile of abs error):")
+    for var, d in sorted(huber_deltas.items()):
+        print(f"  {var}: {d:.3f}")
+
+    raw_rows = db.raw_errors_by_sector(conn_out)
+
+    # group raw errors by cell
+    _sector_error_lists: dict = {}
+    _pooled_error_lists: dict = {}
+    for r in raw_rows:
+        if r["model_id"] not in weighted_model_ids or r["member_id"] <= 0:
+            continue
+        sk = (r["model_id"], r["member_id"], r["variable"], r["lead_hours"], r["sector"])
+        pk = (r["model_id"], r["member_id"], r["variable"], r["lead_hours"])
+        _sector_error_lists.setdefault(sk, []).append(r["error"])
+        _pooled_error_lists.setdefault(pk, []).append(r["error"])
+
+    # pooled Huber loss across all sectors; only qualifying cells
+    pooled_huber = {}
+    for (model_id, member_id, variable, lead_hours), errors in _pooled_error_lists.items():
+        if len(errors) >= args.min_runs:
+            delta = huber_deltas.get(variable, 1.0)
+            h = _mean_huber(errors, delta)
+            if h > 0:
+                pooled_huber[(model_id, member_id, variable, lead_hours)] = h
+
+    if not pooled_huber:
         print(f"no qualifying data (need >= {args.min_runs} scored rows per cell; "
               f"run 'score' first or lower --min-runs)")
         return
 
-    # sector MAE: (model_id, member_id, variable, lead_hours, sector) -> (avg_mae, n)
-    sector_mae = {}
-    for r in sector_summary:
-        if r["model_id"] not in ensemble_model_ids or r["member_id"] <= 0:
-            continue
-        sector_mae[(r["model_id"], r["member_id"], r["variable"],
-                    r["lead_hours"], r["sector"])] = (r["avg_mae"], r["n"])
+    # sector Huber loss: (model_id, member_id, variable, lead_hours, sector) -> (huber_loss, n)
+    sector_huber = {}
+    for (model_id, member_id, variable, lead_hours, sector), errors in _sector_error_lists.items():
+        if len(errors) >= args.min_runs:
+            delta = huber_deltas.get(variable, 1.0)
+            h = _mean_huber(errors, delta)
+            if h > 0:
+                sector_huber[(model_id, member_id, variable, lead_hours, sector)] = (h, len(errors))
 
-    # group pooled data by (model_id, variable, lead_hours) -> {member_id: mae}
+    # group pooled data by (model_id, variable, lead_hours) -> {member_id: huber_loss}
     pooled_groups: dict = defaultdict(dict)
-    for (model_id, member_id, variable, lead_hours), mae in pooled_mae.items():
-        pooled_groups[(model_id, variable, lead_hours)][member_id] = mae
+    for (model_id, member_id, variable, lead_hours), h in pooled_huber.items():
+        pooled_groups[(model_id, variable, lead_hours)][member_id] = h
 
-    all_weights = {model_id: {} for model_id in ensemble_model_ids}
+    all_weights = {model_id: {} for model_id in weighted_model_ids}
+    all_skills = {model_id: {} for model_id in weighted_model_ids}
     for (model_id, variable, lead_hours), pooled_by_member in pooled_groups.items():
         for sector in range(4):
             blended = {}
-            for mid, p_mae in pooled_by_member.items():
-                s_data = sector_mae.get((model_id, mid, variable, lead_hours, sector))
+            for mid, p_h in pooled_by_member.items():
+                s_data = sector_huber.get((model_id, mid, variable, lead_hours, sector))
                 if s_data and s_data[1] >= args.min_runs and s_data[0] > 0:
-                    blended[mid] = (1 - args.pool_alpha) * s_data[0] + args.pool_alpha * p_mae
+                    blended[mid] = (1 - args.pool_alpha) * s_data[0] + args.pool_alpha * p_h
                 else:
-                    blended[mid] = p_mae
-            raw = {mid: 1.0 / mae for mid, mae in blended.items()}
-            raw_total = sum(raw.values())
-            fractions = {mid: w / raw_total for mid, w in raw.items()}
-            n_members = len(fractions)
-            min_w = args.floor / n_members
-            floored = {mid: max(f, min_w) for mid, f in fractions.items()}
-            if bogo.MODEL_ID in floored:
-                floored[bogo.MODEL_ID] = min_w  # bogo always gets minimum weight
-            floored_total = sum(floored.values())
-            final = {mid: w / floored_total for mid, w in floored.items()}
+                    # sparse sector: fall back to pooled even when pool_alpha=0
+                    blended[mid] = p_h
+            ref_mid = _SKILL_REF.get(model_id, {}).get(variable)
+            ref_loss = blended.get(ref_mid) if ref_mid is not None else None
+            if ref_loss is None:
+                print(f"warning: no reference loss for {variable} lead={lead_hours}h "
+                      f"sector={sector}, using inverse-Huber")
+                raw = {mid: 1.0 / h for mid, h in blended.items()}
+                raw_total = sum(raw.values())
+                fractions = {mid: w / raw_total for mid, w in raw.items()}
+                n_members = len(blended)
+                min_w = args.floor / n_members
+                cell_skills = {mid: None for mid in blended}
+                sub_w = min_w * args.subfloor_fraction
+                raw_final = {mid: max(f, min_w) for mid, f in fractions.items()}
+                if bogo.MODEL_ID in raw_final:
+                    raw_final[bogo.MODEL_ID] = sub_w
+            else:
+                cell_skills = {mid: 1.0 - h / ref_loss for mid, h in blended.items()}
+                proportional = {mid: s for mid, s in cell_skills.items() if s > 0}
+                prop_total = sum(proportional.values())
+                fractions = ({mid: s / prop_total for mid, s in proportional.items()}
+                             if prop_total > 0 else {})
+                n_members = len(blended)
+                min_w = args.floor / n_members
+                sub_w = min_w * args.subfloor_fraction
+                raw_final = {}
+                for mid in blended:
+                    s = cell_skills[mid]
+                    if s > 0:
+                        raw_final[mid] = max(fractions[mid], min_w)
+                    elif s == 0.0:
+                        raw_final[mid] = min_w
+                    else:
+                        raw_final[mid] = sub_w
+                if bogo.MODEL_ID in raw_final:
+                    raw_final[bogo.MODEL_ID] = sub_w
+            total_w = sum(raw_final.values())
+            final = {mid: w / total_w for mid, w in raw_final.items()}
             for mid, w in final.items():
                 all_weights[model_id][(mid, variable, lead_hours, sector)] = w
+                all_skills[model_id][(mid, variable, lead_hours, sector)] = cell_skills[mid]
 
     for model_id in sorted(all_weights):
         name = model_names.get(model_id, f"model {model_id}")
@@ -572,10 +651,10 @@ def cmd_tune(args, conf):
             if sector != cur_sector:
                 print(f"  sector={sector} ({_SECTOR_LABELS[sector]}):")
                 cur_sector = sector
-            group_size = len(pooled_groups.get((model_id, variable, lead_hours), {}))
-            equal_w = 1.0 / group_size if group_size else 1.0
+            skill = all_skills[model_id].get((mid, variable, lead_hours, sector))
+            skill_str = f"{skill:.3f}" if skill is not None else "n/a"
             print(f"    member={mid:2d}  {variable:12s}  lead={lead_hours:2d}h  "
-                  f"weight={weight:.4f}  (equal={equal_w:.4f})")
+                  f"weight={weight:.4f}  (skill={skill_str})")
 
     if args.dry_run:
         print("\n(dry run — no changes written)")
@@ -638,20 +717,29 @@ def main():
         help="output format (default: json)",
     )
     p = subparsers.add_parser(
-        "tune", help="compute inverse-MAE member weights from scoring history"
+        "tune", help="compute skill-score member weights from scoring history"
     )
     p.add_argument(
         "--min-runs", type=int, default=3, metavar="N",
         help="min scored rows per (member, variable, lead) to include (default: 3)",
     )
     p.add_argument(
-        "--floor", type=float, default=0.3, metavar="F",
-        help="min weight as a multiple of equal weight share (default: 0.3)",
+        "--floor", type=float, default=0.08, metavar="F",
+        help="weight fraction reserved for skill=0 members (default: 0.08)",
+    )
+    p.add_argument(
+        "--subfloor-fraction", type=float, default=0.35, metavar="SF",
+        help="subfloor as a fraction of floor; applied to members with skill < 0 (default: 0.35)",
+    )
+    p.add_argument(
+        "--huber-percentile", type=float, default=80.0, metavar="P",
+        help="percentile of abs(error) used to set per-variable Huber delta (default: 80)",
     )
     p.add_argument(
         "--pool-alpha", type=float, default=0.10, metavar="A",
-        help="pooled-weight blend fraction (0–1); permanent floor mixing sector and "
-             "all-data weights (default: 0.10)",
+        help="pooled-weight blend fraction (0–1); sector and pooled Huber are blended "
+             "at this ratio; sectors with insufficient data always fall back to pooled "
+             "regardless of this value (default: 0.10)",
     )
     p.add_argument(
         "--dry-run", action="store_true",

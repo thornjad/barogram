@@ -1,6 +1,7 @@
 import bisect
 import sqlite3
 import time
+from datetime import datetime
 
 import db
 
@@ -54,7 +55,6 @@ def _precip_occurred(pre_obs, post_obs) -> float | None:
     post_p = post_obs["precip_accum_day"]
     if pre_p is None or post_p is None:
         return None
-    from datetime import datetime
     pre_date = datetime.fromtimestamp(pre_obs["timestamp"]).date()
     post_date = datetime.fromtimestamp(post_obs["timestamp"]).date()
     if pre_date != post_date:

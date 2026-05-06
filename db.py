@@ -1,4 +1,5 @@
 import datetime
+import math
 import sqlite3
 from pathlib import Path
 
@@ -312,7 +313,7 @@ def update_scored_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
             """
             update forecasts
             set observed = :observed, error = :error, mae = :mae, scored_at = :scored_at
-            where id = :id
+            where id = :id and scored_at is null
             """,
             rows,
         )
@@ -338,23 +339,59 @@ def score_summary(conn: sqlite3.Connection) -> list:
     ).fetchall()
 
 
-def score_summary_by_sector(conn: sqlite3.Connection) -> list:
-    return conn.execute(
+
+
+def huber_delta_per_variable(conn: sqlite3.Connection, percentile: float = 80.0) -> dict:
+    """Compute per-variable Huber delta from scored non-external forecasts.
+
+    Returns {variable: delta} where delta is the given percentile of abs(error).
+    Errors below delta are penalized quadratically; above delta, linearly.
+    """
+    rows = conn.execute(
         """
-        select f.model_id, f.model, m.type, f.member_id, mem.name as member_name,
-               f.variable, f.lead_hours,
-               case
-                   when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 6  then 0
-                   when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 12 then 1
-                   when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 18 then 2
-                   else 3
-               end as sector,
-               count(*) as n, avg(f.mae) as avg_mae, avg(f.error) as avg_bias
+        select f.variable, abs(f.error) as abs_error
         from forecasts f
         join models m on m.id = f.model_id
-        left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
-        where f.scored_at is not null
-        group by f.model_id, f.model, m.type, f.member_id, mem.name, f.variable, f.lead_hours, sector
+        where m.type != 'external'
+          and f.scored_at is not null
+          and f.error is not null
+        """
+    ).fetchall()
+    by_var: dict = {}
+    for r in rows:
+        by_var.setdefault(r["variable"], []).append(r["abs_error"])
+    deltas = {}
+    for var, errors in by_var.items():
+        errors.sort()
+        idx = max(0, min(math.ceil(len(errors) * percentile / 100.0) - 1, len(errors) - 1))
+        deltas[var] = errors[idx]
+    return deltas
+
+
+def raw_errors_by_sector(conn: sqlite3.Connection) -> list:
+    """Raw signed errors per (model_id, member_id, variable, lead_hours, sector).
+
+    Excludes external models. Includes member_id=0 rows; callers filter as needed.
+    Sector is derived from valid_at local hour:
+    0=night(00-05), 1=morning(06-11), 2=afternoon(12-17), 3=evening(18-23).
+    Used by cmd_tune for Huber loss aggregation.
+    """
+    return conn.execute(
+        """
+        select
+            f.model_id, f.member_id, f.variable, f.lead_hours,
+            case
+                when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 6  then 0
+                when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 12 then 1
+                when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 18 then 2
+                else 3
+            end as sector,
+            f.error
+        from forecasts f
+        join models m on m.id = f.model_id
+        where m.type != 'external'
+          and f.scored_at is not null
+          and f.error is not null
         order by f.model_id, f.member_id, f.variable, f.lead_hours, sector
         """
     ).fetchall()
@@ -777,6 +814,32 @@ def all_members_for_ensemble_models(conn: sqlite3.Connection) -> list:
     ).fetchall()
 
 
+def external_corrected_source_mae(conn: sqlite3.Connection) -> list[dict]:
+    """Return per-cell avg MAE for external_corrected's NWS and Tempest member groups.
+
+    Rows are keyed by src ('nws' or 'tempest'), variable, lead_hours, hour_bucket.
+    """
+    return [dict(r) for r in conn.execute(
+        """
+        select
+            case when member_id between 1 and 5 then 'nws' else 'tempest' end as src,
+            variable,
+            lead_hours,
+            cast(strftime('%H', datetime(valid_at, 'unixepoch', 'localtime'))
+                 as integer) / 6 as hour_bucket,
+            avg(mae) as avg_mae,
+            count(*) as n
+        from forecasts
+        where model_id = 202 and member_id between 1 and 10
+          and scored_at is not null and mae is not null
+        group by
+            case when member_id between 1 and 5 then 'nws' else 'tempest' end,
+            variable, lead_hours, hour_bucket
+        order by variable, lead_hours, hour_bucket
+        """
+    ).fetchall()]
+
+
 def all_weights_with_members(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """
@@ -920,8 +983,10 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
         version = int(f.name[:3])
         if version <= current:
             continue
-        # executescript issues an implicit commit before running; DDL migrations
-        # are idempotent via IF NOT EXISTS so re-running on partial failure is safe
+        # executescript issues an implicit commit before running; most DDL migrations
+        # are idempotent via IF NOT EXISTS, but migrations using DROP TABLE are not
+        # (020_sector_weights.sql). re-running on partial failure is only safe if the
+        # migration does not destroy existing data
         conn.executescript(f.read_text())
         conn.execute(
             "insert or replace into metadata (key, value) values ('schema_version', ?)",
@@ -1067,7 +1132,7 @@ def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
     try:
         conn.executemany(
             """
-            insert into forecasts
+            insert or ignore into forecasts
                 (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, spread)
             values
                 (:model_id, :model, :member_id, :issued_at, :valid_at, :lead_hours, :variable, :value, :spread)

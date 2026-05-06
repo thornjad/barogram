@@ -14,22 +14,31 @@ loop so all base model rows are committed before it reads them.
 
 | member_id | Name | Source |
 |-----------|------|--------|
-| 0 | (ensemble mean) | weighted mean of members 1–6 |
+| 0 | (ensemble mean) | weighted mean of all contributing base models |
 | 1 | persistence | model 1 member_id=0 |
 | 2 | climatological_mean | model 2 member_id=0 |
 | 3 | weighted_climatological_mean | model 3 member_id=0 |
 | 4 | climo_deviation | model 4 member_id=0 |
 | 5 | pressure_tendency | model 5 member_id=0 |
 | 6 | diurnal_curve | model 6 member_id=0 |
+| 7 | airmass_diurnal | model 7 member_id=0 |
+| 8 | analog | model 8 member_id=0 |
+| 9 | surface_signs | model 9 member_id=0 |
+| 10 | synoptic_state_machine | model 10 member_id=0 |
+| 11 | airmass_precip | model 11 member_id=0 |
+| 12 | bogo | model 12 member_id=0 |
 
-As new base models are added, they get a new member row here (member_id == base model_id).
+Members are discovered dynamically via `db.sync_ensemble_members` — new base models are added automatically when they first run. member_id equals the contributing model's MODEL_ID.
 
 ## Weighting
 
 Before enough scoring history exists, all members receive equal weight. Once the `tune`
-command has sufficient data (default ≥ 3 scored rows per cell), it computes inverse-MAE
+command has sufficient data (default ≥ 3 scored rows per cell), it computes skill-score
 weights per (member_id, variable, lead_hours, sector) and stores them in the weights
-table. The ensemble reads these at forecast time, deriving the sector from each cell's
+table. Weights are set by each member's Huber loss relative to a reference model
+(climatological mean for most variables, persistence for pressure). Members that beat
+the reference earn proportional weight; those that don't are floored or subfloored.
+The ensemble reads these at forecast time, deriving the sector from each cell's
 valid_at hour (0=night 00-05, 1=morning 06-11, 2=afternoon 12-17, 3=evening 18-23).
 If no weight is found for a given sector, the member falls back to equal weighting.
 

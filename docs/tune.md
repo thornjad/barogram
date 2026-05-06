@@ -29,20 +29,31 @@ times. Learning that structure is more useful than averaging over it.
 ## What barogram does
 
 Barogram uses a simplified version of this principle. After enough forecasts have been
-scored, `tune` computes each member's average MAE for every combination of variable, lead
-time, and time-of-day sector, then weights members in inverse proportion to that MAE. A
-better track record earns a larger share of the final value.
+scored, `tune` computes a **skill score** for each member: how much better (or worse) it
+performs relative to a naive reference model. For temperature, dewpoint, and precipitation
+probability the reference is `climatological_mean`; for pressure it is `persistence`.
 
-The weights are intentionally conservative. No member's weight falls below half of what
-equal weighting would give it, because scoring history is sparse early on and a bad run of
-forecasts on thin data should not permanently demote a member that is genuinely useful. As
-data accumulates the floor's influence shrinks and the weights converge toward real skill
-differences.
+Skill is defined as `1 - loss_member / loss_reference`. A skill of zero means the member
+performs exactly as well as the reference; positive skill means it beats the reference;
+negative skill means it is worse. The loss metric is **Huber loss** rather than plain MAE.
+Below a per-variable threshold δ, errors are penalized quadratically, making the system
+more sensitive to consistent mediocrity than MAE. Above δ, the penalty is linear, limiting
+the influence of anomalous events like a polar vortex or a supercell passing at scoring
+time. δ is computed automatically as the 80th percentile of historical absolute errors for
+each variable, pooled across all non-external models.
+
+Members with positive skill receive weight proportional to their skill (with a floor).
+Members whose skill equals zero (the reference model itself) receive a floor weight
+proportional to `--floor / n_members`. Members with negative skill receive a subfloor
+weight (`--floor * --subfloor-fraction / n_members`). The `bogo` model is unconditionally
+pinned to subfloor regardless of its apparent skill, because its sparse scoring history
+can produce statistically noisy positive skill estimates. All weights are normalized to sum
+to 1 within each (model, variable, lead_hours, sector) cell.
 
 ## Sector-aware weighting
 
 Different physical mechanisms dominate at different times of day. A model that infers
-daytime heating from solar radiation will accumulate poor MAE scores during nighttime
+daytime heating from solar radiation will accumulate poor Huber scores during nighttime
 valid times even if it is genuinely skilful during the afternoon. Pooling those errors
 into a single weight would systematically undervalue it.
 
@@ -62,13 +73,19 @@ time the ensemble looks up the sector that matches each cell's valid_at hour.
 ## Pooled blending
 
 Sector-specific weights can be noisy when sector data is sparse, particularly early in
-the system's history. To smooth this out, `tune` blends each sector-specific MAE estimate
-with the all-sector (pooled) MAE using a fixed `--pool-alpha` fraction (default 0.10):
+the system's history. To smooth this out, `tune` blends each sector-specific Huber loss estimate
+with the all-sector (pooled) Huber loss using a fixed `--pool-alpha` fraction (default 0.10):
 
 ```
-blended_mae = (1 - pool_alpha) * sector_mae + pool_alpha * pooled_mae
+blended_loss = (1 - pool_alpha) * sector_huber + pool_alpha * pooled_huber
 ```
 
 When a sector has fewer than `--min-runs` scored rows, the blend collapses to the pooled
-MAE entirely. The pooled fraction is permanent — it does not shrink to zero as data
+Huber loss entirely. The pooled fraction is permanent — it does not shrink to zero as data
 accumulates — so the all-sector signal always contributes a small stabilizing influence.
+
+One variable-specific note: the `mae` column in the forecasts table stores Brier score
+(squared error) for `precip_prob` and absolute error for all other variables. `tune`
+uses the `error` column (signed linear difference) for all Huber loss computations, so
+the tuning is consistent across variables. The `mae` column is used only by the
+dashboard for display.
