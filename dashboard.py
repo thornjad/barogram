@@ -155,9 +155,12 @@ header {
 }
 .header-top {
     display: flex;
-    justify-content: space-between;
     align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 16px;
+    row-gap: 8px;
 }
+.header-top .generated { margin-left: auto; }
 header h1 { font-size: 22px; letter-spacing: -0.5px; }
 .generated { font-size: 12px; color: #666; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .stale-banner {
@@ -4345,20 +4348,20 @@ def generate(
 <header>
   <div class="header-top">
     <h1>barogram</h1>
+    <nav class="jump-nav">
+      <a href="#">Top</a>
+      <a href="#verification">Verification</a>
+      <a href="#analysis">Analysis</a>
+      <a href="#weights">Weights</a>
+      <a href="#learnings">Learnings</a>
+      <a href="#latest-run">Latest Run</a>
+    </nav>
     <div class="generated">
       <span>generated {generated_at}</span>
       <span>last forecast: {last_forecast_str}</span>
       <span>last tune: {last_tune_str}</span>
     </div>
   </div>
-  <nav class="jump-nav">
-    <a href="#">Top</a>
-    <a href="#verification">Verification</a>
-    <a href="#analysis">Analysis</a>
-    <a href="#weights">Weights</a>
-    <a href="#learnings">Learnings</a>
-    <a href="#latest-run">Latest Run</a>
-  </nav>
 </header>
 {staleness_banner}
 <div id="stale-age-banner" class="stale-banner stale-age-banner" style="display:none">
