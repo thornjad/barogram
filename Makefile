@@ -11,7 +11,6 @@ score:
 
 tune:
 	uv run barogram tune
-	uv run barogram dashboard
 
 dashboard:
 	uv run barogram dashboard

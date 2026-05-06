@@ -28,6 +28,9 @@ LEAD_HOURS = [6, 12, 18, 24]
 _VARIABLES = ["temperature", "dewpoint", "precip_prob"]
 _MIN_SAMPLES = 3
 _OBS_WINDOW = 600  # ±10 min for matching historical obs to issued_at
+_NWS_MEMBERS = frozenset({1, 2, 3, 4, 5})
+_TEMPEST_MEMBERS = frozenset({6, 7, 8, 9, 10})
+_SOURCE_FLOOR = 0.10  # minimum weight fraction for the weaker source
 
 _SEASON_MAP = {12: 0, 1: 0, 2: 0, 3: 1, 4: 1, 5: 1,
                6: 2, 7: 2, 8: 2, 9: 3, 10: 3, 11: 3}
@@ -142,6 +145,67 @@ def _get_correction(t: dict, cond: str, variable: str, lead: int,
     return 0.0
 
 
+def _load_group_mae(conn_out) -> tuple[dict, dict]:
+    """Return (nws_mae, tempest_mae) keyed by (variable, lead_hours, hour_bucket)."""
+    rows = conn_out.execute(
+        """
+        select
+            case when member_id between 1 and 5 then 'nws' else 'tempest' end as src,
+            variable,
+            lead_hours,
+            cast(strftime('%H', datetime(valid_at, 'unixepoch', 'localtime'))
+                 as integer) / 6 as hour_bucket,
+            avg(mae) as avg_mae,
+            count(*) as n
+        from forecasts
+        where model_id = ? and member_id between 1 and 10
+          and scored_at is not null and mae is not null
+        group by
+            case when member_id between 1 and 5 then 'nws' else 'tempest' end,
+            variable, lead_hours, hour_bucket
+        """,
+        (MODEL_ID,),
+    ).fetchall()
+
+    nws_mae: dict = {}
+    tempest_mae: dict = {}
+    for row in rows:
+        if row["n"] < _MIN_SAMPLES:
+            continue
+        key = (row["variable"], row["lead_hours"], row["hour_bucket"])
+        if row["src"] == "nws":
+            nws_mae[key] = row["avg_mae"]
+        else:
+            tempest_mae[key] = row["avg_mae"]
+    return nws_mae, tempest_mae
+
+
+def _source_weights(
+    nws_mae: dict, tempest_mae: dict, variable: str, lead: int, hb: int
+) -> tuple[float, float]:
+    """Return (nws_w, tempest_w) via inverse-MAE weighting with a floor."""
+    key = (variable, lead, hb)
+    nm = nws_mae.get(key)
+    tm = tempest_mae.get(key)
+    if nm is None and tm is None:
+        return 0.5, 0.5
+    if nm is None:
+        return 0.0, 1.0
+    if tm is None:
+        return 1.0, 0.0
+    ni = 1.0 / nm if nm > 0 else 1e9
+    ti = 1.0 / tm if tm > 0 else 1e9
+    total = ni + ti
+    nw, tw = ni / total, ti / total
+    if nw < _SOURCE_FLOOR:
+        nw = _SOURCE_FLOOR
+        tw = 1.0 - nw
+    elif tw < _SOURCE_FLOOR:
+        tw = _SOURCE_FLOOR
+        nw = 1.0 - tw
+    return nw, tw
+
+
 def _make_row(member_id: int, lead: int, valid_at: int, variable: str,
               value: float | None, issued_at: int) -> dict:
     return {
@@ -167,6 +231,7 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
         "nws": _build_tables(nws_errors, obs_by_ts, sorted_ts),
         "tempest_forecast": _build_tables(tempest_errors, obs_by_ts, sorted_ts),
     }
+    nws_mae, tempest_mae = _load_group_mae(conn_out)
 
     location = db.tempest_station_location(conn_in)
     nws_hourly = _fetch_nws(location[0], location[1]) if location else {}
@@ -188,7 +253,8 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
         }
 
         for variable in _VARIABLES:
-            member_vals = []
+            nws_vals = []
+            tempest_vals = []
             for member_id, source, cond in _MEMBERS:
                 entry = source_entries[source]
                 raw_val = entry.get(variable) if entry else None
@@ -199,9 +265,22 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
                 )
                 corrected = raw_val - correction
                 rows.append(_make_row(member_id, lead, valid_at, variable, corrected, issued_at))
-                member_vals.append(corrected)
+                if member_id in _NWS_MEMBERS:
+                    nws_vals.append(corrected)
+                else:
+                    tempest_vals.append(corrected)
 
-            mean_val = statistics.mean(member_vals) if member_vals else None
+            nws_mean = statistics.mean(nws_vals) if nws_vals else None
+            tempest_mean = statistics.mean(tempest_vals) if tempest_vals else None
+            if nws_mean is not None and tempest_mean is not None:
+                nws_w, tempest_w = _source_weights(nws_mae, tempest_mae, variable, lead, hb)
+                mean_val = nws_w * nws_mean + tempest_w * tempest_mean
+            elif nws_mean is not None:
+                mean_val = nws_mean
+            elif tempest_mean is not None:
+                mean_val = tempest_mean
+            else:
+                mean_val = None
             rows.append(_make_row(0, lead, valid_at, variable, mean_val, issued_at))
 
     return rows
