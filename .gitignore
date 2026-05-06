@@ -5,6 +5,9 @@ barogram.db
 barogram.db-shm
 barogram.db-wal
 dashboard.html
+barogram-body.html
+barogram-scripts.html
+barogram-style.css
 .venv/
 __pycache__/
 *.pyc
