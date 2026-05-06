@@ -38,7 +38,7 @@ for those combinations rather than guessing.
 
 | ID | Name | Signal | Categories |
 |----|------|--------|------------|
-| 0 | ensemble mean | weighted mean of members 1–4 | — |
+| 0 | ensemble mean | skill-score weighted mean of members 1–4 | — |
 | 1 | wind-rotation | net wind direction change over 3h | veering, backing, steady |
 | 2 | dp-trend | dewpoint spread (temp − dp) change over 3h | narrowing, steady, widening |
 | 3 | solar-cloud | solar radiation deficit vs climatological mean | clear, partial_cloud, heavy_cloud |

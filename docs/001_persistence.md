@@ -18,4 +18,4 @@ generated) and `valid_at` (when the forecast is for) as Unix epochs.
 All rows produced by a single `barogram.py forecast` run share the same
 `issued_at`, making it the effective run identifier.
 
-See `migrations/001_init.sql` for the full forecasts table schema.
+See `migrations/001_baseline.sql` for the full forecasts table schema.

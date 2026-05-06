@@ -39,13 +39,13 @@ output_db = "/path/to/barogram.db"
 `output_db` is where barogram stores forecasts and verification scores
 (created automatically on first run).
 
-To enable the Tempest forecast model (which fetches WeatherFlow's built-in forecast
+To enable the Tempest forecast model (which fetches Tempest's built-in forecast
 as an external reference), add a `[tempest]` section:
 
 ```toml
 [tempest]
-station_id = ""  # numeric WeatherFlow station ID
-token = ""       # API token from swd.weatherflow.com
+station_id = ""  # numeric Tempest station ID
+token = ""       # API token from tempest.earth
 ```
 
 Without this section the Tempest forecast model silently produces no output.
@@ -62,7 +62,7 @@ uv run barogram [--config PATH] <command>
 run           score pending forecasts, run all models, rebuild dashboard
 forecast      run forecast models and write to output database
 score         score past forecasts against observations
-tune          compute inverse-MAE member weights from scoring history
+tune          compute skill-score member weights from scoring history
 dashboard     generate dashboard.html from latest forecast run
 conditions    show latest observed conditions from the input database
 query         run a SQL query against barogram.db or the input database

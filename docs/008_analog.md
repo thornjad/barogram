@@ -23,7 +23,7 @@ Sigma is computed from the candidate pool at each forecast issuance. When sigma 
 
 | ID | Name | K | Feature weights (T, Td, P, wind) | Notes |
 |----|------|---|----------------------------------|-------|
-| 0 | ensemble mean | — | inverse-MAE weighted | weighted mean + spread across members 1–8 |
+| 0 | ensemble mean | — | skill-score weighted | weighted mean + spread across members 1–8 |
 | 1 | k3 | 3 | [1, 1, 1, 1] | smallest pool; most sensitive to exact match quality |
 | 2 | k5 | 5 | [1, 1, 1, 1] | default small-pool balanced |
 | 3 | k10 | 10 | [1, 1, 1, 1] | more robust as data accumulates |

@@ -12,7 +12,7 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 | `run`        | Score pending forecasts, run all models, rebuild dashboard |
 | `forecast`   | Run all models, write forecast rows                  |
 | `score`      | Score past forecasts against observations            |
-| `tune`       | Compute inverse-MAE member weights from scoring history |
+| `tune`       | Compute skill-score member weights from scoring history |
 | `dashboard`  | Regenerate dashboard.html                            |
 | `conditions` | Print latest Tempest and NWS observations            |
 | `query`      | Run a SQL query against barogram.db or wxlog         |
@@ -41,7 +41,7 @@ Flags: `--input` targets wxlog; `--format json` emits JSON instead of a table.
    - `MODEL_NAME: str`
    - `NEEDS_CONN_IN = True` if the model needs historical input DB access, else omit
    - `NEEDS_CONN_OUT = True` if the model needs output DB access (ensemble and external_corrected), else omit
-   - `NEEDS_WEIGHTS = True` if the model accepts inverse-MAE member weights, else omit
+   - `NEEDS_WEIGHTS = True` if the model accepts skill-score member weights, else omit
    - `NEEDS_CONF = True` if the model needs the barogram config (e.g. external API URLs), else omit
    - `run(obs, issued_at, *, conn_in=None, conn_out=None, weights=None, conf=None) -> list[dict]` returning forecast dicts
 
@@ -137,7 +137,7 @@ lowercase as well.
 | `spread` | real | std dev across members; non-NULL only on member_id=0 for multi-member models |
 | `observed` | real | filled by scorer; actual observed value |
 | `error` | real | filled by scorer; signed error (forecast − observed) |
-| `mae` | real | filled by scorer; absolute error |
+| `mae` | real | filled by scorer; absolute error for most variables; Brier score (error²) for precip_prob |
 | `scored_at` | integer | Unix epoch when scored; NULL = not yet scored |
 
 **`members`** — registry of valid (model_id, member_id) pairs
@@ -147,7 +147,7 @@ lowercase as well.
 | `member_id` | integer | 0 = ensemble mean / single member |
 | `name` | text | short label (NULL for member_id=0) |
 
-**`weights`** — inverse-MAE weights computed by `tune`
+**`weights`** — skill-score weights computed by `tune`
 | Column | Type | Notes |
 |--------|------|-------|
 | `model_id` | integer FK → models | |

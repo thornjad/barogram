@@ -8,7 +8,7 @@ The 30-observation minimum gate from model 002 is removed here. Weighting handle
 
 ## Members
 
-For each lead time, all observations in the (month, hour) bucket are fetched with their timestamps. Each member applies a different weight function `w(age_days)` to compute a weighted mean. Member 0 is the equal-weighted mean across all members, with spread equal to the population standard deviation of member forecasts.
+For each lead time, all observations in the (month, hour) bucket are fetched with their timestamps. Each member applies a different weight function `w(age_days)` to compute a weighted mean. Member 0 is the skill-score weighted mean across all members (equal-weighted when no weights are available), with spread equal to the population standard deviation of member forecasts.
 
 ### Static tier members
 
@@ -39,4 +39,4 @@ The four constants span roughly an order of magnitude: `exp-steep` nearly ignore
 
 ### Model ensemble
 
-For the moment, I use an equal-weighted mean of all the members. Equal weighting is just a baseline before any scoring data exists, the weights will be tuned once runs accumulate. The spread is the standard deviation of the nine member forecasts, so we can see how much the members disagree in a run.
+Member 0 uses skill-score weights from `tune` when available; equal weighting is the fallback before sufficient scoring history exists. The spread is the standard deviation of the member forecasts, showing how much the members disagree in a run.

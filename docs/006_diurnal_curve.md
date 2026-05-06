@@ -79,7 +79,7 @@ recent-weather context.
 Member naming: `{curve}-{lookback}-{anchor}` (e.g. `sine-7d-current`,
 `asymmetric-30d-none`, `solar-midnight`).
 
-member_id=0 is the inverse-MAE weighted mean across all members with valid
+member_id=0 is the skill-score weighted mean across all members with valid
 forecasts for a given (variable, lead_hours) pair.
 
 ## Data requirements

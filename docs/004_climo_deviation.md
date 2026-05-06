@@ -19,7 +19,7 @@ Comparing member groups against each other reveals how quickly carrying the anom
 
 ## Members
 
-9 base weighting hypotheses (same as model 003) × 4 deviation groups = 36 members. Member_id=0 is the equal-weighted mean of all 36 members.
+9 base weighting hypotheses (same as model 003) × 4 deviation groups = 36 members. Member_id=0 is the skill-score weighted mean of all 36 members (equal-weighted when no scoring history exists).
 
 | member_id range | group  |
 |-----------------|--------|
