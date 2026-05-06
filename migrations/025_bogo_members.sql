@@ -1,3 +1,5 @@
+insert or ignore into models (id, name, type) values (12, 'bogo', 'base');
+insert or ignore into members (model_id, member_id, name) values (12, 0, null);
 insert or ignore into members (model_id, member_id, name) values (12,  1, 'drunkard');
 insert or ignore into members (model_id, member_id, name) values (12,  2, 'blind-drunkard');
 insert or ignore into members (model_id, member_id, name) values (12,  3, 'chaos');
