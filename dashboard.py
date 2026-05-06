@@ -187,6 +187,7 @@ h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 }
 .station-id { font-weight: 400; color: #666; }
 .obs-time { font-size: 12px; color: #666; margin-bottom: 8px; }
+.obs-fallback { font-size: 0.8em; color: #999; margin-left: 3px; }
 .obs-table { width: 100%; border-collapse: collapse; }
 .obs-table th {
     text-align: left;
@@ -668,6 +669,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     .card { background: #252525; border-color: #3a3a3a; }
     .station-id { color: #888; }
     .obs-time { color: #888; }
+    .obs-fallback { color: #666; }
     .obs-table th { color: #888; }
     .run-meta { color: #ccc; background: #252525; border-color: #3a3a3a; }
     table.forecast-table { background: #252525; border-color: #3a3a3a; }
@@ -1021,16 +1023,42 @@ def _zambretti_panel_html(z: dict | None) -> str:
     )
 
 
-def _conditions_card(label: str, obs, elevation_m: float = 0.0) -> str:
+_NWS_FALLBACK_FIELDS = ("air_temp", "dew_point", "wind_speed", "wind_direction", "sea_level_pressure", "sky_cover")
+
+
+def _fill_nws_gaps(latest: dict | None, history: list) -> tuple[dict | None, dict]:
+    if latest is None:
+        return None, {}
+    filled = dict(latest)
+    fallback_ts: dict[str, int] = {}
+    for field in _NWS_FALLBACK_FIELDS:
+        if filled.get(field) is None:
+            for row in history:
+                if row.get(field) is not None:
+                    filled[field] = row[field]
+                    fallback_ts[field] = row["timestamp"]
+                    break
+    return filled, fallback_ts
+
+
+def _conditions_card(label: str, obs, elevation_m: float = 0.0, fallback_ts: dict | None = None) -> str:
     if obs is None:
         return (
             f'<div class="card"><h3>{label}</h3>'
             f'<p class="muted">no data</p></div>'
         )
 
+    fallback_ts = fallback_ts or {}
     station_id = obs["station_id"]
     name = obs["name"] or station_id
     timestamp = fmt.ts(obs["timestamp"])
+
+    def _fb(field: str) -> str:
+        ts = fallback_ts.get(field)
+        if ts is None:
+            return ""
+        t = datetime.fromtimestamp(ts, tz=fmt.CENTRAL).strftime("%-I:%M %p").lstrip("0")
+        return f' <span class="obs-fallback">({t})</span>'
 
     if label == "Tempest":
         name = "Tempest Weather Station"
@@ -1047,7 +1075,7 @@ def _conditions_card(label: str, obs, elevation_m: float = 0.0) -> str:
         else:
             pres_cell = fmt.val(sp, ".1f", " hPa") + " (station)"
         rows_html = (
-            f'<tr><th>Temperature</th><td>{fmt.temp(obs["air_temp"])}</td></tr>'
+            f'<tr><th>Temperature</th><td style="font-weight:700;font-size:1.2em">{fmt.temp(obs["air_temp"])}</td></tr>'
             f'<tr><th>Dew Point</th><td>{fmt.temp(obs["dew_point"])}</td></tr>'
             f'<tr><th>Pressure</th><td>{pres_cell}</td></tr>'
             f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(_to_mph(obs["wind_avg"]), ".1f", " mph")}{gust_str}</td></tr>'
@@ -1064,17 +1092,18 @@ def _conditions_card(label: str, obs, elevation_m: float = 0.0) -> str:
             except (IndexError, KeyError):
                 pass
         rows_html = (
-            f'<tr><th>Temperature</th><td>{fmt.temp(obs["air_temp"])}</td></tr>'
-            f'<tr><th>Dew Point</th><td>{fmt.temp(obs["dew_point"])}</td></tr>'
-            f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(_to_mph(obs["wind_speed"]), ".1f", " mph")}</td></tr>'
-            f'<tr><th>Pressure</th><td>{fmt.val(nws_slp, ".1f", " hPa")}</td></tr>'
-            f'<tr><th>Sky</th><td>{obs["sky_cover"] or "\u2014"}</td></tr>'
+            f'<tr><th>Temperature</th><td>{fmt.temp(obs["air_temp"])}{_fb("air_temp")}</td></tr>'
+            f'<tr><th>Dew Point</th><td>{fmt.temp(obs["dew_point"])}{_fb("dew_point")}</td></tr>'
+            f'<tr><th>Wind</th><td>{fmt.wind_dir(obs["wind_direction"])} {fmt.val(_to_mph(obs["wind_speed"]), ".1f", " mph")}{_fb("wind_speed")}</td></tr>'
+            f'<tr><th>Pressure</th><td>{fmt.val(nws_slp, ".1f", " hPa")}{_fb("sea_level_pressure")}</td></tr>'
+            f'<tr><th>Sky</th><td>{obs["sky_cover"] or "\u2014"}{_fb("sky_cover")}</td></tr>'
             f'<tr><th>METAR</th><td>{obs["raw_metar"] or "\u2014"}</td></tr>'
         )
 
+    heading = name if label == "Tempest" else f"{label}: {name}"
     return (
         f'<div class="card">'
-        f'<h3>{label}: {name}'
+        f'<h3>{heading}'
         + (f' <span class="station-id">({station_id})</span>' if station_id else "")
         + '</h3>'
         f'<p class="obs-time">{timestamp}</p>'
@@ -1271,7 +1300,7 @@ const tempestHistory = {t_json};
 const nwsHistory = {n_json};
 
 function renderAll(rows, tbodyId) {{
-    document.getElementById(tbodyId).innerHTML = rows.join('');
+    document.getElementById(tbodyId).innerHTML = rows.slice(0, 10).join('');
 }}
 
 renderAll(tempestHistory, 'tempest-obs-tbody');
@@ -2117,9 +2146,16 @@ def _ensemble_forecast_section(
             lines.append(f'<span class="detail-label">Precip</span> {max(0, round(precip_val * 100))}%')
         if not lines:
             return ''
+        _ref_tooltips = {
+            "Tempest": "Built-in forecast from the Tempest API. Not included in the barogram ensemble.",
+            "NWS": "External forecast from the National Weather Service (api.weather.gov). Not included in the barogram ensemble.",
+            "Corrected": "NWS and Tempest forecasts with bias corrections learned from historical scoring, conditioned on time of day, season, and airmass state. Not included in the barogram ensemble.",
+        }
+        tip = _ref_tooltips.get(label, "")
+        title_attr = f' title="{tip}"' if tip else ""
         return (
             f'<div class="fcst-ref">'
-            f'<span class="fcst-ref-lbl">{label}</span>'
+            f'<span class="fcst-ref-lbl"{title_attr}>{label}</span>'
             + '<br>'.join(lines)
             + '</div>'
         )
@@ -2156,7 +2192,7 @@ def _ensemble_forecast_section(
         )
         main_html = (
             f'<div class="fcst-row-main">'
-            f'<div class="fcst-label">{label}</div>'
+            f'<div class="fcst-label" title="Barogram ensemble forecast">{label}</div>'
             f'{temp_html}'
             f'{details_html}'
             f'</div>'
@@ -2189,17 +2225,7 @@ def _ensemble_forecast_section(
         )
         return f'<div class="{cls}">{main_html}{refs_html}</div>\n'
 
-    if tempest and tempest["timestamp"]:
-        now_label = "Now: " + datetime.fromtimestamp(
-            tempest["timestamp"], tz=fmt.CENTRAL
-        ).strftime("%H:%M %Z")
-    else:
-        now_label = "Now"
-    cards = _card(
-        now_label, True,
-        now.get("temperature"), now.get("dewpoint"), now.get("pressure"), now.get("wind_speed"),
-    )
-
+    cards = ""
     for lead in [6, 12, 18, 24]:
         t_cell = ens_table.get("temperature", {}).get(lead)
         d_cell = ens_table.get("dewpoint", {}).get(lead)
@@ -4113,6 +4139,7 @@ def generate(
     nws = db.latest_nws_obs(conn_in)
     tempest_history = db.recent_tempest_obs(conn_in)
     nws_history = db.recent_nws_obs(conn_in)
+    nws_filled, nws_fallback_ts = _fill_nws_gaps(nws, nws_history)
 
     loc = db.tempest_station_location(conn_in)
     nws_forecast = _fetch_nws_forecast(*loc) if loc else {}
@@ -4233,7 +4260,7 @@ def generate(
     zambretti = pressure_tendency.zambretti_text(tempest, conn_in, elevation_m) if tempest else None
     zambretti_panel = _zambretti_panel_html(zambretti)
     tempest_card = _conditions_card("Tempest", tempest, elevation_m)
-    nws_card = _conditions_card("NWS", nws)
+    nws_card = _conditions_card("NWS", nws_filled, fallback_ts=nws_fallback_ts)
     slp_offset = _slp_correction(tempest, elevation_m)
     ensemble_section = _ensemble_forecast_section(mean_rows, tempest, elevation_m, nws_forecast)
     model_runs = _model_runs_html(mean_rows, lead_times, member_counts, member_forecast_rows, slp_offset)
@@ -4326,8 +4353,6 @@ def generate(
   </div>
   <nav class="jump-nav">
     <a href="#">Top</a>
-    <a href="#conditions">Conditions</a>
-    <a href="#forecast">Forecast</a>
     <a href="#verification">Verification</a>
     <a href="#analysis">Analysis</a>
     <a href="#weights">Weights</a>
