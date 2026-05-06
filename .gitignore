@@ -4,6 +4,7 @@ barogram.local.toml
 barogram.db
 barogram.db-shm
 barogram.db-wal
+barogram.db-journal
 dashboard.html
 barogram-body.html
 barogram-scripts.html
