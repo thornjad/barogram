@@ -1,7 +1,10 @@
 import datetime
 import statistics
+import time
 
 import db
+
+from models._utils import _sector
 from models.surface_signs import (
     _FUTURE_LOOKUP_SEC,
     _LOOKUP_SEC,
@@ -47,7 +50,6 @@ _MEMBER_NAMES = [
 ]
 _ALL_MEMBER_IDS = [mid for mid, _ in _MEMBER_NAMES]
 
-
 def _moisture_cat(obs):
     t = obs["air_temp"]
     td = obs["dew_point"]
@@ -59,7 +61,6 @@ def _moisture_cat(obs):
     if spread < _TD_DRY:
         return "moderate"
     return "dry"
-
 
 def _ptend_cat(obs_now, obs_3h):
     if obs_now is None or obs_3h is None:
@@ -74,7 +75,6 @@ def _ptend_cat(obs_now, obs_3h):
     if d > _PTEND_THRESHOLD:
         return "rising"
     return "steady"
-
 
 def _wind_sector_4(obs):
     wd = obs["wind_direction"]
@@ -91,12 +91,10 @@ def _wind_sector_4(obs):
         return "south"
     return "west"
 
-
 def _active_precip_cat(obs_now, obs_1h):
     p_now = obs_now["precip_accum_day"] or 0.0
     p_1h = obs_1h["precip_accum_day"] or 0.0 if obs_1h is not None else 0.0
     return "raining" if max(0.0, p_now - p_1h) > _PRECIP_1H_MM else "dry"
-
 
 def _diurnal_phase(ts):
     h = datetime.datetime.fromtimestamp(ts).hour
@@ -108,7 +106,6 @@ def _diurnal_phase(ts):
         return "evening"
     return "night"
 
-
 def _build_pressure_climo(all_obs):
     buckets = {}
     for row in all_obs:
@@ -118,7 +115,6 @@ def _build_pressure_climo(all_obs):
         dt = datetime.datetime.fromtimestamp(row["timestamp"])
         buckets.setdefault((dt.month, dt.hour), []).append(p)
     return {k: sum(v) / len(v) for k, v in buckets.items() if len(v) >= _MIN_SAMPLES}
-
 
 def _pressure_anomaly_cat(obs, pressure_climo):
     p = obs["station_pressure"]
@@ -135,7 +131,6 @@ def _pressure_anomaly_cat(obs, pressure_climo):
         return "low"
     return "normal"
 
-
 def _build_uv_climo(all_obs):
     buckets = {}
     for row in all_obs:
@@ -145,7 +140,6 @@ def _build_uv_climo(all_obs):
         dt = datetime.datetime.fromtimestamp(row["timestamp"])
         buckets.setdefault((dt.month, dt.hour), []).append(uv)
     return {k: sum(v) / len(v) for k, v in buckets.items() if len(v) >= _MIN_SAMPLES}
-
 
 def _uv_clear_category(obs, uv_climo):
     uv = obs["uv_index"]
@@ -162,7 +156,6 @@ def _uv_clear_category(obs, uv_climo):
         return "partial_cloud"
     return "clear"
 
-
 def _precip_occurred(obs_now, obs_fut):
     p0 = obs_now["precip_accum_day"]
     p1 = obs_fut["precip_accum_day"]
@@ -173,7 +166,6 @@ def _precip_occurred(obs_now, obs_fut):
     if d0 != d1:
         return 1.0 if p1 > 0.1 else 0.0
     return 1.0 if max(0.0, p1 - p0) > 0.1 else 0.0
-
 
 def _build_cond(signal_fn, sorted_ts, by_ts):
     accum = {}
@@ -190,7 +182,6 @@ def _build_cond(signal_fn, sorted_ts, by_ts):
                 continue
             accum.setdefault((cat, lead), []).append(occurred)
     return {k: sum(v) / len(v) for k, v in accum.items() if len(v) >= _MIN_SAMPLES}
-
 
 def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None) -> list[dict]:
     if all_obs is None:
@@ -308,7 +299,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None) -> list[dic
         if not valid_vals:
             mean = None
         elif weights:
-            wp = [(weights.get((mid, "precip_prob", lead), None), v) for mid, v in valid_vals]
+            wp = [(weights.get((mid, "precip_prob", lead, _sector(valid_at)), None), v) for mid, v in valid_vals]
             if any(w is None for w, _ in wp):
                 mean = sum(v for _, v in valid_vals) / len(valid_vals)
             else:

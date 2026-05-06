@@ -14,10 +14,12 @@
 import bisect
 import math
 import statistics
+import time
 
 import db
 import fmt
 from models._climo_weights import LEAD_HOURS, VARIABLES
+from models._utils import _sector
 
 MODEL_ID = 5
 MODEL_NAME = "pressure_tendency"
@@ -57,7 +59,6 @@ _TENDENCY_WINDOW_SEC = 3 * 3600  # 3h
 _TENDENCY_LOOKUP_SEC = 600       # ±10 min
 _FUTURE_LOOKUP_SEC = 900         # ±15 min
 
-
 def _find_nearest_ts(sorted_ts, target, max_delta=600):
     """Binary search for the nearest timestamp within max_delta seconds of target."""
     if not sorted_ts:
@@ -73,7 +74,6 @@ def _find_nearest_ts(sorted_ts, target, max_delta=600):
                 best = sorted_ts[i]
     return best
 
-
 def _zambretti_category(delta_p):
     """Classify a 3h pressure change (hPa) into a tendency category."""
     if delta_p >= _RAPID:
@@ -86,12 +86,10 @@ def _zambretti_category(delta_p):
         return "slow_fall"
     return "steady"
 
-
 def _exp_weights(t_vals, half_life_h):
     """Exponential decay weights for centered time values (hours, 0=now, negative=past)."""
     lam = math.log(2) / half_life_h
     return [math.exp(lam * t) for t in t_vals]
-
 
 def _gauss_solve(A, b):
     """Solve A @ x = b via Gaussian elimination. Returns None if matrix is singular."""
@@ -115,7 +113,6 @@ def _gauss_solve(A, b):
         x[i] /= M[i][i]
     return x
 
-
 def _poly_fit(t_vals, y_vals, degree, weights=None):
     """
     Fit a polynomial of given degree to (t, y) pairs using weighted normal equations.
@@ -135,7 +132,6 @@ def _poly_fit(t_vals, y_vals, degree, weights=None):
                 A[i][j] += wk * tpow[i + j]
     return _gauss_solve(A, b_vec)
 
-
 def _poly_eval(coefs, t):
     """Evaluate polynomial at t using Horner's method."""
     result = 0.0
@@ -143,11 +139,9 @@ def _poly_eval(coefs, t):
         result = result * t + c
     return result
 
-
 def _poly_tendency_rate(coefs):
     """Instantaneous tendency rate at t=0 (units/hour). Equals the a1 coefficient."""
     return coefs[1] if len(coefs) > 1 else 0.0
-
 
 def _ols1(xs, ys):
     """1-predictor OLS. Returns (slope, intercept) or None."""
@@ -164,7 +158,6 @@ def _ols1(xs, ys):
     slope = (n * sxy - sx * sy) / denom
     intercept = (sy - slope * sx) / n
     return slope, intercept
-
 
 def _build_transfer_fns(all_obs, issued_at):
     """
@@ -220,7 +213,6 @@ def _build_transfer_fns(all_obs, issued_at):
 
     return result
 
-
 def _build_zambretti_conditionals(all_obs, issued_at):
     """
     Compute historical conditional mean deltas for each (category, col, lead).
@@ -258,7 +250,6 @@ def _build_zambretti_conditionals(all_obs, issued_at):
                     accum.setdefault((cat, col, lead), []).append(v_fut - v_now)
 
     return {k: sum(v) / len(v) for k, v in accum.items() if len(v) >= 3}
-
 
 def zambretti_text(obs, conn_in, elevation_m: float = 0.0):
     """
@@ -300,7 +291,6 @@ def zambretti_text(obs, conn_in, elevation_m: float = 0.0):
         "letter": letter,
         "description": desc,
     }
-
 
 def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
     # fetch full observation history for transfer functions and zambretti conditionals
@@ -416,10 +406,11 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                 if v is not None:
                     valid_pairs.append((mid, v))
 
+            valid_at = obs["timestamp"] + lead * 3600
             if not valid_pairs:
                 mean = None
             elif weights:
-                w_pairs = [(weights.get((mid, variable, lead)), v) for mid, v in valid_pairs]
+                w_pairs = [(weights.get((mid, variable, lead, _sector(valid_at)), None), v) for mid, v in valid_pairs]
                 if any(wt is None for wt, _ in w_pairs):
                     mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
                 else:
@@ -436,7 +427,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                 "model": MODEL_NAME,
                 "member_id": 0,
                 "issued_at": issued_at,
-                "valid_at": obs["timestamp"] + lead * 3600,
+                "valid_at": valid_at,
                 "lead_hours": lead,
                 "variable": variable,
                 "value": mean,

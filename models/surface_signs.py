@@ -9,9 +9,11 @@
 import bisect
 import datetime
 import statistics
+import time
 
 import db
 from models._climo_weights import LEAD_HOURS, VARIABLES
+from models._utils import _sector
 
 MODEL_ID = 9
 MODEL_NAME = "surface_signs"
@@ -30,7 +32,6 @@ _SOLAR_CLIMO_MIN_W  = 100.0     # min climo mean below which cloud classificatio
 _SOLAR_MIN_SAMPLES  = 10        # minimum samples to compute climo solar mean
 _VEER_THRESHOLD_DEG = 15.0      # degrees threshold for veering/backing classification
 
-
 def _find_nearest_ts(sorted_ts, target, max_delta=600):
     """Binary search for the nearest timestamp within max_delta seconds of target."""
     if not sorted_ts:
@@ -46,13 +47,11 @@ def _find_nearest_ts(sorted_ts, target, max_delta=600):
                 best = sorted_ts[i]
     return best
 
-
 def _obs_in_window(sorted_ts, by_ts, ts_start, ts_end):
     """Return obs rows for timestamps in [ts_start, ts_end] using bisect slicing."""
     lo = bisect.bisect_left(sorted_ts, ts_start)
     hi = bisect.bisect_right(sorted_ts, ts_end)
     return [by_ts[t] for t in sorted_ts[lo:hi]]
-
 
 def _angular_diff(d1, d2):
     """Signed angular difference d2 - d1 in (-180, 180]. Positive = clockwise = veering."""
@@ -60,7 +59,6 @@ def _angular_diff(d1, d2):
     if diff > 180:
         diff -= 360
     return diff
-
 
 def _wind_rotation_category(window_obs):
     """
@@ -86,7 +84,6 @@ def _wind_rotation_category(window_obs):
         return "backing"
     return "steady"
 
-
 def _dp_trend_category(obs_now, obs_3h_ago):
     """
     Classify dewpoint spread (temp - dewpoint) trend over 3h.
@@ -111,7 +108,6 @@ def _dp_trend_category(obs_now, obs_3h_ago):
         return "widening"
     return "steady"
 
-
 def _build_solar_climo(all_obs):
     """
     Compute mean solar radiation by (calendar_month, hour_of_day) from obs history.
@@ -127,7 +123,6 @@ def _build_solar_climo(all_obs):
         key = (dt.month, dt.hour)
         buckets.setdefault(key, []).append(sr)
     return {k: sum(v) / len(v) for k, v in buckets.items() if len(v) >= _SOLAR_MIN_SAMPLES}
-
 
 def _solar_cloud_category(obs, solar_climo):
     """
@@ -148,7 +143,6 @@ def _solar_cloud_category(obs, solar_climo):
         return "partial_cloud"
     return "clear"
 
-
 def _convective_category(window_obs, obs_1h_ago, obs_now):
     """
     Classify convective / precipitation state.
@@ -165,7 +159,6 @@ def _convective_category(window_obs, obs_1h_ago, obs_now):
         if max(0.0, p_now - p_1h) > _PRECIP_1H_MM:
             return "precip"
     return "dry"
-
 
 def _build_signal_conditionals(signal_fn, sorted_ts, by_ts):
     """
@@ -191,7 +184,6 @@ def _build_signal_conditionals(signal_fn, sorted_ts, by_ts):
                 if v_now is not None and v_fut is not None:
                     accum.setdefault((cat, col, lead), []).append(v_fut - v_now)
     return {k: sum(v) / len(v) for k, v in accum.items() if len(v) >= _MIN_SAMPLES}
-
 
 def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
     if all_obs is None:
@@ -284,10 +276,11 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                 if mean_delta is not None:
                     valid_pairs.append((mid, obs_val + mean_delta))
 
+            valid_at = obs["timestamp"] + lead * 3600
             if not valid_pairs:
                 mean = None
             elif weights:
-                w_pairs = [(weights.get((mid, variable, lead)), v) for mid, v in valid_pairs]
+                w_pairs = [(weights.get((mid, variable, lead, _sector(valid_at)), None), v) for mid, v in valid_pairs]
                 if any(wt is None for wt, _ in w_pairs):
                     mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
                 else:
@@ -304,7 +297,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                 "model": MODEL_NAME,
                 "member_id": 0,
                 "issued_at": issued_at,
-                "valid_at": obs["timestamp"] + lead * 3600,
+                "valid_at": valid_at,
                 "lead_hours": lead,
                 "variable": variable,
                 "value": mean,

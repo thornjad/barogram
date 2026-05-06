@@ -9,9 +9,11 @@
 import datetime as dt
 import math
 import statistics
+import time
 
 import db
 from models._climo_weights import LEAD_HOURS, MEMBERS as _BASE_MEMBERS, VARIABLES, weighted_mean as _weighted_mean
+from models._utils import _sector
 
 MODEL_ID = 4
 MODEL_NAME = "climo_deviation"
@@ -28,7 +30,6 @@ _GROUPS = [
     (45, None, 0.60, "a06"),  # amplifying beta=0.60: member IDs 46-54
 ]
 
-
 def _amp_factor(valid_hour: float, beta: float) -> float:
     """Diurnal amplification factor for anomaly-amplifying members.
 
@@ -38,7 +39,6 @@ def _amp_factor(valid_hour: float, beta: float) -> float:
     if 6.0 <= valid_hour <= 20.0:
         return 1.0 + beta * math.sin(math.pi * (valid_hour - 6.0) / 14.0)
     return 1.0
-
 
 def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     climo_cache: dict[tuple[int, int], list] = {}
@@ -112,7 +112,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
             if not valid_pairs:
                 mean = None
             elif weights:
-                w_pairs = [(weights.get((mid, variable, lead), None), v) for mid, v in valid_pairs]
+                w_pairs = [(weights.get((mid, variable, lead, _sector(valid_at)), None), v) for mid, v in valid_pairs]
                 if any(w is None for w, _ in w_pairs):
                     # incomplete weights for this group — fall back to equal weighting
                     mean = sum(v for _, v in valid_pairs) / len(valid_pairs)

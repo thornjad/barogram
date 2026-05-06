@@ -24,8 +24,10 @@
 import datetime as dt
 import math
 import statistics
+import time
 
 import db
+from models._utils import _sector
 
 MODEL_ID = 7
 MODEL_NAME = "airmass_diurnal"
@@ -73,11 +75,9 @@ _MEMBER_NAMES = [
 ]
 _ALL_MEMBER_IDS = [mid for mid, _ in _MEMBER_NAMES]
 
-
 def _local_hour_float(ts: int) -> float:
     d = dt.datetime.fromtimestamp(ts)
     return d.hour + d.minute / 60.0 + d.second / 3600.0
-
 
 def _hour_means(
     obs_rows: list,
@@ -97,7 +97,6 @@ def _hour_means(
         return None
     return {h: sum(vals) / len(vals) for h, vals in populated.items()}
 
-
 def _interp_hm(hm: dict[int, float], hour: float) -> float | None:
     """Linear interpolation between integer-hour buckets, wrapping midnight."""
     if not hm:
@@ -110,7 +109,6 @@ def _interp_hm(hm: dict[int, float], hour: float) -> float | None:
     # fall back to nearest available hour
     nearest = min(hm, key=lambda h: min(abs(h - h0), 24 - abs(h - h0)))
     return hm[nearest]
-
 
 def _clear_sky_irr(lat_deg: float, ts: int) -> float | None:
     """Theoretical clear-sky surface irradiance (W/m²)."""
@@ -129,7 +127,6 @@ def _clear_sky_irr(lat_deg: float, ts: int) -> float | None:
     et_irr = 1361 * (1 + 0.033 * math.cos(math.radians(360 * doy / 365)))
     return et_irr * sin_alt * 0.75
 
-
 def clearness_index(solar_rad: float | None, lat_deg: float, ts: int) -> float | None:
     """Observed / theoretical clear-sky ratio clamped [0, 1]; None if nighttime."""
     if solar_rad is None:
@@ -138,7 +135,6 @@ def clearness_index(solar_rad: float | None, lat_deg: float, ts: int) -> float |
     if cs is None or cs <= 0:
         return None
     return max(0.0, min(1.0, solar_rad / cs))
-
 
 def _compute_dk_dt(solar_obs: list, lat: float) -> float | None:
     """Linear slope of clearness index (k/hour) from recent daytime obs.
@@ -158,11 +154,9 @@ def _compute_dk_dt(solar_obs: list, lat: float) -> float | None:
         return None
     return (k_points[-1][1] - k_points[0][1]) / elapsed
 
-
 def _angular_diff(a: float, b: float) -> float:
     """Signed angular difference b − a in [−180, 180]. Positive = CW (veering)."""
     return ((b - a) + 180) % 360 - 180
-
 
 def _compute_veer_rate(wind_obs: list) -> float | None:
     """Net veering rate (°/hour) from obs rows with wind_direction.
@@ -180,7 +174,6 @@ def _compute_veer_rate(wind_obs: list) -> float | None:
     total = sum(_angular_diff(dirs[i][1], dirs[i + 1][1]) for i in range(len(dirs) - 1))
     return total / elapsed
 
-
 def _solar_cv(solar_obs: list) -> float | None:
     """Coefficient of variation of solar radiation from daytime obs (> 10 W/m²).
     None if fewer than _CV_MIN_OBS qualifying readings."""
@@ -195,7 +188,6 @@ def _solar_cv(solar_obs: list) -> float | None:
     if mean <= 0:
         return None
     return statistics.pstdev(vals) / mean
-
 
 def run(obs, issued_at: int, *, conn_in, weights=None, location=None) -> list[dict]:
     if location is None:
@@ -418,7 +410,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None, location=None) -> list[di
                 mean = None
             elif weights:
                 w_pairs = [
-                    (weights.get((mid, variable, lead), None), v)
+                    (weights.get((mid, variable, lead, _sector(valid_at)), None), v)
                     for mid, v in valid_pairs
                 ]
                 if any(w is None for w, _ in w_pairs):

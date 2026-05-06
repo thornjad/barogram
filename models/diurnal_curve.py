@@ -10,10 +10,12 @@
 import datetime as dt
 import math
 import statistics
+import time
 
 import numpy as np
 
 import db
+from models._utils import _sector
 
 MODEL_ID = 6
 MODEL_NAME = "diurnal_curve"
@@ -45,16 +47,13 @@ for _a_idx, _anchor in enumerate(_ANCHORS):
 
 _ALL_MEMBER_IDS = [m[0] for m in _MEMBERS]
 
-
 def _local_midnight_ts(ts: int) -> int:
     d = dt.datetime.fromtimestamp(ts)
     return int(d.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
 
-
 def _local_hour_float(ts: int) -> float:
     d = dt.datetime.fromtimestamp(ts)
     return d.hour + d.minute / 60.0 + d.second / 3600.0
-
 
 def _hour_means(
     obs_rows: list,
@@ -74,7 +73,6 @@ def _hour_means(
         return None
     return {h: sum(vals) / len(vals) for h, vals in populated.items()}
 
-
 def _fit_sine(hm: dict[int, float]) -> tuple[float, float, float] | None:
     hours = sorted(hm.keys())
     if len(hours) < 3:
@@ -89,11 +87,9 @@ def _fit_sine(hm: dict[int, float]) -> tuple[float, float, float] | None:
         return None
     return (float(coeffs[0]), float(coeffs[1]), float(coeffs[2]))
 
-
 def _eval_sine(t: float, A: float, B: float, C: float) -> float:
     TWO_PI = 2 * math.pi
     return A * math.sin(TWO_PI * t / 24) + B * math.cos(TWO_PI * t / 24) + C
-
 
 def _eval_piecewise(t: float, hm: dict[int, float]) -> float | None:
     if len(hm) < 2:
@@ -114,7 +110,6 @@ def _eval_piecewise(t: float, hm: dict[int, float]) -> float | None:
     # t is >= last hour but < hours[0]+24 (covered by wrap above on last iteration)
     return hm[hours[-1]]
 
-
 def _eval_asymmetric(t: float, hm: dict[int, float]) -> float | None:
     if len(hm) < 2:
         return None
@@ -133,17 +128,17 @@ def _eval_asymmetric(t: float, hm: dict[int, float]) -> float | None:
         t_fall = t_rel - rise_len
         return v_max + (v_min - v_max) * (1 - math.cos(math.pi * t_fall / fall_len)) / 2
 
-
 def _solar_peak_hour(lat_deg: float, ts: int) -> float | None:
+    # compute cos(hour angle) to detect polar night only
     doy = dt.datetime.fromtimestamp(ts).timetuple().tm_yday
     decl = math.radians(-23.45 * math.cos(math.radians(360 / 365 * (doy + 10))))
     lat = math.radians(lat_deg)
     cos_ha = -math.tan(lat) * math.tan(decl)
     if cos_ha >= 1.0:
-        return None  # polar night
-    # peak temperature ≈ solar noon + 2 hours (solar noon ≈ 12:00 local time)
+        return None  # polar night — solar curve is undefined
+    # constant approximation: peak temperature ≈ solar noon + 2h, solar noon ≈ 12:00 local
+    # does not account for longitude offset or seasonal solar noon shift
     return 14.0
-
 
 def _eval(curve: str, label: str, variable: str, t: float,
           hm_cache: dict, sine_cache: dict,
@@ -171,7 +166,6 @@ def _eval(curve: str, label: str, variable: str, t: float,
     elif curve == "asymmetric":
         return _eval_asymmetric(t, hm)
     return None
-
 
 def run(obs, issued_at: int, *, conn_in, weights=None, location=None) -> list[dict]:
     if location is None:
@@ -270,7 +264,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None, location=None) -> list[di
                 mean = None
             elif weights:
                 w_pairs = [
-                    (weights.get((mid, variable, lead), None), v)
+                    (weights.get((mid, variable, lead, _sector(valid_at)), None), v)
                     for mid, v in valid_pairs
                 ]
                 if any(w is None for w, _ in w_pairs):

@@ -13,9 +13,9 @@
 #   7  no-cloud+ptend       (wind_rot, dp_trend, conv, p_tend) — 81 cells; works at night
 
 import statistics
-import time
 
 import db
+from models._utils import _sector
 from models.surface_signs import (
     _FUTURE_LOOKUP_SEC,
     _LOOKUP_SEC,
@@ -46,13 +46,6 @@ _MIN_SAMPLES = 3
 _ALL_MEMBER_IDS = [1, 2, 3, 4, 5, 6, 7]
 _PTEND_THRESHOLD = 0.5
 
-
-def _sector(ts: int) -> int:
-    h = time.localtime(ts).tm_hour
-    if h < 6:  return 0
-    if h < 12: return 1
-    if h < 18: return 2
-    return 3
 
 
 def _cw(cat: str) -> str:

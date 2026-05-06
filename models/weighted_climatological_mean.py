@@ -5,15 +5,16 @@
 
 import datetime as dt
 import statistics
+import time
 
 import db
 from models._climo_weights import LEAD_HOURS, MEMBERS as _MEMBERS, VARIABLES, weighted_mean as _weighted_mean
+from models._utils import _sector
 
 MODEL_ID = 3
 MODEL_NAME = "weighted_climatological_mean"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
-
 
 def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     rows = []
@@ -54,7 +55,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
             if not valid_pairs:
                 mean = None
             elif weights:
-                w_pairs = [(weights.get((mid, variable, lead), None), v) for mid, v in valid_pairs]
+                w_pairs = [(weights.get((mid, variable, lead, _sector(valid_at)), None), v) for mid, v in valid_pairs]
                 if any(w is None for w, _ in w_pairs):
                     # incomplete weights for this group — fall back to equal weighting
                     mean = sum(v for _, v in valid_pairs) / len(valid_pairs)

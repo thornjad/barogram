@@ -3,17 +3,9 @@
 # so adding a new base model requires no changes here.
 
 import math
-import time
 
 import db
-
-
-def _sector(valid_at: int) -> int:
-    h = time.localtime(valid_at).tm_hour
-    if h < 6:  return 0
-    if h < 12: return 1
-    if h < 18: return 2
-    return 3
+from models._utils import _sector
 
 MODEL_ID = 100
 MODEL_NAME = "barogram_ensemble"
@@ -63,26 +55,27 @@ def run(obs, issued_at: int, *, conn_out, weights=None) -> list[dict]:
                 "value": value,
             })
 
-        # weighted mean; fall back to equal weight when weights dict is absent/sparse
+        # weighted mean; fall back to equal weight when weights dict absent or incomplete
         cell_valid_at = next(iter(model_values.values()))[1]
         sector = _sector(cell_valid_at)
-        raw_w = {
-            mid: (weights.get((mid, variable, lead_hours, sector), 1.0) if weights else 1.0)
-            for mid in model_values
-        }
+        if weights:
+            wdict = {mid: weights.get((mid, variable, lead_hours, sector)) for mid in model_values}
+            raw_w = (wdict if all(w is not None for w in wdict.values())
+                     else {mid: 1.0 for mid in model_values})
+        else:
+            raw_w = {mid: 1.0 for mid in model_values}
         total_w = sum(raw_w.values())
         mean = sum(raw_w[mid] * v for mid, (v, _) in model_values.items()) / total_w
 
         vals = [v for v, _ in model_values.values()]
         spread = math.sqrt(sum((v - mean) ** 2 for v in vals) / len(vals))
 
-        valid_at = next(iter(model_values.values()))[1]
         rows.append({
             "model_id": MODEL_ID,
             "model": MODEL_NAME,
             "member_id": 0,
             "issued_at": issued_at,
-            "valid_at": valid_at,
+            "valid_at": cell_valid_at,
             "lead_hours": lead_hours,
             "variable": variable,
             "value": mean,

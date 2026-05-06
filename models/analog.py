@@ -7,8 +7,10 @@
 import datetime as _dt
 import math
 import statistics
+import time
 
 import db
+from models._utils import _sector
 
 MODEL_ID = 8
 MODEL_NAME = "analog"
@@ -40,7 +42,6 @@ _MEMBERS = [
 ]
 _ALL_MEMBER_IDS = [m[0] for m in _MEMBERS]
 
-
 def _norm_sigmas(candidates: list) -> dict[str, float | None]:
     """Per-feature population std dev across candidates; None means skip the feature."""
     sigmas = {}
@@ -52,7 +53,6 @@ def _norm_sigmas(candidates: list) -> dict[str, float | None]:
             sigma = statistics.pstdev(vals)
             sigmas[col] = sigma if sigma > 0 else None
     return sigmas
-
 
 def _distance(
     obs_vec: dict,
@@ -78,7 +78,6 @@ def _distance(
         return None
     return math.sqrt(total)
 
-
 def _month_diff(ts1: int, ts2: int) -> int:
     """Circular calendar-month distance between two timestamps (0–6)."""
     m1 = _dt.datetime.fromtimestamp(ts1).month
@@ -86,20 +85,17 @@ def _month_diff(ts1: int, ts2: int) -> int:
     diff = abs(m1 - m2)
     return min(diff, 12 - diff)
 
-
 def _select_analogs(cands_with_dist: list, k: int) -> list:
     """Return up to K (distance, candidate) pairs sorted by distance ascending."""
     valid = [(d, c) for d, c in cands_with_dist if d is not None]
     valid.sort(key=lambda x: x[0])
     return valid[:k]
 
-
 def _mean_forecast(futures: list) -> float | None:
     valid = [v for v in futures if v is not None]
     if not valid:
         return None
     return sum(valid) / len(valid)
-
 
 def _dist_weighted_forecast(dist_val_pairs: list) -> float | None:
     """Inverse-distance-weighted mean; exact matches (d=0) dominate."""
@@ -111,7 +107,6 @@ def _dist_weighted_forecast(dist_val_pairs: list) -> float | None:
         return sum(exact) / len(exact)
     total_w = sum(1.0 / d for d, _ in valid)
     return sum((1.0 / d) * v for d, v in valid) / total_w
-
 
 def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     candidates = db.analog_candidates(conn_in, obs["timestamp"])
@@ -229,7 +224,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
             pp_mean = None
         elif weights:
             w_pairs = [
-                (weights.get((mid, "precip_prob", lead), None), v)
+                (weights.get((mid, "precip_prob", lead, _sector(valid_at)), None), v)
                 for mid, v in valid_pp_pairs
             ]
             if any(w is None for w, _ in w_pairs):
@@ -266,7 +261,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                 mean = None
             elif weights:
                 w_pairs = [
-                    (weights.get((mid, variable, lead), None), v)
+                    (weights.get((mid, variable, lead, _sector(valid_at)), None), v)
                     for mid, v in valid_pairs
                 ]
                 if any(w is None for w, _ in w_pairs):
