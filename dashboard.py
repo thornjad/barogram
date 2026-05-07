@@ -4377,8 +4377,7 @@ def generate(
         staleness_banner = (
             f'<div class="stale-banner">'
             f'<strong>Warning:</strong> the following models did not run in the last forecast cycle '
-            f'and may have crashed: {model_list}. '
-            f'Check stderr output from <code>barogram forecast</code> for details.'
+            f'and may have stale data: {model_list}.'
             f'</div>'
         )
 
@@ -4494,7 +4493,7 @@ def generate(
 </header>
 {staleness_banner}
 <div id="stale-age-banner" class="stale-banner stale-age-banner" style="display:none">
-  <strong>Heads up:</strong> this dashboard was generated more than 6 hours ago and may not reflect current conditions. Run <code>barogram dashboard</code> to regenerate.
+  <strong>Heads up:</strong> this dashboard was generated more than 6 hours ago and may not reflect current conditions.
 </div>
 <section class="section" id="about">
   <p>Barogram is a pet forecast ensemble, a small collection of models I run for fun and to learn more about how forecasting actually works. Every three hours, they look at the latest readings from a backyard Tempest weather station in the Twin Cities, MN and a nearby NWS airport station, then each independently predict local temperature, dew point, pressure, and precipitation probability for the next 6 to 24 hours.</p>
