@@ -1,6 +1,6 @@
 # external_corrected: bias-corrected NWS and Tempest forecast.
 # learns systematic error patterns from historical scored rows and applies
-# corrections conditioned on time-of-day, season, and current airmass state.
+# corrections conditioned on time-of-day, month, and current airmass state.
 # type='external' — excluded from the barogram ensemble, for comparison only.
 #
 # members 1-5: nws + flat/diurnal/seasonal/airmass/joint correction
@@ -32,9 +32,6 @@ _NWS_MEMBERS = frozenset({1, 2, 3, 4, 5})
 _TEMPEST_MEMBERS = frozenset({6, 7, 8, 9, 10})
 _SOURCE_FLOOR = 0.10  # minimum weight fraction for the weaker source
 
-_SEASON_MAP = {12: 0, 1: 0, 2: 0, 3: 1, 4: 1, 5: 1,
-               6: 2, 7: 2, 8: 2, 9: 3, 10: 3, 11: 3}
-
 # (member_id, source_model_name, conditioning_strategy)
 _MEMBERS = [
     (1, "nws", "flat"),
@@ -54,8 +51,8 @@ def _hour_bucket(ts: int) -> int:
     return datetime.datetime.fromtimestamp(ts).hour // 6
 
 
-def _season(ts: int) -> int:
-    return _SEASON_MAP[datetime.datetime.fromtimestamp(ts).month]
+def _month(ts: int) -> int:
+    return datetime.datetime.fromtimestamp(ts).month - 1
 
 
 def _airmass_cat(obs) -> str | None:
@@ -99,12 +96,12 @@ def _build_tables(errors: list, obs_by_ts: dict, sorted_ts: list) -> dict:
         variable = row["variable"]
         error = row["error"]
         hb = _hour_bucket(valid_at)
-        sea = _season(valid_at)
+        mon = _month(valid_at)
 
         flat[(variable, lead)].append(error)
         diurnal[(variable, lead, hb)].append(error)
-        seasonal[(variable, lead, sea)].append(error)
-        joint[(variable, lead, hb, sea)].append(error)
+        seasonal[(variable, lead, mon)].append(error)
+        joint[(variable, lead, hb, mon)].append(error)
 
         nearest_ts = _find_nearest_ts(sorted_ts, issued_at, max_delta=_OBS_WINDOW)
         if nearest_ts is not None:
@@ -125,20 +122,20 @@ def _build_tables(errors: list, obs_by_ts: dict, sorted_ts: list) -> dict:
 
 
 def _get_correction(t: dict, cond: str, variable: str, lead: int,
-                    hb: int, sea: int, airmass_cat: str | None) -> float:
+                    hb: int, mon: int, airmass_cat: str | None) -> float:
     flat = t["flat"].get((variable, lead), 0.0)
     if cond == "flat":
         return flat
     if cond == "diurnal":
         return t["diurnal"].get((variable, lead, hb), flat)
     if cond == "seasonal":
-        return t["seasonal"].get((variable, lead, sea), flat)
+        return t["seasonal"].get((variable, lead, mon), flat)
     if cond == "airmass":
         if airmass_cat is None:
             return flat
         return t["airmass"].get((variable, lead, airmass_cat), flat)
     if cond == "joint":
-        c = t["joint"].get((variable, lead, hb, sea))
+        c = t["joint"].get((variable, lead, hb, mon))
         if c is None:
             c = t["diurnal"].get((variable, lead, hb), flat)
         return c
@@ -245,7 +242,7 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
     for lead in LEAD_HOURS:
         valid_at = issued_at + lead * 3600
         hb = _hour_bucket(valid_at)
-        sea = _season(valid_at)
+        mon = _month(valid_at)
 
         source_entries = {
             "nws": _snap_nearest(nws_hourly, valid_at),
@@ -261,7 +258,7 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
                 if raw_val is None:
                     continue
                 correction = _get_correction(
-                    tables[source], cond, variable, lead, hb, sea, current_airmass
+                    tables[source], cond, variable, lead, hb, mon, current_airmass
                 )
                 corrected = raw_val - correction
                 rows.append(_make_row(member_id, lead, valid_at, variable, corrected, issued_at))
