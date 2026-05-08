@@ -1478,7 +1478,7 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
                     mae = ts[issued]
                     c = c_var.get(issued)
                     ratio = 1.0 if is_baseline else (mae / c if c else None)
-                    x.append(fmt.short_ts(issued))
+                    x.append(fmt.iso_ts(issued))
                     y_ratio.append(ratio)
                 series[var] = {"x": x, "y_ratio": y_ratio, "y_ratio_rolling": _rolling_mean(y_ratio)}
             # average series: mean skill ratio across variables (dimensionless)
@@ -1497,7 +1497,7 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
                     if is_baseline or c:
                         ratios.append(1.0 if is_baseline else mae / c)
                 if ratios:
-                    ax.append(fmt.short_ts(issued))
+                    ax.append(fmt.iso_ts(issued))
                     ay_ratio.append(sum(ratios) / len(ratios))
             series["avg"] = {"x": ax, "y_ratio": ay_ratio, "y_ratio_rolling": _rolling_mean(ay_ratio)}
             result[str(lead)][model] = {
@@ -1539,7 +1539,7 @@ def _bias_timeseries_data(rows: list) -> dict:
                         _diff_to_f(bias) if var in ("temperature", "dewpoint")
                         else bias
                     )
-                    x.append(fmt.short_ts(issued))
+                    x.append(fmt.iso_ts(issued))
                     y.append(bias_display)
                 series[var] = {"x": x, "y": y}
             result[str(lead)][model] = {
@@ -1700,7 +1700,7 @@ function drawMaeCharts() {{
         Plotly.react('mae-chart-' + lead, traces, {{
             title: {{ text: title, font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
             margin: {{ t: 40, b: 100, l: 50, r: 16 }},
-            xaxis: {{ tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
+            xaxis: {{ type: 'date', tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
             yaxis: {{ tickfont: {{ size: 11 }}, rangemode: 'tozero',
                 title: {{ text: 'MAE ÷ climo MAE', font: {{ size: 10 }} }} }},
             height: 380,
@@ -2020,7 +2020,7 @@ function drawBiasCharts() {{
             title: {{ text: '+' + lead + 'h \u2014 ' + (biasFilterLabels[biasActiveVar] || biasActiveVar),
                       font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
             margin: {{ t: 40, b: 60, l: 50, r: 16 }},
-            xaxis: {{ tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
+            xaxis: {{ type: 'date', tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
             yaxis: {{ tickfont: {{ size: 11 }} }},
             height: 380,
             showlegend: false,
