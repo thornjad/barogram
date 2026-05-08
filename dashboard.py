@@ -4035,8 +4035,8 @@ def _skill_timeseries_js(data_14d: dict, data_120d: dict, data_alltime: dict) ->
         for wid, d in data_by_window.items()
     })
     return f"""const _skillRawData = {data_j};
-const SKILL_DEFAULT_MIDS = [100, 200, 201];
-const SKILL_KNOWN_COLORS = {{100: '#1f77b4', 200: '#ff7f0e', 201: '#2ca02c'}};
+const SKILL_DEFAULT_MIDS = [100, 200, 201, 202];
+const SKILL_KNOWN_COLORS = {{100: '#1f77b4', 200: '#ff7f0e', 201: '#2ca02c', 202: '#9467bd'}};
 const SKILL_EXTRA_PALETTE = ['#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
 let skillShowAll = false;
 
