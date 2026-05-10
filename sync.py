@@ -39,13 +39,15 @@ def load_env(path: Path) -> SyncConfig | None:
     )
 
 
-def wait_for_idle(conf: SyncConfig) -> bool:
+def wait_for_idle(conf: SyncConfig) -> bool | None:
     """
     Wait until the Syncthing folder is idle (no active sync in progress).
 
-    Returns True if idle within the timeout. Returns False if timed out or if
-    Syncthing is unreachable — both are treated as soft failures; the caller
-    should warn and proceed rather than block.
+    Returns True if idle within the timeout.
+    Returns False if Syncthing is running but the folder did not go idle within
+    the timeout — the caller should abort to avoid writing during an active sync.
+    Returns None if Syncthing is unreachable (daemon not running or not
+    configured on this machine) — the caller may proceed safely.
 
     Offline remote devices do not affect this check: we only wait for the local
     sync engine to finish processing any in-progress transfer.
@@ -65,8 +67,8 @@ def wait_for_idle(conf: SyncConfig) -> bool:
             print(f"  syncthing: folder is {state!r}, waiting...")
             time.sleep(2)
         except (urllib.error.URLError, OSError, TimeoutError):
-            return False
+            return None
         except Exception:
-            return False
+            return None
 
     return False
