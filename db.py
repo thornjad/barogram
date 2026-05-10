@@ -1123,6 +1123,68 @@ def analog_candidates(
     ).fetchall()
 
 
+def full_analog_candidates(
+    conn: sqlite3.Connection,
+    ts: int,
+    lookback_sec: int = 365 * 86400,
+) -> list:
+    """One Tempest obs per historical day, each closest to ts's local time-of-day.
+
+    Like analog_candidates but returns all sensor columns for full-state similarity.
+    Excludes the calendar day of ts.
+    """
+    dt = datetime.datetime.fromtimestamp(ts)
+    tod_sec = dt.hour * 3600 + dt.minute * 60 + dt.second
+    today_str = dt.strftime("%Y-%m-%d")
+    since = ts - lookback_sec
+    return conn.execute(
+        """
+        with
+        raw as (
+            select
+                t.timestamp,
+                t.air_temp,
+                t.dew_point,
+                t.station_pressure,
+                t.wind_avg,
+                t.wind_direction,
+                t.wind_gust,
+                t.solar_radiation,
+                t.uv_index,
+                t.precip_accum_day,
+                t.lightning_count,
+                date(t.timestamp, 'unixepoch', 'localtime') as obs_date,
+                cast(strftime('%H', t.timestamp, 'unixepoch', 'localtime') as integer) * 3600
+                + cast(strftime('%M', t.timestamp, 'unixepoch', 'localtime') as integer) * 60
+                + cast(strftime('%S', t.timestamp, 'unixepoch', 'localtime') as integer)
+                as local_tod
+            from tempest_obs t
+            join stations s on s.station_id = t.station_id
+            where s.source = 'tempest'
+              and t.timestamp >= :since
+              and date(t.timestamp, 'unixepoch', 'localtime') != :today
+        ),
+        candidates as (
+            select *,
+                   min(abs(local_tod - :tod), 86400 - abs(local_tod - :tod)) as tod_diff
+            from raw
+        ),
+        ranked as (
+            select *,
+                   row_number() over (partition by obs_date order by tod_diff) as rn
+            from candidates
+        )
+        select timestamp, air_temp, dew_point, station_pressure, wind_avg,
+               wind_direction, wind_gust, solar_radiation, uv_index,
+               precip_accum_day, lightning_count, obs_date
+        from ranked
+        where rn = 1
+        order by timestamp desc
+        """,
+        {"tod": tod_sec, "today": today_str, "since": since},
+    ).fetchall()
+
+
 def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
     normalized = [
         {**row, "member_id": row.get("member_id", 0), "spread": row.get("spread")}
