@@ -3817,7 +3817,7 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
     model_order = sorted(model_data.keys(), key=_sort_key)
     lts = sorted(lead_times)
 
-    header = "<th>Model</th>" + "".join(f"<th>+{lt}h</th>" for lt in lts)
+    header = "<th>#</th><th>Model</th>" + "".join(f"<th>+{lt}h</th>" for lt in lts)
     body_rows = []
     for name in model_order:
         meta = model_meta[name]
@@ -3855,11 +3855,13 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
         if member_models and name in member_models:
             mbtn = f' <button class="member-btn" data-model="{name}">members</button>'
         body_rows.append(
-            f'<tr{row_cls}><th class="model-name-cell">{name} {badge}{mbtn}</th>{cells}</tr>'
+            f'<tr{row_cls}>'
+            f'<td class="model-id-cell">{meta["model_id"]}</td>'
+            f'<th class="model-name-cell">{name} {badge}{mbtn}</th>{cells}</tr>'
         )
         if member_models and name in member_models:
             safe = name.replace("_", "-").replace(" ", "-")
-            n_cols = 1 + len(lts)
+            n_cols = 2 + len(lts)
             body_rows.append(
                 f'<tr class="member-detail-row" id="mdr-{safe}" style="display:none">'
                 f'<td colspan="{n_cols}" id="md-{safe}"></td>'
