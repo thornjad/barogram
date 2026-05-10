@@ -14,6 +14,7 @@
 | 10 | synoptic_state_machine | [010_synoptic_state_machine.md](010_synoptic_state_machine.md) |
 | 11 | airmass_precip | [011_airmass_precip.md](011_airmass_precip.md) |
 | 12 | bogo | [012_bogo.md](012_bogo.md) |
+| 13 | full_state_analog | [013_full_state_analog.md](013_full_state_analog.md) |
 | 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
 | 200 | nws | — |
 | 201 | tempest_forecast | — |
