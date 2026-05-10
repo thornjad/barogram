@@ -16,6 +16,7 @@ __pycache__/
 *.png
 screenshots/
 *syncthing*
+*.sync-conflict*
 docs/plans/
 .stignore
 *.sh
