@@ -69,8 +69,9 @@ def _sync_check():
     conf = _sync.load_env(_LOCAL_ENV)
     if conf is None:
         return
-    if not _sync.wait_for_idle(conf):
-        print("warning: syncthing not idle or unreachable — proceeding anyway")
+    result = _sync.wait_for_idle(conf)
+    if result is False:
+        sys.exit("error: syncthing is actively syncing — aborting to avoid write conflict")
 
 
 def cmd_conditions(args, conf):
