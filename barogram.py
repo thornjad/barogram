@@ -17,6 +17,7 @@ import fmt
 import sync as _sync
 import models.analog as analog
 import models.full_state_analog as full_state_analog
+import models.multivariate_trend as multivariate_trend
 import models.airmass_diurnal as airmass_diurnal
 import models.airmass_precip as airmass_precip
 import models.bogo as bogo
@@ -53,6 +54,7 @@ _MODELS = [
     airmass_precip,
     analog,
     full_state_analog,
+    multivariate_trend,
     surface_signs,
     synoptic_state_machine,
     bogo,
