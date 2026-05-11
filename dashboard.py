@@ -2218,16 +2218,20 @@ def _ensemble_forecast_section(
             ens_table[row["variable"]][row["lead_hours"]] = (row["value"], row["spread"])
         lead_valid_at.setdefault(row["lead_hours"], row["valid_at"])
 
-    # {lead_hours: {variable: value}} for reference models
+    # {lead_hours: {variable: value}} and {lead_hours: valid_at} for reference models
     tempest_by_lead: dict[int, dict] = {}
+    tempest_vat: dict[int, int] = {}
     for row in mean_rows:
         if row["model"] == "tempest_forecast" and row["member_id"] == 0:
             tempest_by_lead.setdefault(row["lead_hours"], {})[row["variable"]] = row["value"]
+            tempest_vat.setdefault(row["lead_hours"], row["valid_at"])
 
     corrected_by_lead: dict[int, dict] = {}
+    corrected_vat: dict[int, int] = {}
     for row in mean_rows:
         if row["model"] == "external_corrected" and row["member_id"] == 0:
             corrected_by_lead.setdefault(row["lead_hours"], {})[row["variable"]] = row["value"]
+            corrected_vat.setdefault(row["lead_hours"], row["valid_at"])
 
     slp_offset = _slp_correction(tempest, elevation_m)
     now: dict[str, float | None] = {}
@@ -2243,13 +2247,16 @@ def _ensemble_forecast_section(
             "wind_speed": tempest["wind_avg"],
         }
 
-    def _nws_at(target_ts: int) -> dict | None:
+    def _nws_at(target_ts: int) -> tuple[int, dict] | None:
         if not nws_forecast:
             return None
         best = min(nws_forecast, key=lambda t: abs(t - target_ts))
         if abs(best - target_ts) > 5400:
             return None
-        return nws_forecast[best]
+        return best, nws_forecast[best]
+
+    def _fmt_time(ts: int) -> str:
+        return datetime.fromtimestamp(ts, tz=fmt.CENTRAL).strftime("%-I %p").lstrip("0")
 
     def _lead_label(lead: int) -> str:
         vat = lead_valid_at.get(lead)
@@ -2257,7 +2264,8 @@ def _ensemble_forecast_section(
             return datetime.fromtimestamp(vat, tz=fmt.CENTRAL).strftime("%-I %p").lstrip("0")
         return f"+{lead}h"
 
-    def _ref_panel(label: str, temp_val, dew_val, precip_val, ens_temp_val=None) -> str:
+    def _ref_panel(label: str, temp_val, dew_val, precip_val,
+                   ens_temp_val=None, valid_time_str: str | None = None) -> str:
         lines = []
         if temp_val is not None:
             ref_temp_f = _to_f(temp_val)
@@ -2283,9 +2291,10 @@ def _ensemble_forecast_section(
         }
         tip = _ref_tooltips.get(label, "")
         title_attr = f' title="{tip}"' if tip else ""
+        display_label = f"{label} ({valid_time_str})" if valid_time_str else label
         return (
             f'<div class="fcst-ref">'
-            f'<span class="fcst-ref-lbl"{title_attr}>{label}</span>'
+            f'<span class="fcst-ref-lbl"{title_attr}>{display_label}</span>'
             + '<br>'.join(lines)
             + '</div>'
         )
@@ -2293,7 +2302,10 @@ def _ensemble_forecast_section(
     def _card(label: str, is_now: bool,
               temp_val, dew_val, pres_val, wind_val,
               temp_spread=None, precip_val=None,
-              tempest_ref=None, nws_ref=None, corrected_ref=None) -> str:
+              tempest_ref=None, nws_ref=None, corrected_ref=None,
+              tempest_time_str: str | None = None,
+              nws_time_str: str | None = None,
+              corrected_time_str: str | None = None) -> str:
         cls = 'fcst-row now-row' if is_now else 'fcst-row'
         if temp_val is not None:
             if temp_spread is not None and temp_spread > 0:
@@ -2334,6 +2346,7 @@ def _ensemble_forecast_section(
                 tempest_ref.get('temperature'), tempest_ref.get('dewpoint'),
                 tempest_ref.get('precip_prob'),
                 temp_val,
+                tempest_time_str,
             ))
         if nws_ref is not None:
             refs.append(_ref_panel(
@@ -2341,6 +2354,7 @@ def _ensemble_forecast_section(
                 nws_ref.get('temperature'), nws_ref.get('dewpoint'),
                 nws_ref.get('precip_prob'),
                 temp_val,
+                nws_time_str,
             ))
         if corrected_ref is not None:
             refs.append(_ref_panel(
@@ -2348,6 +2362,7 @@ def _ensemble_forecast_section(
                 corrected_ref.get('temperature'), corrected_ref.get('dewpoint'),
                 corrected_ref.get('precip_prob'),
                 temp_val,
+                corrected_time_str,
             ))
         refs_html = (
             '<div class="fcst-row-refs">' + ''.join(refs) + '</div>'
@@ -2363,7 +2378,8 @@ def _ensemble_forecast_section(
         pp_cell = ens_table.get("precip_prob", {}).get(lead)
         p_raw = p_cell[0] if p_cell else None
         vat = lead_valid_at.get(lead)
-        nws_entry = _nws_at(vat) if vat else None
+        nws_result = _nws_at(vat) if vat else None
+        nws_ts, nws_entry = nws_result if nws_result else (None, None)
         cards += _card(
             _lead_label(lead), False,
             t_cell[0] if t_cell else None,
@@ -2375,6 +2391,9 @@ def _ensemble_forecast_section(
             tempest_by_lead.get(lead) or None,
             nws_entry,
             corrected_by_lead.get(lead) or None,
+            tempest_time_str=_fmt_time(tempest_vat[lead]) if lead in tempest_vat else None,
+            nws_time_str=_fmt_time(nws_ts) if nws_ts else None,
+            corrected_time_str=_fmt_time(corrected_vat[lead]) if lead in corrected_vat else None,
         )
 
     return (
@@ -3600,10 +3619,11 @@ def _trajectory_data(rows: list) -> dict:
             var: {
                 "observed": float | None,  # display units
                 "unit": str,
-                "models": {model_name: {"x": [iso_str, ...], "y": [float, ...]}}
+                "models": {model_name: {"x": [lead_hours, ...], "y": [float, ...]}}
             }
         }
     }
+    x values are lead_hours integers, sorted descending (longest lead first).
     """
     if not rows:
         return {"valid_at_label": "", "variables": {}}
@@ -3614,23 +3634,29 @@ def _trajectory_data(rows: list) -> dict:
     valid_at_label = fmt.ts(target_ts)
 
     obs_by_var: dict[str, list[float]] = {}
-    by_var_model: dict[str, dict[str, list]] = {}
+    # var \u2192 model \u2192 lead_hours \u2192 [raw values] (multiple runs may share a lead bucket)
+    by_var_model_lead: dict[str, dict[str, dict[int, list[float]]]] = {}
 
     for row in rows:
         var = row["variable"]
         model = row["model"]
-        issued_at = row["issued_at"]
+        lead_hours = row["lead_hours"]
         value = row["value"]
         observed = row["observed"]
 
         if observed is not None:
             obs_by_var.setdefault(var, []).append(observed)
-        by_var_model.setdefault(var, {}).setdefault(model, []).append((issued_at, value))
+        if value is not None:
+            (by_var_model_lead
+                .setdefault(var, {})
+                .setdefault(model, {})
+                .setdefault(lead_hours, [])
+                .append(value))
 
     result: dict = {"valid_at_label": valid_at_label, "variables": {}}
 
     for var in VARIABLES:
-        if var not in by_var_model:
+        if var not in by_var_model_lead:
             continue
         obs_vals = obs_by_var.get(var, [])
         obs_mean = sum(obs_vals) / len(obs_vals) if obs_vals else None
@@ -3645,17 +3671,18 @@ def _trajectory_data(rows: list) -> dict:
             unit = "hPa"
 
         models_data: dict = {}
-        for model, points in by_var_model[var].items():
+        for model, lead_map in by_var_model_lead[var].items():
             xs, ys = [], []
-            for issued_at, val in sorted(points, key=lambda p: p[0]):
-                if val is None:
-                    continue
+            # sort descending so longest lead (earliest forecast) comes first;
+            # average across runs that share the same lead_hours bucket
+            for lead_hours in sorted(lead_map.keys(), reverse=True):
+                raw_vals = lead_map[lead_hours]
+                avg_raw = sum(raw_vals) / len(raw_vals)
                 if var in ("temperature", "dewpoint"):
-                    val_disp = _to_f(val)
+                    val_disp = _to_f(avg_raw)
                 else:
-                    val_disp = val
-                dt = datetime.fromtimestamp(issued_at, tz=timezone.utc)
-                xs.append(dt.strftime("%Y-%m-%dT%H:%M:%S"))
+                    val_disp = avg_raw
+                xs.append(lead_hours)
                 ys.append(round(val_disp, 2) if val_disp is not None else None)
             if xs:
                 models_data[model] = {"x": xs, "y": ys}
@@ -3715,7 +3742,7 @@ function drawTrajectoryChart() {{
         }};
     }});
     if (vd.observed !== null && vd.observed !== undefined) {{
-        const allX = Object.values(vd.models).flatMap(function(m) {{ return m.x; }}).sort();
+        const allX = Object.values(vd.models).flatMap(function(m) {{ return m.x; }}).sort(function(a,b){{return a-b;}});
         if (allX.length >= 2) {{
             traces.push({{
                 type: 'scatter', mode: 'lines',
@@ -3731,7 +3758,7 @@ function drawTrajectoryChart() {{
         title: {{ text: 'Forecast trajectory \u2014 valid ' + (trajectoryData.valid_at_label || ''),
                   font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
         margin: {{ t: 40, b: 100, l: 55, r: 16 }},
-        xaxis: {{ title: 'Issued at', type: 'date', tickfont: {{ size: 11 }} }},
+        xaxis: {{ title: 'Lead hours', autorange: 'reversed', tickfont: {{ size: 11 }} }},
         yaxis: {{ title: unit, tickfont: {{ size: 11 }} }},
         height: 380,
         showlegend: true,
