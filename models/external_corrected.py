@@ -240,13 +240,26 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
 
     rows = []
     for lead in LEAD_HOURS:
-        valid_at = issued_at + lead * 3600
+        target = issued_at + lead * 3600
+        tempest_result = _snap_nearest(tempest_hourly, target)
+        if tempest_result is not None:
+            valid_at = tempest_result[0]
+            tempest_entry = tempest_result[1]
+            nws_result = _snap_nearest(nws_hourly, valid_at)
+            nws_entry = nws_result[1] if nws_result else None
+        else:
+            nws_result = _snap_nearest(nws_hourly, target)
+            if nws_result is None:
+                continue
+            valid_at = nws_result[0]
+            tempest_entry = None
+            nws_entry = nws_result[1]
         hb = _hour_bucket(valid_at)
         mon = _month(valid_at)
 
         source_entries = {
-            "nws": _snap_nearest(nws_hourly, valid_at),
-            "tempest_forecast": _snap_nearest(tempest_hourly, valid_at),
+            "nws": nws_entry,
+            "tempest_forecast": tempest_entry,
         }
 
         for variable in _VARIABLES:

@@ -66,14 +66,14 @@ def _fetch(station_id: str, token: str) -> dict[int, dict]:
         return {}
 
 
-def _nearest(hourly: dict[int, dict], target: int) -> dict | None:
-    """Return the hourly entry nearest to target within _SNAP_WINDOW, or None."""
+def _nearest(hourly: dict[int, dict], target: int) -> tuple[int, dict] | None:
+    """Return (timestamp, entry) for the hourly period nearest to target within _SNAP_WINDOW, or None."""
     if not hourly:
         return None
     best = min(hourly, key=lambda t: abs(t - target))
     if abs(best - target) > _SNAP_WINDOW:
         return None
-    return hourly[best]
+    return best, hourly[best]
 
 
 def run(obs, issued_at: int, *, conf=None) -> list[dict]:
@@ -85,9 +85,10 @@ def run(obs, issued_at: int, *, conf=None) -> list[dict]:
     rows = []
     for lead in LEAD_HOURS:
         target = issued_at + lead * 3600
-        entry = _nearest(hourly, target)
-        if entry is None:
+        result = _nearest(hourly, target)
+        if result is None:
             continue
+        actual_ts, entry = result
         for variable, key in [
             ("temperature", "temperature"),
             ("dewpoint", "dewpoint"),
@@ -100,7 +101,7 @@ def run(obs, issued_at: int, *, conf=None) -> list[dict]:
                 "model": MODEL_NAME,
                 "member_id": 0,
                 "issued_at": issued_at,
-                "valid_at": target,
+                "valid_at": actual_ts,
                 "lead_hours": lead,
                 "variable": variable,
                 "value": entry[key],
