@@ -840,6 +840,23 @@ def external_corrected_source_mae(conn: sqlite3.Connection) -> list[dict]:
     ).fetchall()]
 
 
+def multivariate_window_skill(conn: sqlite3.Connection) -> list[dict]:
+    """Avg MAE per (member, variable, lead_hours) for multivariate_trend, joined with window_h."""
+    return [dict(r) for r in conn.execute(
+        """
+        select f.member_id, m.window_h, f.variable, f.lead_hours,
+               avg(f.mae) as avg_mae, count(*) as n
+        from forecasts f
+        join members m on m.model_id = f.model_id and m.member_id = f.member_id
+        where f.model_id = 14 and f.member_id > 0
+          and f.scored_at is not null and f.mae is not null
+          and m.window_h is not null
+        group by f.member_id, m.window_h, f.variable, f.lead_hours
+        order by m.window_h, f.variable, f.lead_hours
+        """
+    ).fetchall()]
+
+
 def all_weights_with_members(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """

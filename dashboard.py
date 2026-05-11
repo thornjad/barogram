@@ -2805,6 +2805,17 @@ def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -
         for model in hyp_g[lead]:
             hyp_g[lead][model]["y"] = _roll(hyp_g[lead][model]["y_raw"], window=10)
 
+    # structure Hyp H: {variable: {lead_hours: {window_h: [...], avg_mae: [...]}}}
+    # cross-section chart (not time-series): each point is the all-time avg MAE
+    # for one (member, lead) pair, plotted against that member's window length.
+    hyp_h: dict[str, dict[int, dict]] = {}
+    for row in db.multivariate_window_skill(conn_out):
+        var = row["variable"]
+        lead = row["lead_hours"]
+        hyp_h.setdefault(var, {}).setdefault(lead, {"window_h": [], "avg_mae": []})
+        hyp_h[var][lead]["window_h"].append(row["window_h"])
+        hyp_h[var][lead]["avg_mae"].append(row["avg_mae"])
+
     return {
         "mae_by_lead": mae_by_lead,
         "weight_rows": [
@@ -2826,6 +2837,7 @@ def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -
         "spec_all": spec_all,
         "ensemble_weights": ensemble_weights,
         "hyp_g": hyp_g,
+        "hyp_h": hyp_h,
     }
 
 
@@ -3132,6 +3144,23 @@ def _hyp_g_status(data: dict) -> str:
     return f"<strong>Status:</strong> {'; '.join(parts)}.{verdict}"
 
 
+def _hyp_h_status(data: dict) -> str:
+    temp = data["hyp_h"].get("temperature", {})
+    if not temp:
+        return ""
+    parts = []
+    for lead in [6, 12, 18, 24]:
+        bucket = temp.get(lead)
+        if not bucket or not bucket["window_h"]:
+            continue
+        pairs = sorted(zip(bucket["window_h"], bucket["avg_mae"]))
+        best_w, best_mae = min(pairs, key=lambda p: p[1])
+        parts.append(f"+{lead}h best: {best_w}h window ({_diff_to_f(best_mae):.1f}&deg;F MAE)")
+    if not parts:
+        return ""
+    return "<strong>Status:</strong> " + "; ".join(parts) + "."
+
+
 def _status_p(text: str) -> str:
     if not text:
         return ""
@@ -3146,6 +3175,7 @@ def _learnings_section_html(data: dict) -> str:
     has_hyp_e = any(data["hyp_e"])
     has_hyp_f = bool(data["hyp_f"])
     has_hyp_g = any(data["hyp_g"])
+    has_hyp_h = any(data["hyp_h"])
     weights_html = _learnings_weights_table_html(data["weight_rows"])
 
     sta = _status_p
@@ -3156,6 +3186,7 @@ def _learnings_section_html(data: dict) -> str:
     status_e = sta(_hyp_e_status(data))
     status_f = sta(_hyp_f_status(data))
     status_g = sta(_hyp_g_status(data))
+    status_h = sta(_hyp_h_status(data))
 
     no_data = '<p class="no-data">Not enough scored data yet. Check back after several forecast cycles.</p>'
 
@@ -3316,6 +3347,32 @@ def _learnings_section_html(data: dict) -> str:
             "</div>\n"
             "  </details>\n"
             if has_hyp_g
+            else no_data + "\n"
+        )
+        + "\n"
+        # --- Hypothesis H ---
+        + '  <h3 class="obs-subhead">Hypothesis H: Does trend window length have an optimal size?</h3>\n'
+        '  <p class="learnings-desc">'
+        "<strong>Question:</strong> For each lead time, is there an optimal trend window where "
+        "MAE is minimized &mdash; short enough to capture the recent signal, long enough to avoid "
+        "noise? Or does skill simply improve monotonically with more history? "
+        "<code>multivariate_trend</code> members span 1&ndash;48h windows; each point here is the "
+        "all-time avg MAE for one (member, lead) pair. "
+        "<strong>Note:</strong> early data for short-window members at long leads reflects "
+        "pre-fix era forecast errors &mdash; those members are now restricted to appropriate leads."
+        "</p>\n"
+        + status_h
+        + (
+            '  <details class="collapsible-section">\n'
+            '  <summary>show charts</summary>\n'
+            '  <div class="learnings-hyp-grid">'
+            '<div class="chart-container"><div id="learnings-hyp-h-temperature"></div></div>'
+            '<div class="chart-container"><div id="learnings-hyp-h-dewpoint"></div></div>'
+            "</div>\n"
+            '  <div class="chart-container" style="max-width:520px">'
+            '<div id="learnings-hyp-h-pressure"></div></div>\n'
+            "  </details>\n"
+            if has_hyp_h
             else no_data + "\n"
         )
         + "</section>\n"
@@ -3606,6 +3663,55 @@ def _learnings_js(data: dict) -> str:
                 f"+{lead}h temperature MAE (\u00b0F) \u2014 10-run rolling mean",
                 "yaxis:{rangemode:'tozero',tickfont:{size:11}}",
             ))
+
+    # --- Hypothesis H: multivariate_trend MAE vs window length (cross-section) ---
+    # one chart per variable; x = window_h, y = avg_mae; one trace per lead_hours
+    h_lead_colors = {6: "#1f77b4", 12: "#ff7f0e", 18: "#2ca02c", 24: "#d62728"}
+    h_var_labels = {
+        "temperature": "temperature MAE (\u00b0F)",
+        "dewpoint": "dewpoint MAE (\u00b0F)",
+        "pressure": "pressure MAE (hPa)",
+    }
+    for var, chart_id in [
+        ("temperature", "learnings-hyp-h-temperature"),
+        ("dewpoint", "learnings-hyp-h-dewpoint"),
+        ("pressure", "learnings-hyp-h-pressure"),
+    ]:
+        var_data = data["hyp_h"].get(var, {})
+        traces = []
+        for lead in [6, 12, 18, 24]:
+            bucket = var_data.get(lead)
+            if not bucket or not bucket["window_h"]:
+                continue
+            pts = sorted(zip(bucket["window_h"], bucket["avg_mae"]))
+            xs = [p[0] for p in pts]
+            raw_ys = [p[1] for p in pts]
+            if var in ("temperature", "dewpoint"):
+                ys = [round(_diff_to_f(v), 2) for v in raw_ys]
+            else:
+                ys = [round(v, 3) for v in raw_ys]
+            color = h_lead_colors[lead]
+            traces.append(
+                f"{{type:'scatter',mode:'lines+markers',name:{json.dumps(f'+{lead}h')},"
+                f"x:{json.dumps(xs)},y:{json.dumps(ys)},"
+                f"line:{{color:{json.dumps(color)},width:2}},"
+                f"marker:{{size:7,color:{json.dumps(color)}}}}}"
+            )
+        if traces:
+            h_layout = (
+                f"{{title:{{text:{json.dumps(h_var_labels[var])},font:{{size:13,family:{_font}}}}},"
+                f"margin:{{t:40,b:60,l:55,r:16}},"
+                f"xaxis:{{title:{{text:'trend window (hours)',font:{{size:11}}}},tickfont:{{size:10}}}},"
+                f"yaxis:{{rangemode:'tozero',tickfont:{{size:11}}}},"
+                f"height:320,showlegend:true,"
+                f"legend:{{orientation:'h',x:0,y:-0.22,xanchor:'left',yanchor:'top',font:{{size:10}}}},"
+                f"font:{{color:plotBg().font}},paper_bgcolor:plotBg().paper,plot_bgcolor:plotBg().plot}}"
+            )
+            cid = json.dumps(chart_id)
+            lines.append(
+                f"if(document.getElementById({cid}))"
+                f"{{Plotly.react({cid},[{','.join(traces)}],{h_layout},{{responsive:true}});}}"
+            )
 
     return "\n".join(lines)
 
