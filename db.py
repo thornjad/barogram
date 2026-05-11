@@ -995,20 +995,27 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
 
 
 def forecast_trajectory(conn: sqlite3.Connection, since_ts: int) -> list:
-    """All scored member_id=0 rows targeting the most recently completed valid_at.
+    """All scored member_id=0 rows targeting the best-covered recent valid_at.
 
-    Finds the latest valid_at from scored barogram_ensemble rows (within the
-    lookback window defined by since_ts), then returns all scored rows from all
-    models within ±2 hours of that target time. The wide window accommodates
-    slight valid_at differences between internal models (which base valid_at on
-    the live obs timestamp) and external models (which snap to NWS/Tempest hours).
+    Finds the scored barogram_ensemble valid_at (within the lookback window) that
+    has the most distinct issued_at values within ±2 hours — i.e. the valid time
+    for which the most forecast runs have been scored. Tie-breaks to the latest
+    valid_at. The ±2h window accommodates slight valid_at differences between
+    internal models (Tempest obs timestamp) and external models (NWS/Tempest hours).
     """
     pivot = conn.execute(
         """
-        select valid_at from forecasts
-        where model_id = 100 and member_id = 0 and scored_at is not null
-          and valid_at >= ?
-        order by valid_at desc
+        with candidates as (
+            select distinct valid_at from forecasts
+            where model_id = 100 and member_id = 0 and scored_at is not null
+              and valid_at >= ?
+        )
+        select c.valid_at
+        from candidates c
+        join forecasts f on f.member_id = 0 and f.scored_at is not null
+          and f.valid_at between c.valid_at - 7200 and c.valid_at + 7200
+        group by c.valid_at
+        order by count(distinct f.issued_at) desc, c.valid_at desc
         limit 1
         """,
         (since_ts,),
