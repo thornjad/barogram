@@ -11,18 +11,27 @@ NEEDS_CONN_IN = True
 NEEDS_ALL_OBS = True
 NEEDS_WEIGHTS = True
 
-# (member_id, name, degree, window_h, half_life_min, ridge_alpha)
+# (member_id, name, degree, window_h, half_life_min, ridge_alpha, max_lead_h)
+# max_lead_h: None = no restriction; int = skip evaluation for leads > this value.
+# rule: linear capped at 2× window, quadratic at 1× window, to prevent explosive extrapolation.
 _MEMBERS = [
-    (1,  "linear-1h",    1, 1,   None, 0.0),
-    (2,  "linear-3h",    1, 3,   None, 0.0),
-    (3,  "linear-6h",    1, 6,   None, 0.0),
-    (4,  "linear-12h",   1, 12,  None, 0.0),
-    (5,  "wls-3h-hl20",  1, 3,   20,   0.0),
-    (6,  "wls-6h-hl45",  1, 6,   45,   0.0),
-    (7,  "wls-6h-hl120", 1, 6,   120,  0.0),
-    (8,  "quad-3h",      2, 3,   None, 0.0),
-    (9,  "quad-6h",      2, 6,   None, 0.0),
-    (10, "ridge-6h",     1, 6,   None, 5.0),
+    (1,  "linear-1h",      1, 1,   None, 0.0,  6),
+    (2,  "linear-3h",      1, 3,   None, 0.0,  6),
+    (3,  "linear-6h",      1, 6,   None, 0.0,  12),
+    (4,  "linear-12h",     1, 12,  None, 0.0,  None),
+    (5,  "wls-3h-hl20",    1, 3,   20,   0.0,  6),
+    (6,  "wls-6h-hl45",    1, 6,   45,   0.0,  12),
+    (7,  "wls-6h-hl120",   1, 6,   120,  0.0,  12),
+    (8,  "quad-3h",        2, 3,   None, 0.0,  6),
+    (9,  "quad-6h",        2, 6,   None, 0.0,  6),
+    (10, "ridge-6h",       1, 6,   None, 5.0,  12),
+    # longer windows: fill the 18h/24h gap and sweep the window-vs-skill hypothesis
+    (11, "linear-18h",     1, 18,  None, 0.0,  None),
+    (12, "linear-24h",     1, 24,  None, 0.0,  None),
+    (13, "linear-36h",     1, 36,  None, 0.0,  None),
+    (14, "linear-48h",     1, 48,  None, 0.0,  None),
+    (15, "wls-18h-hl240",  1, 18,  240,  0.0,  None),
+    (16, "wls-24h-hl360",  1, 24,  360,  0.0,  None),
 ]
 _ALL_MEMBER_IDS = [m[0] for m in _MEMBERS]
 _MIN_PTS = {1: 2, 2: 3}
@@ -126,7 +135,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
 
     member_vals = {}
 
-    for mid, _name, degree, window_h, hl_min, ridge_alpha in _MEMBERS:
+    for mid, _name, degree, window_h, hl_min, ridge_alpha, max_lead_h in _MEMBERS:
         start_ts = issued_at - window_h * 3600
         window_obs = [r for r in all_obs if r["timestamp"] >= start_ts]
         t_all = [(r["timestamp"] - issued_at) / 3600.0 for r in window_obs]
@@ -148,14 +157,20 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
             else:
                 coefs = _poly_fit(list(t_f), list(y_f), degree, list(w_f))
             for lead in LEAD_HOURS:
-                member_vals[(mid, variable, lead)] = (
-                    _poly_eval(coefs, float(lead)) if coefs is not None else None
-                )
+                if max_lead_h is not None and lead > max_lead_h:
+                    member_vals[(mid, variable, lead)] = None
+                else:
+                    member_vals[(mid, variable, lead)] = (
+                        _poly_eval(coefs, float(lead)) if coefs is not None else None
+                    )
 
         for lead in LEAD_HOURS:
-            member_vals[(mid, "precip_prob", lead)] = _precip_prob(
-                window_obs, t_all, w_all, obs, lead
-            )
+            if max_lead_h is not None and lead > max_lead_h:
+                member_vals[(mid, "precip_prob", lead)] = None
+            else:
+                member_vals[(mid, "precip_prob", lead)] = _precip_prob(
+                    window_obs, t_all, w_all, obs, lead
+                )
 
     all_variables = list(VARIABLES.keys()) + ["precip_prob"]
     rows = []
