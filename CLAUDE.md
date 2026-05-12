@@ -106,6 +106,7 @@ lowercase as well.
 | 8   | analog                       | base     | done   |
 | 9   | surface_signs                | base     | done   |
 | 12  | bogo                         | base     | done   |
+| 15  | dry_airmass_diurnal          | base     | done   |
 | 100 | barogram_ensemble            | ensemble | done   |
 | 200 | nws                          | external | done   |
 | 201 | tempest_forecast             | external | done   |
