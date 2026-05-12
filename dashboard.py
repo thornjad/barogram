@@ -4378,6 +4378,7 @@ def generate(
     conn_in: sqlite3.Connection,
     conn_out: sqlite3.Connection,
     output_path: Path,
+    machine_id: str | None = None,
 ) -> None:
     db.sync_ensemble_members(conn_out)
     elevation_m = db.tempest_station_elevation(conn_in)
@@ -4491,6 +4492,7 @@ def generate(
     overall_accuracy_html = "".join(overall_parts)
     acc_lead_table_html = "".join(lead_parts)
     generated_at = fmt.ts(now)
+    machine_label = f'<span class="machine-id">({machine_id})</span>' if machine_id else ""
     _lf = db.get_metadata(conn_out, "last_forecast")
     _lt = db.get_metadata(conn_out, "last_tune")
     last_forecast_str = fmt.ts(int(_lf)) if _lf else "\u2014"
@@ -4613,6 +4615,7 @@ def generate(
     <h1>barogram</h1>
     <div class="generated">
       <span>generated {generated_at}</span>
+      {machine_label}
       <span>last forecast: {last_forecast_str}</span>
       <span>last tune: {last_tune_str}</span>
     </div>
