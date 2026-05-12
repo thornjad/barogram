@@ -16,6 +16,7 @@ import db
 import fmt
 import sync as _sync
 import models.analog as analog
+import models.dry_airmass_diurnal as dry_airmass_diurnal
 import models.full_state_analog as full_state_analog
 import models.multivariate_trend as multivariate_trend
 import models.airmass_diurnal as airmass_diurnal
@@ -53,6 +54,7 @@ _MODELS = [
     airmass_diurnal,
     airmass_precip,
     analog,
+    dry_airmass_diurnal,
     full_state_analog,
     multivariate_trend,
     surface_signs,
@@ -251,7 +253,7 @@ def cmd_run(args, conf):
         print(f"forecast errors: {', '.join(failed)}", file=sys.stderr)
 
     print("building dashboard...")
-    dash.generate(conn_in, conn_out, output)
+    dash.generate(conn_in, conn_out, output, machine_id=args.machine_id)
     print(f"  wrote {output}")
 
 
@@ -272,7 +274,7 @@ def cmd_dashboard(args, conf):
     db.run_migrations(conn_out, migrations_dir)
 
     try:
-        dash.generate(conn_in, conn_out, output)
+        dash.generate(conn_in, conn_out, output, machine_id=args.machine_id)
     except ValueError as e:
         sys.exit(f"error: {e}")
     print(f"wrote {output}")
@@ -687,6 +689,12 @@ def main():
         metavar="PATH",
         default=str(default_config),
         help="config file (default: barogram.toml next to this script)",
+    )
+    parser.add_argument(
+        "--machine-id",
+        metavar="LABEL",
+        default=None,
+        help="optional label shown in dashboard timestamps (e.g. 'secondary')",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="command")
     subparsers.add_parser(
