@@ -103,6 +103,22 @@ def _window_stats(obs_72h: list, issued_at: int, window_hours: int) -> dict | No
     return {"mean_dd": mean_dd, "mean_td": mean_td}
 
 
+def _null_rows(issued_at: int) -> list[dict]:
+    """Return all-None rows for every (member, lead, variable) — used when
+    historical data is insufficient to compute hour means."""
+    rows = []
+    for lead in LEAD_HOURS:
+        valid_at = issued_at + lead * 3600
+        for mid in [0] + _ALL_MEMBER_IDS:
+            for variable in VAR_COL:
+                rows.append({
+                    "model_id": MODEL_ID, "model": MODEL_NAME, "member_id": mid,
+                    "issued_at": issued_at, "valid_at": valid_at,
+                    "lead_hours": lead, "variable": variable, "value": None,
+                })
+    return rows
+
+
 def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     t_now = _local_hour_float(obs["timestamp"])
 
@@ -113,14 +129,14 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
     hm_Td = _hour_means(raw_30d, "dew_point")
 
     if hm_T is None or hm_Td is None:
-        return []
+        return _null_rows(issued_at)
 
     daily_T_mean = sum(hm_T.values()) / len(hm_T)
 
     climo_T_now  = _interp_hm(hm_T,  t_now)
     climo_Td_now = _interp_hm(hm_Td, t_now)
     if climo_T_now is None or climo_Td_now is None:
-        return []
+        return _null_rows(issued_at)
     climo_DD_now = climo_T_now - climo_Td_now
 
     # pressure departure from 30d mean
@@ -149,13 +165,10 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
 
         T_base = _interp_hm(hm_T, t_valid)
         Td_base_valid = _interp_hm(hm_Td, t_valid)
-        anchor_T = (obs_T - _interp_hm(hm_T, t_now)) if obs_T is not None and _interp_hm(hm_T, t_now) is not None else None
+        t_now_interp = _interp_hm(hm_T, t_now)
+        anchor_T = (obs_T - t_now_interp) if obs_T is not None and t_now_interp is not None else None
 
-        if T_base is None or anchor_T is None:
-            continue
-
-        dev = T_base - daily_T_mean
-
+        dev = (T_base - daily_T_mean) if T_base is not None else None
         td_decay = math.exp(-_TD_DECAY_K * lead)
 
         member_vals: dict[int, dict[str, float | None]] = {
@@ -164,33 +177,30 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
 
         for mid, window_hours, use_pressure in _MEMBERS:
             ws = window_cache[window_hours]
-            if ws is None:
+            if ws is None or T_base is None or anchor_T is None or dev is None:
                 continue
 
             dd_anom = ws["mean_dd"] - climo_DD_now
             td_anom = ws["mean_td"] - climo_Td_now
 
-            # temperature: persistent DD anomaly scales diurnal deviation from mean
             amp_adj = dd_anom * _AMP_SENSITIVITY * dev
             if use_pressure and p_dep is not None:
-                # pressure ridge boost applies only when above daily mean (daytime)
                 p_adj = p_dep * _P_SENSITIVITY * max(0.0, dev)
             else:
                 p_adj = 0.0
 
             member_vals[mid]["temperature"] = T_base + anchor_T + amp_adj + p_adj
 
-            # dewpoint: persistent Td anomaly decays toward climo at valid time
             if Td_base_valid is not None:
                 member_vals[mid]["dewpoint"] = Td_base_valid + td_anom * td_decay
 
         for mid, _, _ in _MEMBERS:
             for variable in VAR_COL:
-                value = member_vals[mid][variable]
                 rows.append({
                     "model_id": MODEL_ID, "model": MODEL_NAME, "member_id": mid,
                     "issued_at": issued_at, "valid_at": valid_at,
-                    "lead_hours": lead, "variable": variable, "value": value,
+                    "lead_hours": lead, "variable": variable,
+                    "value": member_vals[mid][variable],
                 })
 
         # member_id=0: weighted mean + spread
