@@ -4369,9 +4369,12 @@ def _write_fragment(html: str, out_dir: Path) -> None:
     scripts_end = html.index("\n</body>")
     scripts_html = html[scripts_start:scripts_end]
 
-    (out_dir / "barogram-style.css").write_text(css, encoding="utf-8")
-    (out_dir / "barogram-body.html").write_text(body_html, encoding="utf-8")
-    (out_dir / "barogram-scripts.html").write_text(scripts_html, encoding="utf-8")
+    def _strip_trailing(s: str) -> str:
+        return "\n".join(line.rstrip() for line in s.splitlines()) + "\n"
+
+    (out_dir / "barogram-style.css").write_text(_strip_trailing(css), encoding="utf-8")
+    (out_dir / "barogram-body.html").write_text(_strip_trailing(body_html), encoding="utf-8")
+    (out_dir / "barogram-scripts.html").write_text(_strip_trailing(scripts_html), encoding="utf-8")
 
 
 def generate(
