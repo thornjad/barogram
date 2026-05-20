@@ -6,6 +6,8 @@ import pytest
 
 import db as dbmod
 
+collect_ignore_glob = ["*sync-conflict*"]
+
 _MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
 
 
