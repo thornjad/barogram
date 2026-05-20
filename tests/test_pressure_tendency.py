@@ -150,3 +150,38 @@ def test_exp_weights_half_life():
 def test_exp_weights_older_is_lower():
     result = _exp_weights([-2.0, 0.0], half_life_h=1.0)
     assert result[0] < result[1]
+
+
+# --- _apply_mean_reversion ---
+
+from models.pressure_tendency import _apply_mean_reversion, _REVERSION_LAMBDA
+
+
+def test_apply_mean_reversion_at_mean_is_identity():
+    result = _apply_mean_reversion(993.0, 993.0, 24)
+    assert abs(result - 993.0) < 1e-9
+
+
+def test_apply_mean_reversion_reduces_positive_deviation():
+    raw, mean, lead = 1400.0, 993.0, 24
+    result = _apply_mean_reversion(raw, mean, lead)
+    assert mean < result < raw
+
+
+def test_apply_mean_reversion_reduces_negative_deviation():
+    raw, mean, lead = 800.0, 993.0, 24
+    result = _apply_mean_reversion(raw, mean, lead)
+    assert raw < result < mean
+
+
+def test_apply_mean_reversion_formula():
+    raw, mean, lead = 1200.0, 993.0, 12
+    expected = mean + (raw - mean) * math.exp(-_REVERSION_LAMBDA * lead)
+    assert abs(_apply_mean_reversion(raw, mean, lead) - expected) < 1e-9
+
+
+def test_apply_mean_reversion_short_lead_retains_more():
+    raw, mean = 1200.0, 993.0
+    r6 = _apply_mean_reversion(raw, mean, 6)
+    r24 = _apply_mean_reversion(raw, mean, 24)
+    assert r6 > r24

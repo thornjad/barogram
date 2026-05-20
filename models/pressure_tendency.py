@@ -58,6 +58,13 @@ _MIN_PTS = {1: 2, 2: 3}
 _TENDENCY_WINDOW_SEC = 3 * 3600  # 3h
 _TENDENCY_LOOKUP_SEC = 600       # ±10 min
 _FUTURE_LOOKUP_SEC = 900         # ±15 min
+_REVERSION_LAMBDA = 0.10         # per hour; e-folding time 10h
+
+def _apply_mean_reversion(raw: float, p_mean: float, lead_h: float) -> float:
+    """Taper polynomial extrapolation toward p_mean using OU mean reversion."""
+    damp = math.exp(-_REVERSION_LAMBDA * lead_h)
+    return p_mean + (raw - p_mean) * damp
+
 
 def _find_nearest_ts(sorted_ts, target, max_delta=600):
     """Binary search for the nearest timestamp within max_delta seconds of target."""
@@ -300,6 +307,9 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
     transfer_fns = _build_transfer_fns(all_obs, issued_at)
     zambretti_conds = _build_zambretti_conditionals(all_obs, issued_at)
 
+    p_hist = [r["station_pressure"] for r in all_obs if r["station_pressure"] is not None]
+    p_mean = sum(p_hist) / len(p_hist) if p_hist else None
+
     # --- zambretti member (id=1) ---
     zambretti_vals = {}
     row_past = db.nearest_tempest_obs(
@@ -359,7 +369,8 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
         for variable, col in VARIABLES.items():
             for lead in LEAD_HOURS:
                 if col == "station_pressure":
-                    val = _poly_eval(coefs, float(lead))
+                    raw = _poly_eval(coefs, float(lead))
+                    val = _apply_mean_reversion(raw, p_mean, float(lead)) if p_mean is not None else raw
                 else:
                     tf = transfer_fns.get((col, lead))
                     obs_val = obs[col]

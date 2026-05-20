@@ -9,7 +9,11 @@ A physical barogram records pressure tendency over time. This is one of the olde
 
 ## Pressure forecasting
 
-For each regression member, a polynomial is fit to recent `(timestamp, station_pressure)` observations. Time is centered relative to `issued_at` (t=0 = now, t=-1 = one hour ago) for numerical stability. The polynomial is then extrapolated to each `valid_at` to produce the pressure forecast.
+For each regression member, a polynomial is fit to recent `(timestamp, station_pressure)` observations. Time is centered relative to `issued_at` (t=0 = now, t=-1 = one hour ago) for numerical stability. The polynomial is then extrapolated to each `valid_at`, and the result is passed through an Ornstein–Uhlenbeck mean reversion step before being stored:
+
+    p_forecast = p_mean + (p_raw - p_mean) * exp(-λ * lead_hours)
+
+where `p_mean` is the all-time mean of historical station pressures and `λ = 0.10` per hour (e-folding time of 10 hours). At a 6h lead, roughly 55% of the polynomial's deviation from the mean is retained; at 24h, only 9% is retained. This prevents physically impossible extrapolations (unconstrained quadratic fits over 1–6h of data can otherwise diverge to thousands of hPa at the 24h lead) while still allowing the polynomial signal to meaningfully influence shorter-range forecasts. The Zambretti member is unaffected — it already uses conditional historical means and does not extrapolate.
 
 Members differ in:
 - **Window length**: how far back in time observations are drawn from (1h, 3h, or 6h)
