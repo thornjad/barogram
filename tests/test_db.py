@@ -296,28 +296,33 @@ def test_precip_event_count_since_filter():
 # --- climo_precip_bss_reference ---
 
 def test_climo_precip_bss_reference_basic():
+    """reference uses observed rain frequency, not predicted probability."""
     conn = make_output_db()
-    conn.execute(
-        "insert into forecasts (model_id, model, member_id, issued_at, valid_at, lead_hours, "
-        "variable, value, observed, error, mae, scored_at) "
-        "values (2, 'climatological_mean', 0, 100, 100, 6, 'precip_prob', 0.05, 0.0, 0.05, 0.0025, 200)"
-    )
+    # 3 dry + 1 rain -> p_obs = 0.25, ref = 0.25 * 0.75
+    for i, obs in enumerate([0.0, 0.0, 0.0, 1.0]):
+        conn.execute(
+            "insert into forecasts (model_id, model, member_id, issued_at, valid_at, lead_hours, "
+            "variable, value, observed, error, mae, scored_at) "
+            "values (1, 'persistence', 0, ?, ?, 6, 'precip_prob', 0.1, ?, 0.0, 0.0, 200)",
+            (100 + i, 100 + i, obs),
+        )
     result = db.climo_precip_bss_reference(conn)
     assert 6 in result
-    assert abs(result[6] - 0.05 * 0.95) < 1e-9
+    assert abs(result[6] - 0.25 * 0.75) < 1e-9
 
 
-def test_climo_precip_bss_reference_unscored():
-    """works with unscored forecasts; scored_at does not gate the reference."""
+def test_climo_precip_bss_reference_all_leads():
+    """reference is computed per lead_hours."""
     conn = make_output_db()
-    conn.execute(
-        "insert into forecasts (model_id, model, member_id, issued_at, valid_at, lead_hours, "
-        "variable, value) "
-        "values (2, 'climatological_mean', 0, 100, 100, 12, 'precip_prob', 0.10)"
-    )
+    for lead in [6, 12]:
+        conn.execute(
+            "insert into forecasts (model_id, model, member_id, issued_at, valid_at, lead_hours, "
+            "variable, value, observed, error, mae, scored_at) "
+            "values (1, 'persistence', 0, 100, 100, ?, 'precip_prob', 0.1, 1.0, 0.0, 0.0, 200)",
+            (lead,),
+        )
     result = db.climo_precip_bss_reference(conn)
-    assert 12 in result
-    assert abs(result[12] - 0.10 * 0.90) < 1e-9
+    assert set(result.keys()) == {6, 12}
 
 
 def test_climo_precip_bss_reference_empty():

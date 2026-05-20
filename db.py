@@ -658,22 +658,24 @@ def precip_event_count(conn: sqlite3.Connection, since: int = 0) -> int:
 
 
 def climo_precip_bss_reference(conn: sqlite3.Connection) -> dict[int, float]:
-    """Theoretical Brier skill reference for precip_prob: p * (1 - p) per lead_hours.
+    """Brier skill score reference for precip_prob: p * (1 - p) per lead_hours.
 
-    Uses the climatological_mean model's average predicted probability as p,
-    which is stable even when the scored sample contains few rain events.
+    Uses the observed rain frequency across all scored precip_prob forecasts as p
+    (sample climatology). This is stable across all lead times and does not depend
+    on the specific hour any particular climo forecast was issued.
     """
     rows = conn.execute(
         """
-        select lead_hours, avg(value) as p
+        select lead_hours,
+               avg(case when observed = 1.0 then 1.0 else 0.0 end) as p_obs
         from forecasts
-        where model = 'climatological_mean'
-          and variable = 'precip_prob'
-          and value is not null
+        where variable = 'precip_prob'
+          and scored_at is not null
+          and observed is not null
         group by lead_hours
         """
     ).fetchall()
-    return {r["lead_hours"]: r["p"] * (1.0 - r["p"]) for r in rows if r["p"] is not None}
+    return {r["lead_hours"]: r["p_obs"] * (1.0 - r["p_obs"]) for r in rows if r["p_obs"] is not None}
 
 
 def accuracy_run_count_multi(conn: sqlite3.Connection, since_epochs: list[int]) -> dict[int, int]:
