@@ -669,7 +669,6 @@ def climo_precip_bss_reference(conn: sqlite3.Connection) -> dict[int, float]:
         from forecasts
         where model = 'climatological_mean'
           and variable = 'precip_prob'
-          and scored_at is not null
           and value is not null
         group by lead_hours
         """

@@ -307,6 +307,19 @@ def test_climo_precip_bss_reference_basic():
     assert abs(result[6] - 0.05 * 0.95) < 1e-9
 
 
+def test_climo_precip_bss_reference_unscored():
+    """works with unscored forecasts; scored_at does not gate the reference."""
+    conn = make_output_db()
+    conn.execute(
+        "insert into forecasts (model_id, model, member_id, issued_at, valid_at, lead_hours, "
+        "variable, value) "
+        "values (2, 'climatological_mean', 0, 100, 100, 12, 'precip_prob', 0.10)"
+    )
+    result = db.climo_precip_bss_reference(conn)
+    assert 12 in result
+    assert abs(result[12] - 0.10 * 0.90) < 1e-9
+
+
 def test_climo_precip_bss_reference_empty():
     conn = make_output_db()
     result = db.climo_precip_bss_reference(conn)
