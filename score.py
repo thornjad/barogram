@@ -25,7 +25,7 @@ def _build_obs_index(obs_rows: list) -> tuple[list, dict]:
 
 
 def _find_surrounding_obs(
-    sorted_ts: list, obs_by_ts: dict, target: int, window_sec: int = 1800
+    sorted_ts: list, obs_by_ts: dict, target: int, window_sec: int = 5400
 ) -> tuple:
     """Return (pre_obs, post_obs) — obs at or before AND at or after target within window.
 
@@ -60,6 +60,40 @@ def _precip_occurred(pre_obs, post_obs) -> float | None:
     if pre_date != post_date:
         return None  # midnight crossing — can't reliably compute delta
     return 1.0 if max(0.0, post_p - pre_p) > 0.1 else 0.0
+
+
+def _precip_in_window(
+    sorted_ts: list, obs_by_ts: dict, target: int, half_window_sec: int = 10800
+) -> float | None:
+    """Return 1.0 if >= 0.1mm fell in [target-half_window, target+half_window], 0.0 if not.
+
+    Sums incremental deltas across all consecutive obs pairs in the window.
+    When the calendar date changes between a pair, the post-reset value is
+    treated as fresh accumulation since midnight.
+    Returns None when fewer than 2 obs exist in the window.
+    """
+    lo = target - half_window_sec
+    hi = target + half_window_sec
+    i_lo = bisect.bisect_left(sorted_ts, lo)
+    i_hi = bisect.bisect_right(sorted_ts, hi)
+    window_ts = sorted_ts[i_lo:i_hi]
+    if len(window_ts) < 2:
+        return None
+    total = 0.0
+    for i in range(1, len(window_ts)):
+        prev = obs_by_ts[window_ts[i - 1]]
+        curr = obs_by_ts[window_ts[i]]
+        p_prev = prev["precip_accum_day"]
+        p_curr = curr["precip_accum_day"]
+        if p_prev is None or p_curr is None:
+            continue
+        prev_date = datetime.fromtimestamp(prev["timestamp"]).date()
+        curr_date = datetime.fromtimestamp(curr["timestamp"]).date()
+        if curr_date != prev_date:
+            total += max(0.0, p_curr)
+        else:
+            total += max(0.0, p_curr - p_prev)
+    return 1.0 if total > 0.1 else 0.0
 
 
 def _find_nearest_obs(
@@ -108,23 +142,21 @@ def run(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
     if scorable:
         earliest = min(r["valid_at"] for r in scorable)
         latest = max(r["valid_at"] for r in scorable)
-        raw = db.tempest_obs_range_for_scoring(conn_in, earliest, latest)
+        raw = db.tempest_obs_range_for_scoring(conn_in, earliest, latest, window_sec=10800)
         sorted_ts, obs_by_ts = _build_obs_index(raw)
 
     scored_rows = []
     for row in scorable:
-        obs = _find_nearest_obs(sorted_ts, obs_by_ts, row["valid_at"])
-        if obs is None:
-            skipped += 1
-            continue
-
         if row["variable"] == "precip_prob":
-            pre, post = _find_surrounding_obs(sorted_ts, obs_by_ts, row["valid_at"])
-            observed = _precip_occurred(pre, post)
+            observed = _precip_in_window(sorted_ts, obs_by_ts, row["valid_at"])
             if observed is None:
                 skipped += 1
                 continue
         else:
+            obs = _find_nearest_obs(sorted_ts, obs_by_ts, row["valid_at"])
+            if obs is None:
+                skipped += 1
+                continue
             col = _OBS_COLUMN.get(row["variable"])
             if col is None:
                 skipped += 1

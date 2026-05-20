@@ -1,7 +1,7 @@
 import time
 
 import score
-from score import _precip_occurred
+from score import _precip_occurred, _precip_in_window, _build_obs_index
 from tests.conftest import make_input_db, make_output_db
 
 _NOW = int(time.time())
@@ -263,3 +263,74 @@ def test_null_obs_column_is_skipped():
     result = score.run(conn_in, conn_out)
 
     assert result == {"scored": 0, "skipped": 1}
+
+
+def test_wider_window_catches_obs_outside_30_min():
+    """obs at ±75 min are included after window expansion to ±90 min."""
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    _insert_obs(conn_in, _PAST - 4500, precip_accum_day=0.0)
+    _insert_obs(conn_in, _PAST + 4500, precip_accum_day=0.5)
+    _insert_forecast(conn_out, "precip_prob", 0.7, _PAST)
+    result = score.run(conn_in, conn_out)
+    assert result["scored"] == 1
+    row = conn_out.execute("select observed from forecasts").fetchone()
+    assert row["observed"] == 1.0
+
+
+# --- _precip_in_window ---
+
+def _make_precip_obs_index(pairs):
+    """Build obs index from (timestamp, precip_accum_day) pairs."""
+    rows = [{"timestamp": ts, "precip_accum_day": p,
+             "air_temp": 18.0, "dew_point": 10.0, "station_pressure": 1013.0}
+            for ts, p in pairs]
+    return _build_obs_index(rows)
+
+
+def test_precip_in_window_detects_rain():
+    sorted_ts, obs_by_ts = _make_precip_obs_index([
+        (_PAST - 3600, 0.0), (_PAST + 3600, 0.5),
+    ])
+    assert _precip_in_window(sorted_ts, obs_by_ts, _PAST) == 1.0
+
+
+def test_precip_in_window_no_rain():
+    sorted_ts, obs_by_ts = _make_precip_obs_index([
+        (_PAST - 3600, 5.0), (_PAST + 3600, 5.0),
+    ])
+    assert _precip_in_window(sorted_ts, obs_by_ts, _PAST) == 0.0
+
+
+def test_precip_in_window_sums_multiple_increments():
+    # three increments of 0.04mm: total 0.12mm > 0.1 -> 1.0
+    sorted_ts, obs_by_ts = _make_precip_obs_index([
+        (_PAST - 3600, 0.0), (_PAST, 0.04), (_PAST + 3600, 0.08), (_PAST + 7200, 0.12),
+    ])
+    assert _precip_in_window(sorted_ts, obs_by_ts, _PAST) == 1.0
+
+
+def test_precip_in_window_obs_outside_window_ignored():
+    # obs at ±20000s are outside the ±10800s window — <2 obs in window -> None
+    sorted_ts, obs_by_ts = _make_precip_obs_index([
+        (_PAST - 20000, 0.0), (_PAST + 20000, 5.0),
+    ])
+    assert _precip_in_window(sorted_ts, obs_by_ts, _PAST) is None
+
+
+def test_precip_in_window_none_when_insufficient_obs():
+    sorted_ts, obs_by_ts = _make_precip_obs_index([(_PAST, 0.0)])
+    assert _precip_in_window(sorted_ts, obs_by_ts, _PAST) is None
+
+
+def test_precip_in_window_full_cycle_via_run():
+    """score.run() uses 6h window; obs at ±10000s (2.8h) are now included."""
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    _insert_obs(conn_in, _PAST - 10000, precip_accum_day=0.0)
+    _insert_obs(conn_in, _PAST + 10000, precip_accum_day=0.5)
+    _insert_forecast(conn_out, "precip_prob", 0.7, _PAST)
+    result = score.run(conn_in, conn_out)
+    assert result["scored"] == 1
+    row = conn_out.execute("select observed from forecasts").fetchone()
+    assert row["observed"] == 1.0

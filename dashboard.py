@@ -3915,7 +3915,7 @@ def _acc_cls(pct: float | None) -> str:
     return " acc-poor"
 
 
-def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set | None = None) -> str:
+def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set | None = None, precip_bss_ref: dict | None = None) -> str:
     """Forecast skill table: rows=models, cols=lead times, filterable by variable."""
     if not rows:
         return '<p class="muted">no scored forecasts</p>'
@@ -3924,7 +3924,11 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
     climo_mae: dict = {}
     for r in rows:
         if r["model"] == "climatological_mean" and r["variable"] in _ACC_VARIABLES:
-            climo_mae[(r["variable"], r["lead_hours"])] = r["avg_mae"]
+            var, lead = r["variable"], r["lead_hours"]
+            if var == "precip_prob" and precip_bss_ref and lead in precip_bss_ref:
+                climo_mae[(var, lead)] = precip_bss_ref[lead]
+            else:
+                climo_mae[(var, lead)] = r["avg_mae"]
 
     model_data: dict = {}
     model_meta: dict = {}
@@ -4009,7 +4013,7 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
     )
 
 
-def _overall_accuracy_html(rows: list, precip_events: int = 0) -> str:
+def _overall_accuracy_html(rows: list, precip_events: int = 0, precip_bss_ref: dict | None = None) -> str:
     """Avg forecast skill per model across temperature/dewpoint/pressure.
 
     When precip_events >= _MIN_PRECIP_BRIER, precip_prob (BSS) is also included.
@@ -4028,7 +4032,11 @@ def _overall_accuracy_html(rows: list, precip_events: int = 0) -> str:
     climo_mae: dict = {}
     for r in rows:
         if r["model"] == "climatological_mean" and r["variable"] in _OVERALL_VARS:
-            climo_mae[(r["variable"], r["lead_hours"])] = r["avg_mae"]
+            var, lead = r["variable"], r["lead_hours"]
+            if var == "precip_prob" and precip_bss_ref and lead in precip_bss_ref:
+                climo_mae[(var, lead)] = precip_bss_ref[lead]
+            else:
+                climo_mae[(var, lead)] = r["avg_mae"]
 
     model_skills: dict[str, list] = {}
     model_meta: dict = {}
@@ -4439,6 +4447,7 @@ def generate(
     acc_rows_10r = db.accuracy_by_lead(conn_out, 10)
     acc_count_10r = db.accuracy_run_count_last_n(conn_out, 10)
     _precip_events = {s: db.precip_event_count(conn_out, s) for s in [_14d, _120d, 0]}
+    _bss_ref = db.climo_precip_bss_reference(conn_out)
     _skill_ts = db.skill_timeseries_multi(conn_out, [_14d, _120d, 0], precip_events=_precip_events)
     skill_ts_html = _skill_timeseries_html()
     skill_ts_js = _skill_timeseries_js(
@@ -4483,13 +4492,13 @@ def generate(
         overall_parts.append(
             f'<div id="acc-overall-{wid}"{hidden}>'
             f'{run_note}'
-            f'{_overall_accuracy_html(rows, precip_events=_win_precip[wid])}'
+            f'{_overall_accuracy_html(rows, precip_events=_win_precip[wid], precip_bss_ref=_bss_ref)}'
             f'</div>'
         )
         lead_parts.append(
             f'<div id="acc-lead-{wid}"{hidden}>'
             f'{run_note}'
-            f'{_accuracy_lead_table_html(rows, acc_lead_times, member_models if wid == "10r" else None)}'
+            f'{_accuracy_lead_table_html(rows, acc_lead_times, member_models if wid == "10r" else None, precip_bss_ref=_bss_ref)}'
             f'</div>'
         )
     overall_accuracy_html = "".join(overall_parts)

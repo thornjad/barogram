@@ -148,3 +148,19 @@ def test_overall_accuracy_includes_precip_at_threshold():
     # average = (60 + (-4900)) / 2 = -2420%
     html = dashboard._overall_accuracy_html(_base_rows(), precip_events=5)
     assert "-2420%" in html
+
+
+def test_overall_accuracy_uses_theoretical_bss_reference():
+    """precip_prob skill uses p*(1-p) not the actual scored climo MAE."""
+    rows = [
+        _make_acc_row(2, "climatological_mean", "base", "temperature", 24, 5.0),
+        _make_acc_row(2, "climatological_mean", "base", "precip_prob", 24, 0.0001),
+        _make_acc_row(200, "nws", "external", "temperature", 24, 2.0),
+        _make_acc_row(200, "nws", "external", "precip_prob", 24, 0.05),
+    ]
+    bss_ref = {24: 0.02 * 0.98}  # p=0.02 -> 0.0196
+    html = dashboard._overall_accuracy_html(rows, precip_events=5, precip_bss_ref=bss_ref)
+    # temperature skill = (1 - 2/5)*100 = 60%
+    # precip skill = (1 - 0.05/0.0196)*100 ≈ -155%
+    # without fix: (1 - 0.05/0.0001)*100 = -49900%
+    assert "-49900%" not in html

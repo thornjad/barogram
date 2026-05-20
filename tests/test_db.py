@@ -293,6 +293,73 @@ def test_precip_event_count_since_filter():
     assert db.precip_event_count(conn, since=1_700_050_000) == 1
 
 
+# --- climo_precip_bss_reference ---
+
+def test_climo_precip_bss_reference_basic():
+    conn = make_output_db()
+    conn.execute(
+        "insert into forecasts (model_id, model, member_id, issued_at, valid_at, lead_hours, "
+        "variable, value, observed, error, mae, scored_at) "
+        "values (2, 'climatological_mean', 0, 100, 100, 6, 'precip_prob', 0.05, 0.0, 0.05, 0.0025, 200)"
+    )
+    result = db.climo_precip_bss_reference(conn)
+    assert 6 in result
+    assert abs(result[6] - 0.05 * 0.95) < 1e-9
+
+
+def test_climo_precip_bss_reference_empty():
+    conn = make_output_db()
+    result = db.climo_precip_bss_reference(conn)
+    assert result == {}
+
+
+# --- climo_precip_probability_6h ---
+
+_DAY_TS = 1_735_000_000  # arbitrary mid-day fixed timestamp
+
+
+def _insert_precip_obs(conn, ts, precip_accum_day):
+    conn.execute(
+        """insert into tempest_obs
+            (station_id, timestamp, air_temp, dew_point, station_pressure,
+             wind_avg, wind_gust, wind_direction,
+             precip_accum_day, solar_radiation, uv_index, lightning_count)
+        values ('KTEST', ?, 18.0, 10.0, 1013.0, 3.0, null, null, ?, null, null, null)""",
+        (ts, precip_accum_day),
+    )
+
+
+def test_climo_precip_probability_6h_no_rain():
+    import datetime
+    conn = make_input_db()
+    for i in range(40):
+        _insert_precip_obs(conn, _DAY_TS + i * 300, 0.0)
+    d = datetime.datetime.fromtimestamp(_DAY_TS)
+    result = db.climo_precip_probability_6h(conn, d.month, d.hour, min_obs=1)
+    assert result == 0.0
+
+
+def test_climo_precip_probability_6h_rain_within_window():
+    import datetime
+    conn = make_input_db()
+    for i in range(40):
+        _insert_precip_obs(conn, _DAY_TS + i * 300, 0.5 if i == 12 else 0.0)
+    d = datetime.datetime.fromtimestamp(_DAY_TS)
+    result = db.climo_precip_probability_6h(conn, d.month, d.hour, min_obs=1)
+    assert result is not None
+    assert result > 0.0
+
+
+def test_climo_precip_probability_6h_insufficient():
+    import datetime
+    conn = make_input_db()
+    _insert_precip_obs(conn, _DAY_TS, 0.0)
+    _insert_precip_obs(conn, _DAY_TS + 300, 0.0)
+    d = datetime.datetime.fromtimestamp(_DAY_TS)
+    result = db.climo_precip_probability_6h(conn, d.month, d.hour)
+    assert result is None
+
+
 # --- huber_delta_per_variable ---
 
 _BASE_ISSUED = 1_700_000_000

@@ -1,3 +1,4 @@
+import bisect
 import datetime
 import math
 import sqlite3
@@ -270,6 +271,69 @@ def climo_precip_probability(
     if row is None or row["n"] < min_obs:
         return None
     return row["precip_prob"]
+
+
+def climo_precip_probability_6h(
+    conn: sqlite3.Connection,
+    month: int,
+    hour: int,
+    min_obs: int = 30,
+    half_window_sec: int = 10800,
+) -> float | None:
+    """Fraction of historical (month, hour) targets where >= 0.1mm fell in
+    a half_window_sec window centered on that observation.
+
+    Uses incremental deltas between consecutive obs (same LAG logic as
+    climo_precip_probability) but checks a wider window around each target,
+    matching the 6h scoring window. Falls back to all-months same-hour
+    when the month bucket is sparse. Returns None when still insufficient.
+    """
+    rows = conn.execute(
+        """
+        select t.timestamp, t.precip_accum_day
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and t.precip_accum_day is not null
+        order by t.timestamp
+        """
+    ).fetchall()
+    if not rows:
+        return None
+
+    rain_ts: list[int] = []
+    for i in range(1, len(rows)):
+        p_prev = rows[i - 1]["precip_accum_day"]
+        p_curr = rows[i]["precip_accum_day"]
+        if p_prev is None or p_curr is None:
+            continue
+        prev_date = datetime.datetime.fromtimestamp(rows[i - 1]["timestamp"]).date()
+        curr_date = datetime.datetime.fromtimestamp(rows[i]["timestamp"]).date()
+        delta = max(0.0, p_curr) if curr_date != prev_date else max(0.0, p_curr - p_prev)
+        if delta >= 0.1:
+            rain_ts.append(rows[i]["timestamp"])
+
+    def _has_rain(target_ts: int) -> bool:
+        lo = target_ts - half_window_sec
+        hi = target_ts + half_window_sec
+        i = bisect.bisect_left(rain_ts, lo)
+        return i < len(rain_ts) and rain_ts[i] <= hi
+
+    def _matches(ts: int, m: int, h: int) -> bool:
+        d = datetime.datetime.fromtimestamp(ts)
+        return d.month == m and d.hour == h
+
+    targets_month = [r["timestamp"] for r in rows if _matches(r["timestamp"], month, hour)]
+    if len(targets_month) >= min_obs:
+        hits = sum(1 for t in targets_month if _has_rain(t))
+        return hits / len(targets_month)
+
+    targets_all = [r["timestamp"] for r in rows
+                   if datetime.datetime.fromtimestamp(r["timestamp"]).hour == hour]
+    if len(targets_all) < min_obs:
+        return None
+    hits = sum(1 for t in targets_all if _has_rain(t))
+    return hits / len(targets_all)
 
 
 def climo_bucket_obs(
@@ -591,6 +655,26 @@ def precip_event_count(conn: sqlite3.Connection, since: int = 0) -> int:
         (since,),
     ).fetchone()
     return row["n"] if row else 0
+
+
+def climo_precip_bss_reference(conn: sqlite3.Connection) -> dict[int, float]:
+    """Theoretical Brier skill reference for precip_prob: p * (1 - p) per lead_hours.
+
+    Uses the climatological_mean model's average predicted probability as p,
+    which is stable even when the scored sample contains few rain events.
+    """
+    rows = conn.execute(
+        """
+        select lead_hours, avg(value) as p
+        from forecasts
+        where model = 'climatological_mean'
+          and variable = 'precip_prob'
+          and scored_at is not null
+          and value is not null
+        group by lead_hours
+        """
+    ).fetchall()
+    return {r["lead_hours"]: r["p"] * (1.0 - r["p"]) for r in rows if r["p"] is not None}
 
 
 def accuracy_run_count_multi(conn: sqlite3.Connection, since_epochs: list[int]) -> dict[int, int]:
