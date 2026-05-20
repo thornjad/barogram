@@ -3924,11 +3924,13 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
     climo_mae: dict = {}
     for r in rows:
         if r["model"] == "climatological_mean" and r["variable"] in _ACC_VARIABLES:
-            var, lead = r["variable"], r["lead_hours"]
-            if var == "precip_prob" and precip_bss_ref and lead in precip_bss_ref:
-                climo_mae[(var, lead)] = precip_bss_ref[lead]
-            else:
-                climo_mae[(var, lead)] = r["avg_mae"]
+            climo_mae[(r["variable"], r["lead_hours"])] = r["avg_mae"]
+    # BSS reference overrides climo MAE for precip_prob; applied unconditionally
+    # so precip skill scores are available even when no scored climo precip
+    # forecasts exist in the current time window
+    if precip_bss_ref:
+        for lead, ref in precip_bss_ref.items():
+            climo_mae[("precip_prob", lead)] = ref
 
     model_data: dict = {}
     model_meta: dict = {}
@@ -4032,11 +4034,10 @@ def _overall_accuracy_html(rows: list, precip_events: int = 0, precip_bss_ref: d
     climo_mae: dict = {}
     for r in rows:
         if r["model"] == "climatological_mean" and r["variable"] in _OVERALL_VARS:
-            var, lead = r["variable"], r["lead_hours"]
-            if var == "precip_prob" and precip_bss_ref and lead in precip_bss_ref:
-                climo_mae[(var, lead)] = precip_bss_ref[lead]
-            else:
-                climo_mae[(var, lead)] = r["avg_mae"]
+            climo_mae[(r["variable"], r["lead_hours"])] = r["avg_mae"]
+    if precip_bss_ref:
+        for lead, ref in precip_bss_ref.items():
+            climo_mae[("precip_prob", lead)] = ref
 
     model_skills: dict[str, list] = {}
     model_meta: dict = {}
