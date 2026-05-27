@@ -1445,14 +1445,21 @@ def _rolling_mean(values: list, window: int = 10) -> list:
     return out
 
 
-def _mae_timeseries_data(timeseries_rows: list) -> dict:
+def _mae_timeseries_data(timeseries_rows: list, precip_bss_ref: dict | None = None) -> dict:
     """lead (str) -> model -> {is_baseline, is_persistence, is_ensemble, model_id,
                                series: {var|avg -> {x, y_ratio, y_ratio_rolling}}}
 
     y_ratio = skill vs climatological_mean for the same (var, lead, issued_at):
     MAE / climo_MAE (1.0 = matches climo). Average series averages dimensionless
     ratios across variables (safe to mix because units cancel).
+
+    For precip_prob the denominator is the theoretical Brier reference p*(1-p) from
+    precip_bss_ref (constant per lead). The per-run climo_mean Brier is unusable as a
+    denominator: on dry hours it collapses to ~0.0025 and produces 30×–50× ratios for
+    any honest probabilistic forecast. When precip_bss_ref is empty or missing a lead,
+    precip_prob ratios for that lead are emitted as None.
     """
+    bss_ref = precip_bss_ref or {}
     raw: dict = {}
     model_meta: dict = {}
     for row in timeseries_rows:
@@ -1465,6 +1472,7 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
     result: dict = {}
     for lead in sorted(raw):
         c_ts: dict = raw[lead].get("climatological_mean", {})
+        precip_ref = bss_ref.get(lead)
         result[str(lead)] = {}
         for model, vars_ in raw[lead].items():
             is_baseline = model == "climatological_mean"
@@ -1476,8 +1484,11 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
                 x, y_ratio = [], []
                 for issued in sorted(ts):
                     mae = ts[issued]
-                    c = c_var.get(issued)
-                    ratio = 1.0 if is_baseline else (mae / c if c else None)
+                    if var == "precip_prob":
+                        denom = precip_ref
+                    else:
+                        denom = c_var.get(issued)
+                    ratio = 1.0 if is_baseline else (mae / denom if denom else None)
                     x.append(fmt.iso_ts(issued))
                     y_ratio.append(ratio)
                 series[var] = {"x": x, "y_ratio": y_ratio, "y_ratio_rolling": _rolling_mean(y_ratio)}
@@ -4438,7 +4449,8 @@ def generate(
     all_members = db.all_members_for_ensemble_models(conn_out)
     ext_corrected_mae_rows = db.external_corrected_source_mae(conn_out)
     trajectory_rows = db.forecast_trajectory(conn_out, now - 72 * 3600)
-    misses_rows = db.recent_misses(conn_out, now - 14 * 86400)
+    _bss_ref = db.climo_precip_bss_reference(conn_out)
+    misses_rows = db.recent_misses(conn_out, now - 14 * 86400, precip_bss_ref=_bss_ref)
     _14d = now - 14 * 86400
     _120d = now - 120 * 86400
     _acc = db.accuracy_windows(conn_out, [_14d, _120d, 0])
@@ -4448,8 +4460,9 @@ def generate(
     acc_rows_10r = db.accuracy_by_lead(conn_out, 10)
     acc_count_10r = db.accuracy_run_count_last_n(conn_out, 10)
     _precip_events = {s: db.precip_event_count(conn_out, s) for s in [_14d, _120d, 0]}
-    _bss_ref = db.climo_precip_bss_reference(conn_out)
-    _skill_ts = db.skill_timeseries_multi(conn_out, [_14d, _120d, 0], precip_events=_precip_events)
+    _skill_ts = db.skill_timeseries_multi(
+        conn_out, [_14d, _120d, 0], precip_events=_precip_events, precip_bss_ref=_bss_ref
+    )
     skill_ts_html = _skill_timeseries_html()
     skill_ts_js = _skill_timeseries_js(
         _skill_timeseries_data(_skill_ts[_14d]),
@@ -4463,7 +4476,7 @@ def generate(
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
-    mae_ts = _mae_timeseries_data(timeseries)
+    mae_ts = _mae_timeseries_data(timeseries, precip_bss_ref=_bss_ref)
     bias_ts = _bias_timeseries_data(bias_ts_rows)
     heatmap = _heatmap_data(all_time_summary)
     diurnal = _diurnal_data(diurnal_rows)

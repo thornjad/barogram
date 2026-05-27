@@ -657,6 +657,33 @@ def precip_event_count(conn: sqlite3.Connection, since: int = 0) -> int:
     return row["n"] if row else 0
 
 
+def observed_precip_frequency_by_sector(conn: sqlite3.Connection) -> dict[tuple[int, int], float]:
+    """Observed rain frequency per (lead_hours, sector) across all scored precip_prob rows.
+
+    Used by cmd_tune to floor the precip_prob skill reference at the theoretical Huber
+    loss of a constant-rate forecaster.
+    """
+    rows = conn.execute(
+        """
+        select lead_hours,
+               case
+                   when cast(strftime('%H', valid_at, 'unixepoch', 'localtime') as integer) < 6  then 0
+                   when cast(strftime('%H', valid_at, 'unixepoch', 'localtime') as integer) < 12 then 1
+                   when cast(strftime('%H', valid_at, 'unixepoch', 'localtime') as integer) < 18 then 2
+                   else 3
+               end as sector,
+               avg(case when observed = 1.0 then 1.0 else 0.0 end) as p_obs
+        from forecasts
+        where variable = 'precip_prob'
+          and scored_at is not null
+          and observed is not null
+          and member_id = 0
+        group by lead_hours, sector
+        """
+    ).fetchall()
+    return {(r["lead_hours"], r["sector"]): r["p_obs"] for r in rows if r["p_obs"] is not None}
+
+
 def climo_precip_bss_reference(conn: sqlite3.Connection) -> dict[int, float]:
     """Brier skill score reference for precip_prob: p * (1 - p) per lead_hours.
 
@@ -719,7 +746,10 @@ _MIN_PRECIP_EVENTS = 5  # rain events required before BSS is included in average
 
 
 def skill_timeseries_multi(
-    conn: sqlite3.Connection, since_epochs: list, precip_events: dict | None = None
+    conn: sqlite3.Connection,
+    since_epochs: list,
+    precip_events: dict | None = None,
+    precip_bss_ref: dict | None = None,
 ) -> dict:
     """Per-day avg skill for ensemble/nws/tempest vs climo, across multiple time windows.
 
@@ -727,65 +757,91 @@ def skill_timeseries_multi(
     the table calculation exactly. Mixing MAE across variables before computing skill
     is wrong because temperature (°C) and pressure (hPa) are on different scales.
 
+    For temperature/dewpoint/pressure the denominator is the window-wide average MAE of
+    climatological_mean (MAE skill score). For precip_prob the denominator is the
+    theoretical Brier reference p*(1-p) from climo_precip_bss_reference; the actual
+    climo_mean Brier is near zero during dry-dominated windows and would explode the
+    ratio, corrupting the cross-variable mean.
+
     precip_events: {since_epoch: count} of observed rain events per window. When a
-    window has >= _MIN_PRECIP_EVENTS rain events, precip_prob (BSS) is included in the
-    average. Otherwise it is excluded: the near-zero climo Brier denominator during dry
-    spells makes BSS incomparable with MAESS and corrupts the cross-variable mean.
+    window has >= _MIN_PRECIP_EVENTS rain events, precip_prob is included in the
+    average. Below the threshold precip_prob is dropped because BSS estimates are too
+    noisy.
+
+    precip_bss_ref: {lead_hours: p*(1-p)} from climo_precip_bss_reference. Required
+    when precip_prob is included; if absent or empty, precip_prob is silently dropped
+    even when above the event threshold.
 
     Returns {since_epoch: list of row dicts with keys day, model_id, model, avg_skill}.
     Since = 0 is the all-time sentinel; issued_at >= 0 is always true for any valid epoch.
     """
+    bss_ref = precip_bss_ref or {}
     result = {}
     for since in since_epochs:
         n_precip = (precip_events or {}).get(since, 0)
-        base_vars = "('temperature', 'dewpoint', 'pressure')"
-        all_vars = "('temperature', 'dewpoint', 'pressure', 'precip_prob')"
-        var_clause = all_vars if n_precip >= _MIN_PRECIP_EVENTS else base_vars
-        rows = conn.execute(
+        include_precip = n_precip >= _MIN_PRECIP_EVENTS and bool(bss_ref)
+        base_vars = ("temperature", "dewpoint", "pressure")
+        active_vars = base_vars + (("precip_prob",) if include_precip else ())
+
+        climo_lookup: dict[tuple[str, int], float] = {}
+        var_placeholder = ",".join("?" * len(base_vars))
+        for r in conn.execute(
             f"""
-            with climo_ref as (
-                -- window-wide average climo MAE; stable denominator matching the table
-                select
-                    variable,
-                    lead_hours,
-                    avg(mae) as climo_mae
-                from forecasts
-                where scored_at is not null
-                  and member_id = 0
-                  and model_id = 2
-                  and variable in {var_clause}
-                  and issued_at >= ?
-                group by variable, lead_hours
-            ),
-            model_daily as (
-                select
-                    date(issued_at, 'unixepoch', 'localtime') as day,
-                    model_id,
-                    model,
-                    variable,
-                    lead_hours,
-                    avg(mae) as avg_mae
-                from forecasts
-                where scored_at is not null
-                  and member_id = 0
-                  and variable in {var_clause}
-                  and issued_at >= ?
-                group by day, model_id, model, variable, lead_hours
-            )
-            select
-                m.day,
-                m.model_id,
-                m.model,
-                avg((1.0 - m.avg_mae / c.climo_mae) * 100.0) as avg_skill
-            from model_daily m
-            join climo_ref c on c.variable = m.variable and c.lead_hours = m.lead_hours
-            where c.climo_mae > 0
-            group by m.day, m.model_id, m.model
-            order by m.day
+            select variable, lead_hours, avg(mae) as climo_mae
+            from forecasts
+            where scored_at is not null
+              and member_id = 0
+              and model_id = 2
+              and variable in ({var_placeholder})
+              and issued_at >= ?
+            group by variable, lead_hours
             """,
-            (since, since),
+            (*base_vars, since),
+        ).fetchall():
+            climo_lookup[(r["variable"], r["lead_hours"])] = r["climo_mae"]
+        if include_precip:
+            for lead, ref in bss_ref.items():
+                climo_lookup[("precip_prob", lead)] = ref
+
+        active_placeholder = ",".join("?" * len(active_vars))
+        daily_rows = conn.execute(
+            f"""
+            select
+                date(issued_at, 'unixepoch', 'localtime') as day,
+                model_id,
+                model,
+                variable,
+                lead_hours,
+                avg(mae) as avg_mae
+            from forecasts
+            where scored_at is not null
+              and member_id = 0
+              and variable in ({active_placeholder})
+              and issued_at >= ?
+            group by day, model_id, model, variable, lead_hours
+            order by day
+            """,
+            (*active_vars, since),
         ).fetchall()
-        result[since] = [dict(r) for r in rows]
+
+        agg: dict[tuple[str, int], dict] = {}
+        for r in daily_rows:
+            climo_mae = climo_lookup.get((r["variable"], r["lead_hours"]))
+            if climo_mae is None or climo_mae <= 0:
+                continue
+            skill = (1.0 - r["avg_mae"] / climo_mae) * 100.0
+            key = (r["day"], r["model_id"])
+            slot = agg.setdefault(key, {"sum": 0.0, "n": 0, "model": r["model"]})
+            slot["sum"] += skill
+            slot["n"] += 1
+
+        out = [
+            {"day": day, "model_id": mid, "model": slot["model"], "avg_skill": slot["sum"] / slot["n"]}
+            for (day, mid), slot in agg.items()
+            if slot["n"] > 0
+        ]
+        out.sort(key=lambda r: (r["day"], r["model_id"]))
+        result[since] = out
     return result
 
 
@@ -1137,44 +1193,65 @@ def forecast_trajectory(conn: sqlite3.Connection, since_ts: int) -> list:
     ).fetchall()
 
 
-def recent_misses(conn: sqlite3.Connection, since_ts: int, per_model: int = 10) -> list:
+def recent_misses(
+    conn: sqlite3.Connection,
+    since_ts: int,
+    per_model: int = 10,
+    precip_bss_ref: dict | None = None,
+) -> list:
     """Top per_model largest errors per source within the lookback window.
 
-    Ranks by mae/climo_mae so that precip_prob (Brier, range [0,1]) competes
-    fairly against continuous variables (MAE in physical units).
+    Ranks by mae/climo_mae so that variables on different scales compete fairly.
+    For precip_prob the denominator is the theoretical Brier reference p*(1-p) from
+    precip_bss_ref, not the actual climo_mean Brier — the latter is near zero during
+    dry-dominated windows and would make every wet-hour miss rank above every other
+    variable's miss.
     """
-    return conn.execute(
+    bss_ref = precip_bss_ref or {}
+    climo_rows = conn.execute(
         """
-        with climo as (
-            select variable, lead_hours, avg(mae) as climo_mae
-            from forecasts
-            where model = 'climatological_mean'
-              and scored_at is not null
-              and member_id = 0
-            group by variable, lead_hours
-        )
-        select model_id, model, variable, lead_hours, valid_at, value, observed, error, mae
-        from (
-            select f.model_id, f.model, f.variable, f.lead_hours,
-                   f.valid_at, f.value, f.observed, f.error, f.mae,
-                   row_number() over (
-                       partition by f.model_id
-                       order by case when c.climo_mae > 0
-                           then f.mae / c.climo_mae else f.mae
-                       end desc
-                   ) as rn
-            from forecasts f
-            left join climo c on c.variable = f.variable and c.lead_hours = f.lead_hours
-            where f.scored_at is not null
-              and f.member_id = 0
-              and f.valid_at >= ?
-              and f.value is not null
-        )
-        where rn <= ?
-        order by model_id, mae desc
-        """,
-        (since_ts, per_model),
+        select variable, lead_hours, avg(mae) as climo_mae
+        from forecasts
+        where model = 'climatological_mean'
+          and scored_at is not null
+          and member_id = 0
+          and variable in ('temperature', 'dewpoint', 'pressure')
+        group by variable, lead_hours
+        """
     ).fetchall()
+    climo_lookup: dict[tuple[str, int], float] = {
+        (r["variable"], r["lead_hours"]): r["climo_mae"] for r in climo_rows
+    }
+    for lead, ref in bss_ref.items():
+        climo_lookup[("precip_prob", lead)] = ref
+
+    raw = conn.execute(
+        """
+        select f.model_id, f.model, f.variable, f.lead_hours,
+               f.valid_at, f.value, f.observed, f.error, f.mae
+        from forecasts f
+        where f.scored_at is not null
+          and f.member_id = 0
+          and f.valid_at >= ?
+          and f.value is not null
+        """,
+        (since_ts,),
+    ).fetchall()
+
+    def rank_key(row) -> float:
+        c = climo_lookup.get((row["variable"], row["lead_hours"]))
+        return row["mae"] / c if c and c > 0 else row["mae"]
+
+    by_model: dict[int, list] = {}
+    for r in raw:
+        by_model.setdefault(r["model_id"], []).append(r)
+
+    out: list = []
+    for mid in sorted(by_model):
+        rows = sorted(by_model[mid], key=rank_key, reverse=True)[:per_model]
+        rows.sort(key=lambda r: r["mae"], reverse=True)
+        out.extend(rows)
+    return out
 
 
 def analog_candidates(
