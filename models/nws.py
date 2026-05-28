@@ -49,11 +49,7 @@ def _fetch(lat: float, lon: float) -> dict[int, dict]:
             unit = period.get("temperatureUnit", "F")
             temp_c = (temp - 32) * 5 / 9 if unit == "F" else float(temp)
             dew_c = (period.get("dewpoint") or {}).get("value")  # already °C
-            pop = (period.get("probabilityOfPrecipitation") or {}).get("value")
-            entry: dict = {"temperature": temp_c, "dewpoint": dew_c}
-            if pop is not None:
-                entry["precip_prob"] = pop / 100.0
-            result[ts] = entry
+            result[ts] = {"temperature": temp_c, "dewpoint": dew_c}
         return result
     except Exception as e:
         print(f"nws: fetch failed: {e}", file=sys.stderr)
@@ -87,7 +83,6 @@ def run(obs, issued_at: int, *, conn_in=None, location=None) -> list[dict]:
         for variable, key in [
             ("temperature", "temperature"),
             ("dewpoint", "dewpoint"),
-            ("precip_prob", "precip_prob"),
         ]:
             if entry.get(key) is None:
                 continue

@@ -25,7 +25,7 @@ NEEDS_CONN_OUT = True
 NEEDS_CONF = True
 
 LEAD_HOURS = [6, 12, 18, 24]
-_VARIABLES = ["temperature", "dewpoint", "precip_prob"]
+_VARIABLES = ["temperature", "dewpoint"]
 _MIN_SAMPLES = 3
 _OBS_WINDOW = 600  # ±10 min for matching historical obs to issued_at
 _NWS_MEMBERS = frozenset({1, 2, 3, 4, 5})

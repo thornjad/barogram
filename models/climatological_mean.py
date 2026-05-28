@@ -36,14 +36,4 @@ def run(obs, issued_at: int, *, conn_in) -> list[dict]:
                 "variable": variable,
                 "value": means.get(variable),
             })
-        precip_p = db.climo_precip_probability_6h(conn_in, t.month, t.hour, MIN_OBS)
-        rows.append({
-            "model_id": MODEL_ID,
-            "model": MODEL_NAME,
-            "issued_at": issued_at,
-            "valid_at": valid_at,
-            "lead_hours": lead,
-            "variable": "precip_prob",
-            "value": precip_p,
-        })
     return rows

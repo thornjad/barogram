@@ -105,29 +105,6 @@ def _exp_weights(t_vals, half_life_h):
     return [math.exp(lam * t) for t in t_vals]
 
 
-def _precip_prob(window_obs, t_all, w_all, obs, lead):
-    pairs = [
-        (t_all[i], r["precip_accum_day"], (w_all[i] if w_all is not None else 1.0))
-        for i, r in enumerate(window_obs)
-        if r["precip_accum_day"] is not None
-    ]
-    rate = 0.0
-    if len(pairs) >= 2:
-        t_f, y_f, w_f = zip(*pairs)
-        coefs = _poly_fit(list(t_f), list(y_f), 1, list(w_f))
-        if coefs:
-            rate = coefs[1]
-
-    temp = obs.get("air_temp")
-    dp = obs.get("dew_point")
-    dp_dep = (temp - dp) if (temp is not None and dp is not None) else None
-
-    if rate > 0.2:
-        return min(0.95, rate / (rate + 0.3)) * math.exp(-lead / 12.0)
-    if dp_dep is not None:
-        return max(0.0, 0.35 - dp_dep * 0.025) if dp_dep < 14.0 else 0.0
-    return None
-
 
 def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
     if all_obs is None:
@@ -164,15 +141,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                         _poly_eval(coefs, float(lead)) if coefs is not None else None
                     )
 
-        for lead in LEAD_HOURS:
-            if max_lead_h is not None and lead > max_lead_h:
-                member_vals[(mid, "precip_prob", lead)] = None
-            else:
-                member_vals[(mid, "precip_prob", lead)] = _precip_prob(
-                    window_obs, t_all, w_all, obs, lead
-                )
-
-    all_variables = list(VARIABLES.keys()) + ["precip_prob"]
+    all_variables = list(VARIABLES.keys())
     rows = []
 
     for lead in LEAD_HOURS:
