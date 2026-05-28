@@ -170,14 +170,15 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                 mean = None
             elif weights:
                 w_pairs = [
-                    (weights.get((mid, variable, lead, _sector(valid_at)), None), v)
+                    (weights.get((mid, variable, lead, _sector(valid_at))), v)
                     for mid, v in valid_pairs
                 ]
-                if any(wt is None for wt, _ in w_pairs):
-                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                weighted = [(wt, v) for wt, v in w_pairs if wt is not None]
+                if weighted:
+                    total_w = sum(wt for wt, _ in weighted)
+                    mean = sum(wt * v for wt, v in weighted) / total_w
                 else:
-                    total_w = sum(wt for wt, _ in w_pairs)
-                    mean = sum(wt * v for wt, v in w_pairs) / total_w
+                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
             else:
                 mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
 

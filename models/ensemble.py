@@ -59,13 +59,16 @@ def run(obs, issued_at: int, *, conn_out, weights=None) -> list[dict]:
         cell_valid_at = next(iter(model_values.values()))[1]
         sector = _sector(cell_valid_at)
         if weights:
-            wdict = {mid: weights.get((mid, variable, lead_hours, sector)) for mid in model_values}
-            raw_w = (wdict if all(w is not None for w in wdict.values())
-                     else {mid: 1.0 for mid in model_values})
+            wdict = {mid: weights.get((mid, variable, lead_hours, sector))
+                     for mid in model_values}
+            raw_w = {mid: w for mid, w in wdict.items() if w is not None}
+            if not raw_w:
+                raw_w = {mid: 1.0 for mid in model_values}
         else:
             raw_w = {mid: 1.0 for mid in model_values}
         total_w = sum(raw_w.values())
-        mean = sum(raw_w[mid] * v for mid, (v, _) in model_values.items()) / total_w
+        mean = sum(raw_w[mid] * v for mid, (v, _) in model_values.items()
+                   if mid in raw_w) / total_w
 
         vals = [v for v, _ in model_values.values()]
         spread = math.sqrt(sum((v - mean) ** 2 for v in vals) / len(vals))

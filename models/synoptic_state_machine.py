@@ -204,14 +204,15 @@ def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None) -> list[dic
                 mean = None
             elif weights:
                 w_pairs = [
-                    (weights.get((mid, variable, lead, sector), None), v)
+                    (weights.get((mid, variable, lead, sector)), v)
                     for mid, v in valid_pairs
                 ]
-                if any(w is None for w, _ in w_pairs):
-                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                weighted = [(w, v) for w, v in w_pairs if w is not None]
+                if weighted:
+                    total_w = sum(w for w, _ in weighted)
+                    mean = sum(w * v for w, v in weighted) / total_w
                 else:
-                    total_w = sum(w for w, _ in w_pairs)
-                    mean = sum(w * v for w, v in w_pairs) / total_w
+                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
             else:
                 mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
 
