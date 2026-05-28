@@ -20,7 +20,6 @@ import models.dry_airmass_diurnal as dry_airmass_diurnal
 import models.full_state_analog as full_state_analog
 import models.multivariate_trend as multivariate_trend
 import models.airmass_diurnal as airmass_diurnal
-import models.airmass_precip as airmass_precip
 import models.bogo as bogo
 import models.climatological_mean as climatological_mean
 import models.climo_deviation as climo_deviation
@@ -44,16 +43,6 @@ def _mean_huber(errors: list, delta: float) -> float:
     return sum(_huber(e, delta) for e in errors) / len(errors)
 
 
-def _theoretical_precip_huber(p: float, delta: float) -> float:
-    """Expected Huber loss of a constant-p forecast over binary {0,1} observations.
-
-    Acts as a floor on the climo_mean reference for precip_prob: in dry-dominated
-    sectors the empirical climo Huber loss can collapse and overstate every member's
-    relative skill. The theoretical baseline is the Huber-equivalent of the standard
-    Brier skill-score reference p*(1-p).
-    """
-    return (1 - p) * _huber(p, delta) + p * _huber(1 - p, delta)
-
 
 _MODELS = [
     persistence,
@@ -63,7 +52,6 @@ _MODELS = [
     pressure_tendency,
     diurnal_curve,
     airmass_diurnal,
-    airmass_precip,
     analog,
     dry_airmass_diurnal,
     full_state_analog,
@@ -548,7 +536,6 @@ def cmd_tune(args, conf):
         barogram_ensemble.MODEL_ID: {
             "temperature":  climatological_mean.MODEL_ID,
             "dewpoint":     climatological_mean.MODEL_ID,
-            "precip_prob":  climatological_mean.MODEL_ID,
             "pressure":     persistence.MODEL_ID,
         }
     }
@@ -560,16 +547,6 @@ def cmd_tune(args, conf):
     print(f"Huber deltas ({args.huber_percentile:.0f}th percentile of abs error):")
     for var, d in sorted(huber_deltas.items()):
         print(f"  {var}: {d:.3f}")
-
-    # theoretical no-skill baseline for precip_prob: Huber loss of a constant-p
-    # forecast where p is the observed rain frequency per (lead, sector). Used to
-    # floor the climo_mean reference loss in dry-dominated cells where the empirical
-    # reference would collapse and overstate member skill.
-    precip_freq = db.observed_precip_frequency_by_sector(conn_out)
-    precip_floor: dict = {}
-    precip_delta = huber_deltas.get("precip_prob", 1.0)
-    for (lead, sector), p in precip_freq.items():
-        precip_floor[(lead, sector)] = _theoretical_precip_huber(p, precip_delta)
 
     raw_rows = db.raw_errors_by_sector(conn_out)
 
@@ -626,10 +603,6 @@ def cmd_tune(args, conf):
                     blended[mid] = p_h
             ref_mid = _SKILL_REF.get(model_id, {}).get(variable)
             ref_loss = blended.get(ref_mid) if ref_mid is not None else None
-            if ref_loss is not None and variable == "precip_prob":
-                floor = precip_floor.get((lead_hours, sector))
-                if floor is not None and floor > ref_loss:
-                    ref_loss = floor
             if ref_loss is None:
                 print(f"warning: no reference loss for {variable} lead={lead_hours}h "
                       f"sector={sector}, using inverse-Huber")

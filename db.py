@@ -229,112 +229,6 @@ def climo_bucket_means(
     }
 
 
-def climo_precip_probability(
-    conn: sqlite3.Connection,
-    month: int,
-    hour: int,
-    min_obs: int = 30,
-) -> float | None:
-    """Fraction of (month, hour) obs where measurable precip accumulated since previous obs.
-
-    Uses LAG within each calendar day so midnight resets don't create false positives.
-    Falls back to all-months same hour when the specific month bucket has fewer than
-    min_obs qualifying rows.
-    Returns None when fewer than min_obs rows exist even after fallback.
-    """
-    _cte = """
-        with lagged as (
-            select
-                cast(strftime('%m', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) as obs_month,
-                cast(strftime('%H', datetime(t.timestamp, 'unixepoch', 'localtime')) as integer) as obs_hour,
-                t.precip_accum_day,
-                lag(t.precip_accum_day) over (
-                    partition by date(t.timestamp, 'unixepoch', 'localtime')
-                    order by t.timestamp
-                ) as prev_precip
-            from tempest_obs t
-            join stations s on s.station_id = t.station_id
-            where s.source = 'tempest'
-        )
-        select
-            avg(case
-                when precip_accum_day is not null
-                     and max(0.0, precip_accum_day - coalesce(prev_precip, 0.0)) > 0.1
-                then 1.0 else 0.0
-            end) as precip_prob,
-            count(*) as n
-        from lagged
-        """
-    row = conn.execute(_cte + "where obs_month = ? and obs_hour = ?", (month, hour)).fetchone()
-    if row is None or row["n"] < min_obs:
-        row = conn.execute(_cte + "where obs_hour = ?", (hour,)).fetchone()
-    if row is None or row["n"] < min_obs:
-        return None
-    return row["precip_prob"]
-
-
-def climo_precip_probability_6h(
-    conn: sqlite3.Connection,
-    month: int,
-    hour: int,
-    min_obs: int = 30,
-    half_window_sec: int = 10800,
-) -> float | None:
-    """Fraction of historical (month, hour) targets where >= 0.1mm fell in
-    a half_window_sec window centered on that observation.
-
-    Uses incremental deltas between consecutive obs (same LAG logic as
-    climo_precip_probability) but checks a wider window around each target,
-    matching the 6h scoring window. Falls back to all-months same-hour
-    when the month bucket is sparse. Returns None when still insufficient.
-    """
-    rows = conn.execute(
-        """
-        select t.timestamp, t.precip_accum_day
-        from tempest_obs t
-        join stations s on s.station_id = t.station_id
-        where s.source = 'tempest'
-          and t.precip_accum_day is not null
-        order by t.timestamp
-        """
-    ).fetchall()
-    if not rows:
-        return None
-
-    rain_ts: list[int] = []
-    for i in range(1, len(rows)):
-        p_prev = rows[i - 1]["precip_accum_day"]
-        p_curr = rows[i]["precip_accum_day"]
-        if p_prev is None or p_curr is None:
-            continue
-        prev_date = datetime.datetime.fromtimestamp(rows[i - 1]["timestamp"]).date()
-        curr_date = datetime.datetime.fromtimestamp(rows[i]["timestamp"]).date()
-        delta = max(0.0, p_curr) if curr_date != prev_date else max(0.0, p_curr - p_prev)
-        if delta >= 0.1:
-            rain_ts.append(rows[i]["timestamp"])
-
-    def _has_rain(target_ts: int) -> bool:
-        lo = target_ts - half_window_sec
-        hi = target_ts + half_window_sec
-        i = bisect.bisect_left(rain_ts, lo)
-        return i < len(rain_ts) and rain_ts[i] <= hi
-
-    def _matches(ts: int, m: int, h: int) -> bool:
-        d = datetime.datetime.fromtimestamp(ts)
-        return d.month == m and d.hour == h
-
-    targets_month = [r["timestamp"] for r in rows if _matches(r["timestamp"], month, hour)]
-    if len(targets_month) >= min_obs:
-        hits = sum(1 for t in targets_month if _has_rain(t))
-        return hits / len(targets_month)
-
-    targets_all = [r["timestamp"] for r in rows
-                   if datetime.datetime.fromtimestamp(r["timestamp"]).hour == hour]
-    if len(targets_all) < min_obs:
-        return None
-    hits = sum(1 for t in targets_all if _has_rain(t))
-    return hits / len(targets_all)
-
 
 def climo_bucket_obs(
     conn: sqlite3.Connection,
@@ -642,68 +536,6 @@ def accuracy_run_count_last_n(conn: sqlite3.Connection, n: int) -> int:
     return row["cnt"] if row else 0
 
 
-def precip_event_count(conn: sqlite3.Connection, since: int = 0) -> int:
-    """Count of scored precip_prob rows where precipitation was observed (observed=1.0)."""
-    row = conn.execute(
-        """
-        select count(*) as n from forecasts
-        where variable = 'precip_prob'
-          and scored_at is not null
-          and observed = 1.0
-          and issued_at >= ?
-        """,
-        (since,),
-    ).fetchone()
-    return row["n"] if row else 0
-
-
-def observed_precip_frequency_by_sector(conn: sqlite3.Connection) -> dict[tuple[int, int], float]:
-    """Observed rain frequency per (lead_hours, sector) across all scored precip_prob rows.
-
-    Used by cmd_tune to floor the precip_prob skill reference at the theoretical Huber
-    loss of a constant-rate forecaster.
-    """
-    rows = conn.execute(
-        """
-        select lead_hours,
-               case
-                   when cast(strftime('%H', valid_at, 'unixepoch', 'localtime') as integer) < 6  then 0
-                   when cast(strftime('%H', valid_at, 'unixepoch', 'localtime') as integer) < 12 then 1
-                   when cast(strftime('%H', valid_at, 'unixepoch', 'localtime') as integer) < 18 then 2
-                   else 3
-               end as sector,
-               avg(case when observed = 1.0 then 1.0 else 0.0 end) as p_obs
-        from forecasts
-        where variable = 'precip_prob'
-          and scored_at is not null
-          and observed is not null
-          and member_id = 0
-        group by lead_hours, sector
-        """
-    ).fetchall()
-    return {(r["lead_hours"], r["sector"]): r["p_obs"] for r in rows if r["p_obs"] is not None}
-
-
-def climo_precip_bss_reference(conn: sqlite3.Connection) -> dict[int, float]:
-    """Brier skill score reference for precip_prob: p * (1 - p) per lead_hours.
-
-    Uses the observed rain frequency across all scored precip_prob forecasts as p
-    (sample climatology). This is stable across all lead times and does not depend
-    on the specific hour any particular climo forecast was issued.
-    """
-    rows = conn.execute(
-        """
-        select lead_hours,
-               avg(case when observed = 1.0 then 1.0 else 0.0 end) as p_obs
-        from forecasts
-        where variable = 'precip_prob'
-          and scored_at is not null
-          and observed is not null
-        group by lead_hours
-        """
-    ).fetchall()
-    return {r["lead_hours"]: r["p_obs"] * (1.0 - r["p_obs"]) for r in rows if r["p_obs"] is not None}
-
 
 def accuracy_run_count_multi(conn: sqlite3.Connection, since_epochs: list[int]) -> dict[int, int]:
     """accuracy_run_count for multiple since-epoch values in a single query.
@@ -742,14 +574,9 @@ def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list
     ).fetchall()
 
 
-_MIN_PRECIP_EVENTS = 5  # rain events required before BSS is included in averages
-
-
 def skill_timeseries_multi(
     conn: sqlite3.Connection,
     since_epochs: list,
-    precip_events: dict | None = None,
-    precip_bss_ref: dict | None = None,
 ) -> dict:
     """Per-day avg skill for ensemble/nws/tempest vs climo, across multiple time windows.
 
@@ -757,34 +584,15 @@ def skill_timeseries_multi(
     the table calculation exactly. Mixing MAE across variables before computing skill
     is wrong because temperature (°C) and pressure (hPa) are on different scales.
 
-    For temperature/dewpoint/pressure the denominator is the window-wide average MAE of
-    climatological_mean (MAE skill score). For precip_prob the denominator is the
-    theoretical Brier reference p*(1-p) from climo_precip_bss_reference; the actual
-    climo_mean Brier is near zero during dry-dominated windows and would explode the
-    ratio, corrupting the cross-variable mean.
-
-    precip_events: {since_epoch: count} of observed rain events per window. When a
-    window has >= _MIN_PRECIP_EVENTS rain events, precip_prob is included in the
-    average. Below the threshold precip_prob is dropped because BSS estimates are too
-    noisy.
-
-    precip_bss_ref: {lead_hours: p*(1-p)} from climo_precip_bss_reference. Required
-    when precip_prob is included; if absent or empty, precip_prob is silently dropped
-    even when above the event threshold.
-
     Returns {since_epoch: list of row dicts with keys day, model_id, model, avg_skill}.
     Since = 0 is the all-time sentinel; issued_at >= 0 is always true for any valid epoch.
     """
-    bss_ref = precip_bss_ref or {}
     result = {}
     for since in since_epochs:
-        n_precip = (precip_events or {}).get(since, 0)
-        include_precip = n_precip >= _MIN_PRECIP_EVENTS and bool(bss_ref)
-        base_vars = ("temperature", "dewpoint", "pressure")
-        active_vars = base_vars + (("precip_prob",) if include_precip else ())
+        active_vars = ("temperature", "dewpoint", "pressure")
 
         climo_lookup: dict[tuple[str, int], float] = {}
-        var_placeholder = ",".join("?" * len(base_vars))
+        var_placeholder = ",".join("?" * len(active_vars))
         for r in conn.execute(
             f"""
             select variable, lead_hours, avg(mae) as climo_mae
@@ -796,12 +604,9 @@ def skill_timeseries_multi(
               and issued_at >= ?
             group by variable, lead_hours
             """,
-            (*base_vars, since),
+            (*active_vars, since),
         ).fetchall():
             climo_lookup[(r["variable"], r["lead_hours"])] = r["climo_mae"]
-        if include_precip:
-            for lead, ref in bss_ref.items():
-                climo_lookup[("precip_prob", lead)] = ref
 
         active_placeholder = ",".join("?" * len(active_vars))
         daily_rows = conn.execute(
@@ -1197,17 +1002,11 @@ def recent_misses(
     conn: sqlite3.Connection,
     since_ts: int,
     per_model: int = 10,
-    precip_bss_ref: dict | None = None,
 ) -> list:
     """Top per_model largest errors per source within the lookback window.
 
     Ranks by mae/climo_mae so that variables on different scales compete fairly.
-    For precip_prob the denominator is the theoretical Brier reference p*(1-p) from
-    precip_bss_ref, not the actual climo_mean Brier — the latter is near zero during
-    dry-dominated windows and would make every wet-hour miss rank above every other
-    variable's miss.
     """
-    bss_ref = precip_bss_ref or {}
     climo_rows = conn.execute(
         """
         select variable, lead_hours, avg(mae) as climo_mae
@@ -1222,8 +1021,6 @@ def recent_misses(
     climo_lookup: dict[tuple[str, int], float] = {
         (r["variable"], r["lead_hours"]): r["climo_mae"] for r in climo_rows
     }
-    for lead, ref in bss_ref.items():
-        climo_lookup[("precip_prob", lead)] = ref
 
     raw = conn.execute(
         """

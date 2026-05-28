@@ -1,7 +1,6 @@
 import bisect
 import sqlite3
 import time
-from datetime import datetime
 
 import db
 
@@ -46,54 +45,6 @@ def _find_surrounding_obs(
             post = obs_by_ts[post_ts]
     return pre, post
 
-
-def _precip_occurred(pre_obs, post_obs) -> float | None:
-    """Return 1.0 if measurable precip accumulated between two obs, 0.0 if not, None if unknown."""
-    if pre_obs is None or post_obs is None:
-        return None
-    pre_p = pre_obs["precip_accum_day"]
-    post_p = post_obs["precip_accum_day"]
-    if pre_p is None or post_p is None:
-        return None
-    pre_date = datetime.fromtimestamp(pre_obs["timestamp"]).date()
-    post_date = datetime.fromtimestamp(post_obs["timestamp"]).date()
-    if pre_date != post_date:
-        return None  # midnight crossing — can't reliably compute delta
-    return 1.0 if max(0.0, post_p - pre_p) > 0.1 else 0.0
-
-
-def _precip_in_window(
-    sorted_ts: list, obs_by_ts: dict, target: int, half_window_sec: int = 10800
-) -> float | None:
-    """Return 1.0 if >= 0.1mm fell in [target-half_window, target+half_window], 0.0 if not.
-
-    Sums incremental deltas across all consecutive obs pairs in the window.
-    When the calendar date changes between a pair, the post-reset value is
-    treated as fresh accumulation since midnight.
-    Returns None when fewer than 2 obs exist in the window.
-    """
-    lo = target - half_window_sec
-    hi = target + half_window_sec
-    i_lo = bisect.bisect_left(sorted_ts, lo)
-    i_hi = bisect.bisect_right(sorted_ts, hi)
-    window_ts = sorted_ts[i_lo:i_hi]
-    if len(window_ts) < 2:
-        return None
-    total = 0.0
-    for i in range(1, len(window_ts)):
-        prev = obs_by_ts[window_ts[i - 1]]
-        curr = obs_by_ts[window_ts[i]]
-        p_prev = prev["precip_accum_day"]
-        p_curr = curr["precip_accum_day"]
-        if p_prev is None or p_curr is None:
-            continue
-        prev_date = datetime.fromtimestamp(prev["timestamp"]).date()
-        curr_date = datetime.fromtimestamp(curr["timestamp"]).date()
-        if curr_date != prev_date:
-            total += max(0.0, p_curr)
-        else:
-            total += max(0.0, p_curr - p_prev)
-    return 1.0 if total > 0.1 else 0.0
 
 
 def _find_nearest_obs(
@@ -147,27 +98,21 @@ def run(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
 
     scored_rows = []
     for row in scorable:
-        if row["variable"] == "precip_prob":
-            observed = _precip_in_window(sorted_ts, obs_by_ts, row["valid_at"])
-            if observed is None:
-                skipped += 1
-                continue
-        else:
-            obs = _find_nearest_obs(sorted_ts, obs_by_ts, row["valid_at"])
-            if obs is None:
-                skipped += 1
-                continue
-            col = _OBS_COLUMN.get(row["variable"])
-            if col is None:
-                skipped += 1
-                continue
-            observed = obs[col]
-            if observed is None:
-                skipped += 1
-                continue
+        obs = _find_nearest_obs(sorted_ts, obs_by_ts, row["valid_at"])
+        if obs is None:
+            skipped += 1
+            continue
+        col = _OBS_COLUMN.get(row["variable"])
+        if col is None:
+            skipped += 1
+            continue
+        observed = obs[col]
+        if observed is None:
+            skipped += 1
+            continue
 
         error = row["value"] - observed
-        mae_val = error ** 2 if row["variable"] == "precip_prob" else abs(error)
+        mae_val = abs(error)
         scored_rows.append({
             "id": row["id"],
             "observed": observed,
