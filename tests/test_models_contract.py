@@ -5,7 +5,7 @@ from unittest.mock import patch
 import barogram
 from tests.conftest import make_input_db, make_obs, make_output_db
 
-_VALID_VARIABLES = {"temperature", "dewpoint", "pressure", "precip_prob"}
+_VALID_VARIABLES = {"temperature", "dewpoint", "pressure"}
 _VALID_LEAD_HOURS = {6, 12, 18, 24}
 _REQUIRED_KEYS = {"model_id", "model", "issued_at", "valid_at", "lead_hours", "variable", "value"}
 
@@ -26,7 +26,6 @@ _SEED_VALUE = {
     "temperature": 20.0,
     "dewpoint": 12.0,
     "pressure": 1013.0,
-    "precip_prob": 0.2,
 }
 
 
@@ -72,7 +71,6 @@ def test_all_models_satisfy_contract():
                 issued_at + h * 3600: {
                     "temperature": 20.0,
                     "dewpoint": 14.0,
-                    "precip_prob": 0.3,
                 }
                 for h in [6, 12, 18, 24]
             }
@@ -110,8 +108,3 @@ def test_all_models_satisfy_contract():
                 f"{model.MODEL_NAME}: duplicate (lead_hours, variable, member_id) {triple}"
             seen_triples.add(triple)
 
-            if row["variable"] == "precip_prob" and row["value"] is not None:
-                assert 0.0 <= row["value"] <= 1.0, (
-                    f"{model.MODEL_NAME}: precip_prob value {row['value']} outside [0, 1]; "
-                    f"expected probability, not percentage"
-                )
