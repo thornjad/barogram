@@ -530,14 +530,10 @@ def cmd_tune(args, conf):
         return
 
     _SECTOR_LABELS = {0: "night 00-05", 1: "morning 06-11", 2: "afternoon 12-17", 3: "evening 18-23"}
-    # skill reference members per (model_id, variable); only defined for models where
-    # member_id maps to another model's MODEL_ID (currently only barogram_ensemble)
-    _SKILL_REF = {
-        barogram_ensemble.MODEL_ID: {
-            "temperature":  climatological_mean.MODEL_ID,
-            "dewpoint":     climatological_mean.MODEL_ID,
-            "pressure":     persistence.MODEL_ID,
-        }
+    _REF_BY_VAR = {
+        "temperature": climatological_mean.MODEL_ID,
+        "dewpoint":    climatological_mean.MODEL_ID,
+        "pressure":    persistence.MODEL_ID,
     }
 
     weighted_model_ids = {m.MODEL_ID for m in _MODELS if getattr(m, "NEEDS_WEIGHTS", False)}
@@ -547,6 +543,29 @@ def cmd_tune(args, conf):
     print(f"Huber deltas ({args.huber_percentile:.0f}th percentile of abs error):")
     for var, d in sorted(huber_deltas.items()):
         print(f"  {var}: {d:.3f}")
+
+    ref_raw = db.reference_errors_by_sector(conn_out, list(set(_REF_BY_VAR.values())))
+    _ref_sect_err: dict = {}
+    _ref_pool_err: dict = {}
+    for r in ref_raw:
+        sk = (r["model_id"], r["variable"], r["lead_hours"], r["sector"])
+        pk = (r["model_id"], r["variable"], r["lead_hours"])
+        _ref_sect_err.setdefault(sk, []).append(r["error"])
+        _ref_pool_err.setdefault(pk, []).append(r["error"])
+    ref_pool_huber: dict = {}
+    for (mid, variable, lead_hours), errors in _ref_pool_err.items():
+        if len(errors) >= args.min_runs:
+            delta = huber_deltas.get(variable, 1.0)
+            h = _mean_huber(errors, delta)
+            if h > 0:
+                ref_pool_huber[(mid, variable, lead_hours)] = h
+    ref_sect_huber: dict = {}
+    for (mid, variable, lead_hours, sector), errors in _ref_sect_err.items():
+        if len(errors) >= args.min_runs:
+            delta = huber_deltas.get(variable, 1.0)
+            h = _mean_huber(errors, delta)
+            if h > 0:
+                ref_sect_huber[(mid, variable, lead_hours, sector)] = h
 
     raw_rows = db.raw_errors_by_sector(conn_out)
 
@@ -601,30 +620,25 @@ def cmd_tune(args, conf):
                 else:
                     # sparse sector: fall back to pooled even when pool_alpha=0
                     blended[mid] = p_h
-            ref_mid = _SKILL_REF.get(model_id, {}).get(variable)
-            ref_loss = blended.get(ref_mid) if ref_mid is not None else None
-            if ref_loss is None:
-                print(f"warning: no reference loss for {variable} lead={lead_hours}h "
-                      f"sector={sector}, using inverse-Huber")
-                raw = {mid: 1.0 / h for mid, h in blended.items()}
-                raw_total = sum(raw.values())
-                fractions = {mid: w / raw_total for mid, w in raw.items()}
-                n_members = len(blended)
-                min_w = args.floor / n_members
-                cell_skills = {mid: None for mid in blended}
-                sub_w = min_w * args.subfloor_fraction
-                raw_final = {mid: max(f, min_w) for mid, f in fractions.items()}
-                if bogo.MODEL_ID in raw_final:
-                    raw_final[bogo.MODEL_ID] = sub_w
+            ref_model_id = _REF_BY_VAR.get(variable)
+            p_ref = ref_pool_huber.get((ref_model_id, variable, lead_hours)) if ref_model_id else None
+            if p_ref is not None:
+                s_ref = ref_sect_huber.get((ref_model_id, variable, lead_hours, sector))
+                if s_ref is not None:
+                    ref_loss = (1 - args.pool_alpha) * s_ref + args.pool_alpha * p_ref
+                else:
+                    ref_loss = p_ref
             else:
+                ref_loss = None
+            n_members = len(blended)
+            min_w = args.floor / n_members
+            sub_w = min_w * args.subfloor_fraction
+            if ref_loss is not None:
                 cell_skills = {mid: 1.0 - h / ref_loss for mid, h in blended.items()}
                 proportional = {mid: s for mid, s in cell_skills.items() if s > 0}
                 prop_total = sum(proportional.values())
                 fractions = ({mid: s / prop_total for mid, s in proportional.items()}
                              if prop_total > 0 else {})
-                n_members = len(blended)
-                min_w = args.floor / n_members
-                sub_w = min_w * args.subfloor_fraction
                 raw_final = {}
                 for mid in blended:
                     s = cell_skills[mid]
@@ -634,8 +648,16 @@ def cmd_tune(args, conf):
                         raw_final[mid] = min_w
                     else:
                         raw_final[mid] = sub_w
-                if bogo.MODEL_ID in raw_final:
-                    raw_final[bogo.MODEL_ID] = sub_w
+            else:
+                print(f"warning: no reference loss for {variable} lead={lead_hours}h "
+                      f"sector={sector}, using inverse-Huber")
+                raw = {mid: 1.0 / h for mid, h in blended.items()}
+                raw_total = sum(raw.values())
+                fractions = {mid: w / raw_total for mid, w in raw.items()}
+                cell_skills = {mid: None for mid in blended}
+                raw_final = {mid: max(f, min_w) for mid, f in fractions.items()}
+            if bogo.MODEL_ID in raw_final:
+                raw_final[bogo.MODEL_ID] = sub_w
             total_w = sum(raw_final.values())
             final = {mid: w / total_w for mid, w in raw_final.items()}
             for mid, w in final.items():

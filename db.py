@@ -355,6 +355,35 @@ def raw_errors_by_sector(conn: sqlite3.Connection) -> list:
     ).fetchall()
 
 
+def reference_errors_by_sector(conn: sqlite3.Connection, model_ids: list) -> list:
+    """Raw signed errors for member_id=0 rows of the given reference model IDs.
+
+    Used by cmd_tune to compute independent reference Huber losses for BSS
+    weighting. Sector derivation matches raw_errors_by_sector.
+    """
+    placeholders = ",".join("?" * len(model_ids))
+    return conn.execute(
+        f"""
+        select
+            f.model_id, f.variable, f.lead_hours,
+            case
+                when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 6  then 0
+                when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 12 then 1
+                when cast(strftime('%H', datetime(f.valid_at, 'unixepoch', 'localtime')) as integer) < 18 then 2
+                else 3
+            end as sector,
+            f.error
+        from forecasts f
+        where f.model_id in ({placeholders})
+          and f.member_id = 0
+          and f.scored_at is not null
+          and f.error is not null
+        order by f.model_id, f.variable, f.lead_hours, sector
+        """,
+        model_ids,
+    ).fetchall()
+
+
 def score_summary_since(conn: sqlite3.Connection, since: int) -> list:
     return conn.execute(
         """
