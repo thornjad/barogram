@@ -10,7 +10,7 @@ import db
 import fmt
 import models.pressure_tendency as pressure_tendency
 
-VARIABLES = ["temperature", "dewpoint", "pressure", "precip_prob"]
+VARIABLES = ["temperature", "dewpoint", "pressure"]
 
 _MODEL_TOOLTIPS: dict[str, str] = {
     "persistence": "Current observed value held constant across all lead times. The null hypothesis — any useful model has to beat this.",
@@ -34,21 +34,18 @@ _VARIABLE_LABEL = {
     "temperature": "Temperature",
     "dewpoint": "Dew Point",
     "pressure": "Pressure",
-    "precip_prob": "Precip Prob",
 }
 
 _UNIT = {
     "temperature": "\u00b0F",
     "dewpoint": "\u00b0F",
     "pressure": "hPa",
-    "precip_prob": "%",
 }
 
 _FMT = {
     "temperature": ".1f",
     "dewpoint": ".1f",
     "pressure": ".1f",
-    "precip_prob": ".0f",
 }
 
 
@@ -120,11 +117,7 @@ def _fetch_nws_forecast(lat: float, lon: float) -> dict[int, dict]:
             unit = period.get("temperatureUnit", "F")
             temp_c = (temp - 32) * 5 / 9 if unit == "F" else float(temp)
             dew_c = (period.get("dewpoint") or {}).get("value")  # already °C
-            pop = (period.get("probabilityOfPrecipitation") or {}).get("value")
-            entry: dict = {"temperature": temp_c, "dewpoint": dew_c}
-            if pop is not None:
-                entry["precip_prob"] = pop / 100.0
-            result[ts] = entry
+            result[ts] = {"temperature": temp_c, "dewpoint": dew_c}
         return result
     except Exception:
         return {}
@@ -1003,7 +996,7 @@ def _external_corrected_source_weights_html(rows: list) -> str:
     """
     _MIN_SAMPLES = 3
     _SOURCE_FLOOR = 0.10
-    _VARIABLES = ["temperature", "dewpoint", "precip_prob"]
+    _VARIABLES = ["temperature", "dewpoint"]
     _LEADS = [6, 12, 18, 24]
     _BUCKET_LABELS = [
         ("night", "00-05"),
@@ -1254,8 +1247,6 @@ def _forecast_table_html(table: dict, lead_times: list, slp_offset: float = 0.0)
             v = table.get(var, {}).get(h)
             if var in ("temperature", "dewpoint"):
                 v = _to_f(v)
-            elif var == "precip_prob":
-                v = _to_pct(v)
             fmt_spec = _FMT.get(var, ".1f")
             cells.append(f"<td>{fmt.val(v, fmt_spec, unit)}</td>")
         rows.append(f'<tr><th>{label}</th>{"".join(cells)}</tr>')
@@ -1445,21 +1436,14 @@ def _rolling_mean(values: list, window: int = 10) -> list:
     return out
 
 
-def _mae_timeseries_data(timeseries_rows: list, precip_bss_ref: dict | None = None) -> dict:
+def _mae_timeseries_data(timeseries_rows: list) -> dict:
     """lead (str) -> model -> {is_baseline, is_persistence, is_ensemble, model_id,
                                series: {var|avg -> {x, y_ratio, y_ratio_rolling}}}
 
-    y_ratio = skill vs climatological_mean for the same (var, lead, issued_at):
-    MAE / climo_MAE (1.0 = matches climo). Average series averages dimensionless
-    ratios across variables (safe to mix because units cancel).
-
-    For precip_prob the denominator is the theoretical Brier reference p*(1-p) from
-    precip_bss_ref (constant per lead). The per-run climo_mean Brier is unusable as a
-    denominator: on dry hours it collapses to ~0.0025 and produces 30×–50× ratios for
-    any honest probabilistic forecast. When precip_bss_ref is empty or missing a lead,
-    precip_prob ratios for that lead are emitted as None.
+    y_ratio = MAE / climo_MAE for the same (var, lead, issued_at); 1.0 = matches climo.
+    Average series averages dimensionless ratios across variables (safe to mix
+    because units cancel).
     """
-    bss_ref = precip_bss_ref or {}
     raw: dict = {}
     model_meta: dict = {}
     for row in timeseries_rows:
@@ -1472,7 +1456,6 @@ def _mae_timeseries_data(timeseries_rows: list, precip_bss_ref: dict | None = No
     result: dict = {}
     for lead in sorted(raw):
         c_ts: dict = raw[lead].get("climatological_mean", {})
-        precip_ref = bss_ref.get(lead)
         result[str(lead)] = {}
         for model, vars_ in raw[lead].items():
             is_baseline = model == "climatological_mean"
@@ -1484,10 +1467,7 @@ def _mae_timeseries_data(timeseries_rows: list, precip_bss_ref: dict | None = No
                 x, y_ratio = [], []
                 for issued in sorted(ts):
                     mae = ts[issued]
-                    if var == "precip_prob":
-                        denom = precip_ref
-                    else:
-                        denom = c_var.get(issued)
+                    denom = c_var.get(issued)
                     ratio = 1.0 if is_baseline else (mae / denom if denom else None)
                     x.append(fmt.iso_ts(issued))
                     y_ratio.append(ratio)
@@ -1500,8 +1480,6 @@ def _mae_timeseries_data(timeseries_rows: list, precip_bss_ref: dict | None = No
                 for var, ts in vars_.items():
                     if issued not in ts:
                         continue
-                    if var == "precip_prob":
-                        continue  # Brier scale is incomparable with temperature/pressure MAE
                     mae = ts[issued]
                     c_var = c_ts.get(var, {})
                     c = c_var.get(issued)
@@ -1651,7 +1629,6 @@ def _mae_timeseries_js(timeseries_data: dict) -> str:
         "temperature": "Temperature skill vs climo",
         "dewpoint": "Dew Point skill vs climo",
         "pressure": "Pressure skill vs climo",
-        "precip_prob": "Precip Prob Brier skill",
     })
     return f"""const maeLeadData = {data_json};
 const maeFilterLabels = {filter_labels_json};
@@ -1872,7 +1849,6 @@ function buildMemberTable(rows) {{
         return rows.some(function(r) {{ return r.variable === v; }});
     }});
     const headerCells = varCols.map(function(v) {{
-        if (v === 'precip_prob') return '<th>Avg Brier</th>';
         const unit = memberUnits[v] ? ' (' + memberUnits[v] + ')' : '';
         return '<th>Avg MAE' + unit + '</th>';
     }}).join('');
@@ -1914,7 +1890,6 @@ def _chart_js(chart_data_dict: dict) -> str:
         "temperature": "Temperature (\u00b0F)",
         "dewpoint": "Dew Point (\u00b0F)",
         "pressure": "Pressure (hPa)",
-        "precip_prob": "Precip Prob",
     })
     vars_json = json.dumps(VARIABLES)
     return f"""\
@@ -1985,7 +1960,6 @@ def _bias_timeseries_js(bias_data: dict) -> str:
         "temperature": "Temperature Bias (\u00b0F)",
         "dewpoint": "Dew Point Bias (\u00b0F)",
         "pressure": "Pressure Bias (hPa)",
-        "precip_prob": "Precip Prob Bias",
     })
     return f"""const biasLeadData = {data_json};
 const biasFilterLabels = {filter_labels_json};
@@ -2087,7 +2061,7 @@ function drawHeatmapChart() {{
         colorscale: 'RdYlGn',
         reversescale: false,
         showscale: true,
-        hovertemplate: '%{{y}}<br>+%{{x}}h<br>' + (heatmapActiveVar === 'precip_prob' ? 'Brier: ' : 'MAE: ') + '%{{z:.2f}}<extra></extra>'
+        hovertemplate: '%{{y}}<br>+%{{x}}h<br>MAE: %{{z:.2f}}<extra></extra>'
     }}], {{
         title: {{ text: 'Score Heatmap \u2014 ' + heatmapActiveVar.replace('_', ' '),
                   font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
@@ -2122,7 +2096,6 @@ def _diurnal_js(diurnal_data: dict) -> str:
         "temperature": "Temperature (\u00b0F)",
         "dewpoint": "Dew Point (\u00b0F)",
         "pressure": "Pressure (hPa)",
-        "precip_prob": "Precip Prob",
     })
     return f"""const diurnalData = {data_json};
 const diurnalFilterLabels = {filter_labels_json};
@@ -2275,7 +2248,7 @@ def _ensemble_forecast_section(
             return datetime.fromtimestamp(vat, tz=fmt.CENTRAL).strftime("%-I %p").lstrip("0")
         return f"+{lead}h"
 
-    def _ref_panel(label: str, temp_val, dew_val, precip_val,
+    def _ref_panel(label: str, temp_val, dew_val,
                    ens_temp_val=None, valid_time_str: str | None = None) -> str:
         lines = []
         if temp_val is not None:
@@ -2291,8 +2264,6 @@ def _ensemble_forecast_section(
             )
         if dew_val is not None:
             lines.append(f'<span class="detail-label">Dew</span> {_to_f(dew_val):.0f}\u00b0F')
-        if precip_val is not None:
-            lines.append(f'<span class="detail-label">Precip</span> {max(0, round(precip_val * 100))}%')
         if not lines:
             return ''
         _ref_tooltips = {
@@ -2312,7 +2283,7 @@ def _ensemble_forecast_section(
 
     def _card(label: str, is_now: bool,
               temp_val, dew_val, pres_val, wind_val,
-              temp_spread=None, precip_val=None,
+              temp_spread=None,
               tempest_ref=None, nws_ref=None, corrected_ref=None,
               tempest_time_str: str | None = None,
               nws_time_str: str | None = None,
@@ -2337,8 +2308,6 @@ def _ensemble_forecast_section(
             details.append(f'<span class="detail-label">Pres</span> {pres_val:.1f} hPa')
         if wind_val is not None:
             details.append(f'<span class="detail-label">Wind</span> {_to_mph(wind_val):.0f} mph')
-        if precip_val is not None:
-            details.append(f'<span class="detail-label">Precip</span> {max(0, round(precip_val * 100))}%')
         details_html = (
             '<div class="fcst-details">' + '<br>'.join(details) + '</div>'
             if details else ''
@@ -2355,7 +2324,6 @@ def _ensemble_forecast_section(
             refs.append(_ref_panel(
                 'Tempest',
                 tempest_ref.get('temperature'), tempest_ref.get('dewpoint'),
-                tempest_ref.get('precip_prob'),
                 temp_val,
                 tempest_time_str,
             ))
@@ -2363,7 +2331,6 @@ def _ensemble_forecast_section(
             refs.append(_ref_panel(
                 'NWS',
                 nws_ref.get('temperature'), nws_ref.get('dewpoint'),
-                nws_ref.get('precip_prob'),
                 temp_val,
                 nws_time_str,
             ))
@@ -2371,7 +2338,6 @@ def _ensemble_forecast_section(
             refs.append(_ref_panel(
                 'Corrected',
                 corrected_ref.get('temperature'), corrected_ref.get('dewpoint'),
-                corrected_ref.get('precip_prob'),
                 temp_val,
                 corrected_time_str,
             ))
@@ -2386,7 +2352,6 @@ def _ensemble_forecast_section(
         t_cell = ens_table.get("temperature", {}).get(lead)
         d_cell = ens_table.get("dewpoint", {}).get(lead)
         p_cell = ens_table.get("pressure", {}).get(lead)
-        pp_cell = ens_table.get("precip_prob", {}).get(lead)
         p_raw = p_cell[0] if p_cell else None
         vat = lead_valid_at.get(lead)
         nws_result = _nws_at(vat) if vat else None
@@ -2398,7 +2363,6 @@ def _ensemble_forecast_section(
             p_raw + slp_offset if p_raw is not None else None,
             None,
             t_cell[1] if t_cell else None,
-            pp_cell[0] if pp_cell else None,
             tempest_by_lead.get(lead) or None,
             nws_entry,
             corrected_by_lead.get(lead) or None,
@@ -2442,146 +2406,6 @@ def _learnings_clearness_index(solar_rad: float | None, lat_deg: float, ts: int)
 
 
 _SKY_FRAC = {"CLR": 0.0, "SKC": 0.0, "FEW": 0.15, "SCT": 0.40, "BKN": 0.70, "OVC": 1.0}
-
-
-def _ap_signal_state(conn_in: sqlite3.Connection, obs) -> dict | None:
-    """Compute live airmass_precip signal states from the current observation."""
-    if obs is None:
-        return None
-    import models.airmass_precip as ap
-    from models.surface_signs import (
-        _LOOKUP_SEC,
-        _SIGNAL_WINDOW_SEC,
-        _build_solar_climo,
-        _find_nearest_ts,
-        _obs_in_window,
-        _solar_cloud_category,
-        _wind_rotation_category,
-    )
-    ts = obs["timestamp"]
-    obs_30d = db.tempest_obs_in_range(conn_in, ts - 30 * 86400, ts)
-    solar_climo = _build_solar_climo(obs_30d)
-    by_ts = {r["timestamp"]: r for r in obs_30d}
-    sorted_ts = sorted(by_ts)
-
-    obs_3h = db.nearest_tempest_obs(conn_in, ts - 3 * 3600, window_sec=_LOOKUP_SEC)
-    obs_1h = db.nearest_tempest_obs(conn_in, ts - 3600, window_sec=_LOOKUP_SEC)
-    window_obs = _obs_in_window(sorted_ts, by_ts, ts - _SIGNAL_WINDOW_SEC, ts)
-
-    m = ap._moisture_cat(obs)
-    p = ap._ptend_cat(obs, obs_3h)
-    cloud = _solar_cloud_category(obs, solar_climo)
-
-    return {
-        1: m,
-        2: p,
-        3: cloud,
-        4: ap._wind_sector_4(obs),
-        5: ap._active_precip_cat(obs, obs_1h),
-        6: (m, p) if m is not None and p is not None else None,
-        7: _wind_rotation_category(window_obs),
-        8: (cloud, m) if cloud is not None and m is not None else None,
-    }
-
-
-_AP_SIGNAL_DESC = {
-    1: "T−Td spread",
-    2: "3h ΔP",
-    3: "solar vs climo",
-    4: "wind direction",
-    5: "last-hour precip",
-    6: "T−Td × ΔP",
-    7: "3h wind rotation",
-    8: "cloud × moisture",
-}
-_AP_WET = {"moist", "falling", "heavy_cloud", "raining", "backing"}
-_AP_DRY = {"dry", "rising", "clear", "veering"}
-
-
-def _ap_badge(state) -> str:
-    if state is None:
-        return '<span class="ap-none">–</span>'
-    if isinstance(state, tuple):
-        return " · ".join(_ap_badge(s) for s in state)
-    cls = "ap-wet" if state in _AP_WET else ("ap-dry" if state in _AP_DRY else "ap-neutral")
-    return f'<span class="ap-badge {cls}">{state}</span>'
-
-
-def _ap_signal_state_html(signal_state: dict | None, member_rows: list) -> str:
-    """Table of live signal states and per-member precip_prob forecasts."""
-    if signal_state is None:
-        return '<p class="no-data">No Tempest observation available.</p>'
-
-    from models.airmass_precip import _MEMBER_NAMES
-
-    by_mid: dict[int, dict[int, float | None]] = {}
-    for row in member_rows:
-        if row["model"] == "airmass_precip":
-            mid = row["member_id"]
-            if mid > 0 and row["variable"] == "precip_prob":
-                by_mid.setdefault(mid, {})[row["lead_hours"]] = row["value"]
-
-    header = (
-        "<tr>"
-        "<th>#</th><th>member</th><th>signal</th><th>state</th>"
-        "<th>+6h</th><th>+12h</th><th>+18h</th><th>+24h</th>"
-        "</tr>"
-    )
-    body = ""
-    cards = ""
-    for mid, name in _MEMBER_NAMES:
-        state_cell = _ap_badge(signal_state.get(mid))
-        sig = _AP_SIGNAL_DESC.get(mid, "")
-        leads = ""
-        lead_spans = ""
-        for lead in [6, 12, 18, 24]:
-            v = by_mid.get(mid, {}).get(lead)
-            if v is None:
-                leads += f'<td data-label="+{lead}h" class="ap-none">–</td>'
-                val_html = '<span class="ap-none">–</span>'
-            else:
-                leads += f'<td data-label="+{lead}h">{round(v * 100)}%</td>'
-                val_html = f'{round(v * 100)}%'
-            lead_spans += (
-                f'<span class="ap-card-lead">'
-                f'<span class="ap-lead-lbl">+{lead}h</span>'
-                f'<span class="ap-card-lead-val">{val_html}</span>'
-                f'</span>'
-            )
-        body += (
-            f'<tr><td data-label="#" class="model-id-cell">{mid}</td>'
-            f"<td>{name}</td>"
-            f'<td data-label="Signal" style="color:#888;font-size:12px">{sig}</td>'
-            f'<td data-label="State">{state_cell}</td>{leads}</tr>'
-        )
-        cards += (
-            f'<div class="ap-signal-card">'
-            f'<div class="ap-card-info">'
-            f'<span class="ap-card-num">{mid}</span>'
-            f'<span class="ap-card-name">{name}</span>'
-            f'<span class="ap-card-signal">{sig}</span>'
-            f'<span class="ap-card-state">{state_cell}</span>'
-            f'</div>'
-            f'<div class="ap-card-leads">{lead_spans}</div>'
-            f'</div>'
-        )
-
-    intro = (
-        '<p class="chart-legend-note">Signal state and precip probability at last forecast run. '
-        "Blue = precip-favorable &nbsp;·&nbsp; "
-        "Amber = unfavorable &nbsp;·&nbsp; "
-        "Grey = neutral.</p>"
-    )
-    return (
-        intro
-        + '<div class="ap-signal-container">'
-        + '<div class="table-scroll">'
-        + f'<table class="ap-signal-table"><thead>{header}</thead>'
-        + f"<tbody>{body}</tbody></table>"
-        + '</div>'
-        + f'<div class="ap-signal-cards">{cards}</div>'
-        + '</div>'
-    )
 
 
 def _learnings_data(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
@@ -3780,9 +3604,6 @@ def _trajectory_data(rows: list) -> dict:
         if var in ("temperature", "dewpoint"):
             obs_disp = _to_f(obs_mean)
             unit = "\u00b0F"
-        elif var == "precip_prob":
-            obs_disp = obs_mean
-            unit = "%"
         else:
             obs_disp = obs_mean
             unit = "hPa"
@@ -3899,7 +3720,7 @@ drawTrajectoryChart();
 """
 
 
-_ACC_VARIABLES = ["temperature", "dewpoint", "pressure", "precip_prob"]
+_ACC_VARIABLES = ["temperature", "dewpoint", "pressure"]
 
 
 def _skill_score(mae: float | None, climo_mae: float | None) -> float | None:
@@ -3926,7 +3747,7 @@ def _acc_cls(pct: float | None) -> str:
     return " acc-poor"
 
 
-def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set | None = None, precip_bss_ref: dict | None = None) -> str:
+def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set | None = None) -> str:
     """Forecast skill table: rows=models, cols=lead times, filterable by variable."""
     if not rows:
         return '<p class="muted">no scored forecasts</p>'
@@ -3936,12 +3757,6 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
     for r in rows:
         if r["model"] == "climatological_mean" and r["variable"] in _ACC_VARIABLES:
             climo_mae[(r["variable"], r["lead_hours"])] = r["avg_mae"]
-    # BSS reference overrides climo MAE for precip_prob; applied unconditionally
-    # so precip skill scores are available even when no scored climo precip
-    # forecasts exist in the current time window
-    if precip_bss_ref:
-        for lead, ref in precip_bss_ref.items():
-            climo_mae[("precip_prob", lead)] = ref
 
     model_data: dict = {}
     model_meta: dict = {}
@@ -4026,29 +3841,17 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
     )
 
 
-def _overall_accuracy_html(rows: list, precip_events: int = 0, precip_bss_ref: dict | None = None) -> str:
-    """Avg forecast skill per model across temperature/dewpoint/pressure.
-
-    When precip_events >= _MIN_PRECIP_BRIER, precip_prob (BSS) is also included.
-    Below that threshold the near-zero climo Brier denominator makes BSS
-    incomparable to MAESS and would corrupt this average.
-    Precip skill is always shown in the per-variable lead table regardless.
-    """
+def _overall_accuracy_html(rows: list) -> str:
+    """Avg forecast skill per model across temperature, dewpoint, and pressure."""
     if not rows:
         return '<p class="muted">no scored forecasts</p>'
 
-    _MIN_PRECIP_BRIER = 5
     _OVERALL_VARS: tuple = ("temperature", "dewpoint", "pressure")
-    if precip_events >= _MIN_PRECIP_BRIER:
-        _OVERALL_VARS = _OVERALL_VARS + ("precip_prob",)
 
     climo_mae: dict = {}
     for r in rows:
         if r["model"] == "climatological_mean" and r["variable"] in _OVERALL_VARS:
             climo_mae[(r["variable"], r["lead_hours"])] = r["avg_mae"]
-    if precip_bss_ref:
-        for lead, ref in precip_bss_ref.items():
-            climo_mae[("precip_prob", lead)] = ref
 
     model_skills: dict[str, list] = {}
     model_meta: dict = {}
@@ -4261,8 +4064,6 @@ document.querySelectorAll('.acc-filter-btn').forEach(function(btn) {
         document.querySelectorAll('.acc-filter-btn').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
         updateAccTable(btn.dataset.var);
-        var bssWarn = document.getElementById('bss-warning');
-        if (bssWarn) bssWarn.style.display = btn.dataset.var === 'precip_prob' ? '' : 'none';
     });
 });
 
@@ -4326,11 +4127,6 @@ def _recent_misses_html(rows: list) -> str:
             obs_str = f"{_to_f(obs):.1f}\u00b0F" if obs is not None else "\u2014"
             err_disp = _diff_to_f(err)
             err_thresh = 3
-        elif var == "precip_prob":
-            pred_str = f"{val * 100:.0f}%" if val is not None else "\u2014"
-            obs_str = ("Yes" if obs == 1.0 else "No") if obs is not None else "\u2014"
-            err_disp = (err * 100) if err is not None else None
-            err_thresh = 30
         else:
             pred_str = f"{val:.1f} hPa" if val is not None else "\u2014"
             obs_str = f"{obs:.1f} hPa" if obs is not None else "\u2014"
@@ -4339,7 +4135,7 @@ def _recent_misses_html(rows: list) -> str:
         if err_disp is not None:
             sign = "+" if err_disp >= 0 else ""
             err_cls = "mae-worse" if abs(err_disp) >= err_thresh else ""
-            err_str = f'<span class="{err_cls}">{sign}{err_disp:.1f}{"pp" if var == "precip_prob" else ""}</span>'
+            err_str = f'<span class="{err_cls}">{sign}{err_disp:.1f}</span>'
         else:
             err_str = "\u2014"
         valid_label = fmt.short_ts(row["valid_at"])
@@ -4449,8 +4245,7 @@ def generate(
     all_members = db.all_members_for_ensemble_models(conn_out)
     ext_corrected_mae_rows = db.external_corrected_source_mae(conn_out)
     trajectory_rows = db.forecast_trajectory(conn_out, now - 72 * 3600)
-    _bss_ref = db.climo_precip_bss_reference(conn_out)
-    misses_rows = db.recent_misses(conn_out, now - 14 * 86400, precip_bss_ref=_bss_ref)
+    misses_rows = db.recent_misses(conn_out, now - 14 * 86400)
     _14d = now - 14 * 86400
     _120d = now - 120 * 86400
     _acc = db.accuracy_windows(conn_out, [_14d, _120d, 0])
@@ -4459,10 +4254,7 @@ def generate(
     acc_rows_alltime = _acc[0]
     acc_rows_10r = db.accuracy_by_lead(conn_out, 10)
     acc_count_10r = db.accuracy_run_count_last_n(conn_out, 10)
-    _precip_events = {s: db.precip_event_count(conn_out, s) for s in [_14d, _120d, 0]}
-    _skill_ts = db.skill_timeseries_multi(
-        conn_out, [_14d, _120d, 0], precip_events=_precip_events, precip_bss_ref=_bss_ref
-    )
+    _skill_ts = db.skill_timeseries_multi(conn_out, [_14d, _120d, 0])
     skill_ts_html = _skill_timeseries_html()
     skill_ts_js = _skill_timeseries_js(
         _skill_timeseries_data(_skill_ts[_14d]),
@@ -4476,20 +4268,13 @@ def generate(
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
-    mae_ts = _mae_timeseries_data(timeseries, precip_bss_ref=_bss_ref)
+    mae_ts = _mae_timeseries_data(timeseries)
     bias_ts = _bias_timeseries_data(bias_ts_rows)
     heatmap = _heatmap_data(all_time_summary)
     diurnal = _diurnal_data(diurnal_rows)
     trajectory = _trajectory_data(trajectory_rows)
     recent_misses_html = _recent_misses_html(misses_rows)
     acc_lead_times = sorted({r["lead_hours"] for r in acc_rows_14d}) or lead_times
-    # precip_events per time window; 10r uses the all-time count as approximation
-    _win_precip = {
-        "14d": _precip_events[_14d],
-        "120d": _precip_events[_120d],
-        "alltime": _precip_events[0],
-        "10r": _precip_events[0],
-    }
     _acc_windows = [
         ("14d", acc_rows_14d, acc_count_14d, "14 days"),
         ("120d", acc_rows_120d, acc_count_120d, "120 days"),
@@ -4506,13 +4291,13 @@ def generate(
         overall_parts.append(
             f'<div id="acc-overall-{wid}"{hidden}>'
             f'{run_note}'
-            f'{_overall_accuracy_html(rows, precip_events=_win_precip[wid], precip_bss_ref=_bss_ref)}'
+            f'{_overall_accuracy_html(rows)}'
             f'</div>'
         )
         lead_parts.append(
             f'<div id="acc-lead-{wid}"{hidden}>'
             f'{run_note}'
-            f'{_accuracy_lead_table_html(rows, acc_lead_times, member_models if wid == "10r" else None, precip_bss_ref=_bss_ref)}'
+            f'{_accuracy_lead_table_html(rows, acc_lead_times, member_models if wid == "10r" else None)}'
             f'</div>'
         )
     overall_accuracy_html = "".join(overall_parts)
@@ -4547,9 +4332,6 @@ def generate(
     learnings = _learnings_data(conn_in, conn_out)
     learnings_section = _learnings_section_html(learnings)
 
-    ap_state = _ap_signal_state(conn_in, tempest)
-    ap_signal_html = _ap_signal_state_html(ap_state, member_forecast_rows)
-
     zambretti = pressure_tendency.zambretti_text(tempest, conn_in, elevation_m) if tempest else None
     zambretti_panel = _zambretti_panel_html(zambretti)
     tempest_card = _conditions_card("Tempest", tempest, elevation_m)
@@ -4568,7 +4350,6 @@ def generate(
         for i, (v, lbl) in enumerate([
             ("avg", "Average"), ("temperature", "Temperature"),
             ("dewpoint", "Dew Point"), ("pressure", "Pressure"),
-            ("precip_prob", "Precip Prob"),
         ])
     )
     mae_chart_divs = "".join(
@@ -4580,14 +4361,14 @@ def generate(
         f'<button class="fcst-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
             ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-            ("pressure", "Pressure"), ("precip_prob", "Precip Prob"),
+            ("pressure", "Pressure"),
         ])
     )
     acc_filter_btns = "".join(
         f'<button class="acc-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
             ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-            ("pressure", "Pressure"), ("precip_prob", "Precip Prob (Brier)"),
+            ("pressure", "Pressure"),
         ])
     )
     acc_window_btns = "".join(
@@ -4597,7 +4378,7 @@ def generate(
 
     _var_btns = [
         ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-        ("pressure", "Pressure"), ("precip_prob", "Precip Prob (Brier)"),
+        ("pressure", "Pressure"),
     ]
     bias_filter_btns = "".join(
         f'<button class="bias-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
@@ -4615,11 +4396,9 @@ def generate(
         f'<button class="diurnal-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate(_var_btns)
     )
-    _traj_vars = [("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-                  ("pressure", "Pressure"), ("precip_prob", "Precip Prob")]
     trajectory_filter_btns = "".join(
         f'<button class="trajectory-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
-        for i, (v, lbl) in enumerate(_traj_vars)
+        for i, (v, lbl) in enumerate(_var_btns)
     )
 
     html = f"""\
@@ -4690,7 +4469,6 @@ def generate(
   <h3 class="obs-subhead">Forecast Skill by Lead Time</h3>
   <p class="chart-legend-note">Skill score vs. climatological mean at each lead time for the selected variable. Negative = worse than climatology.</p>
   <div class="mae-filter-bar">{acc_filter_btns}</div>
-  <p id="bss-warning" class="chart-legend-note" style="display:none;color:#b45309">Brier Skill Score values are unreliable until enough precipitation events have been observed. With few or no rain events, the climo Brier reference approaches zero and scores become extreme.</p>
   <div class="table-scroll">{acc_lead_table_html}</div>
   <h3 class="obs-subhead">Skill over time</h3>
   <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button></div>
@@ -4725,8 +4503,6 @@ def generate(
   </div>
   <div class="chart-container"><div id="diurnal-chart"></div></div>
 
-  <h3 class="obs-subhead">airmass_precip &mdash; Signal State</h3>
-  {ap_signal_html}
 </section>
 
 <section class="section" id="weights">
