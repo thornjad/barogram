@@ -1,7 +1,7 @@
 # Model 100: barogram_ensemble
 
 **Type:** ensemble
-**Variables:** temperature, dewpoint, pressure, precip_prob (coverage depends on contributing models)
+**Variables:** temperature, dewpoint, pressure (coverage depends on contributing models)
 **Lead times:** 6, 12, 18, 24 hours
 
 ## Overview
@@ -25,7 +25,6 @@ loop so all base model rows are committed before it reads them.
 | 8 | analog | model 8 member_id=0 |
 | 9 | surface_signs | model 9 member_id=0 |
 | 10 | synoptic_state_machine | model 10 member_id=0 |
-| 11 | airmass_precip | model 11 member_id=0 |
 | 12 | bogo | model 12 member_id=0 |
 
 Members are discovered dynamically via `db.sync_ensemble_members` — new base models are added automatically when they first run. member_id equals the contributing model's MODEL_ID.
@@ -36,7 +35,7 @@ Before enough scoring history exists, all members receive equal weight. Once the
 command has sufficient data (default ≥ 3 scored rows per cell), it computes skill-score
 weights per (member_id, variable, lead_hours, sector) and stores them in the weights
 table. Weights are set by each member's Huber loss relative to a reference model
-(climatological mean for most variables, persistence for pressure). Members that beat
+(climatological mean for temperature and dewpoint, persistence for pressure). Members that beat
 the reference earn proportional weight; those that don't are floored or subfloored.
 The ensemble reads these at forecast time, deriving the sector from each cell's
 valid_at hour (0=night 00-05, 1=morning 06-11, 2=afternoon 12-17, 3=evening 18-23).

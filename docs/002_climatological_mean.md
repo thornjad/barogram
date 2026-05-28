@@ -7,8 +7,6 @@ This model recognizes the cyclical nature of the seasons, and forecasts based on
 ## Method
 For each lead time (+6h, +12h, +18h, +24h), the calendar month and hour are used to query all accumulated Tempest observations in that (month, hour) bucket, including the current year. The arithmetic mean of each continuous variable across those observations is the forecast value.
 
-For `precip_prob`, the model computes the historical precipitation occurrence rate for the same (month, hour) bucket using a 6-hour window. For each historical observation matching that bucket, the model checks whether any measurable precipitation (≥0.1 mm accumulated delta) fell within a ±3h window centered on that observation. The fraction of such observations where precipitation was detected is the forecast probability. This window matches the 6h scoring window used by the scorer, ensuring the forecast and observation are measuring the same thing. The function falls back to all-months same-hour data when the specific (month, hour) bucket is sparse.
-
 Bucket matching uses local time for both the query (SQLite `'localtime'` modifier) and the Python-side extraction (`datetime.fromtimestamp`), keeping them consistent.
 
 A bucket with fewer than `MIN_OBS = 30` observations produces `value = None` for all variables, which the scoring engine treats as skipped. This threshold guards against garbage forecasts from a bucket that has barely been observed — 30 samples represents roughly one reading per day over a month.

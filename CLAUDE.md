@@ -64,7 +64,7 @@ Every dict returned by `run()` must have these keys:
     "issued_at": int,    # unix epoch
     "valid_at": int,     # unix epoch
     "lead_hours": int,   # one of [6, 12, 18, 24]
-    "variable": str,     # "temperature" | "dewpoint" | "pressure" | "precip_prob"
+    "variable": str,     # "temperature" | "dewpoint" | "pressure"
     "value": float | None,
     # optional — single-member models may omit; insert_forecasts applies defaults
     "member_id": int,    # default 0; 1+ for named members of a multi-member model
@@ -133,12 +133,12 @@ lowercase as well.
 | `issued_at` | integer | Unix epoch of forecast run |
 | `valid_at` | integer | Unix epoch of forecast target time |
 | `lead_hours` | integer | one of 6, 12, 18, 24 |
-| `variable` | text | `temperature`, `dewpoint`, `pressure`, `precip_prob` |
+| `variable` | text | `temperature`, `dewpoint`, `pressure` |
 | `value` | real | forecast value (NULL = model abstained) |
 | `spread` | real | std dev across members; non-NULL only on member_id=0 for multi-member models |
 | `observed` | real | filled by scorer; actual observed value |
 | `error` | real | filled by scorer; signed error (forecast − observed) |
-| `mae` | real | filled by scorer; absolute error for most variables; Brier score (error²) for precip_prob |
+| `mae` | real | filled by scorer; absolute error |
 | `scored_at` | integer | Unix epoch when scored; NULL = not yet scored |
 
 **`members`** — registry of valid (model_id, member_id) pairs

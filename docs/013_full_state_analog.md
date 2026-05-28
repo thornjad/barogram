@@ -29,9 +29,7 @@ lightning is present, while a synoptic member homes in on pressure-flow patterns
 3. **Wind direction**: Uses arc distance (shortest circular path) rather than signed
    difference. Sigma is fixed at 90° (one compass quadrant) rather than computed from
    the pool, because circular statistics don't map cleanly onto z-score normalization.
-4. **Analog selection, forecasting, precip_prob, member_id=0**: Identical to model 8 —
-   see `docs/008_analog.md` for details on K-nearest selection, inverse-distance
-   weighting, and precip fraction logic.
+4. **Analog selection, forecasting, member_id=0**: Identical to model 8 — see `docs/008_analog.md` for details on K-nearest selection and inverse-distance weighting.
 
 ## Features
 

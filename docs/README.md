@@ -12,7 +12,6 @@
 | 8 | analog | [008_analog.md](008_analog.md) |
 | 9 | surface_signs | [009_surface_signs.md](009_surface_signs.md) |
 | 10 | synoptic_state_machine | [010_synoptic_state_machine.md](010_synoptic_state_machine.md) |
-| 11 | airmass_precip | [011_airmass_precip.md](011_airmass_precip.md) |
 | 12 | bogo | [012_bogo.md](012_bogo.md) |
 | 13 | full_state_analog | [013_full_state_analog.md](013_full_state_analog.md) |
 | 14 | multivariate_trend | [014_multivariate_trend.md](014_multivariate_trend.md) |

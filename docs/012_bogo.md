@@ -2,7 +2,7 @@
 
 **Model ID:** 12
 **Type:** base
-**Variables:** temperature, dewpoint, pressure, precip_prob
+**Variables:** temperature, dewpoint, pressure
 
 ## Concept
 
@@ -21,11 +21,11 @@ BOGO is a 27-member ensemble where each member applies a different flavor of wro
 | 5 | contrarian | mirrors current obs deviation from climo in the opposite direction |
 | 6 | hype-train | extrapolates current 6h obs trend forward with jitter |
 | 7 | mercury-retrograde | mild walk normally; 10× step size during actual Mercury retrograde windows |
-| 8 | weatherperson | always climo for all variables; always exactly 30% precip probability |
+| 8 | weatherperson | always climo for all variables |
 | 9 | crowd-sourced | pulls a random historical observation and uses it as the forecast |
 | 10 | groundhog-day | reports actual observations from 24h prior as the forecast for all leads |
-| 11 | CG | if any lightning detected, locks precip_prob to 1.0 for all leads |
-| 12 | climate-anxiety | always +3°C above climo temperature; slightly elevated precip |
+| 11 | CG | locks all variables to extreme values when lightning is detected |
+| 12 | climate-anxiety | always +3°C above climo temperature |
 | 13 | too-early | reports actual observations from 6h prior as the forecast for all leads |
 | 14 | monday | systematically worse weather on Mondays, better on Fridays |
 | 15 | grant-funded | mild climo walk, but ~20% of variables return None each lead |
@@ -33,9 +33,9 @@ BOGO is a 27-member ensemble where each member applies a different flavor of wro
 | 17 | peer-review | mean of all other members plus small noise |
 | 18 | dew-denier | always reports temperature value as dewpoint (100% RH forever) |
 | 19 | breaking-news | always predicts the historical seasonal extreme for each variable |
-| 20 | engagement-bait | precip always 51%; temperature rounded to nearest integer |
+| 20 | engagement-bait | temperature rounded to nearest integer |
 | 21 | both-sides | alternates hot/cold seasonal extremes at each successive lead time |
-| 22 | sponsored-content | always predicts perfect mild outdoor weather: 22°C, 0% precip |
+| 22 | sponsored-content | always predicts perfect mild outdoor weather: 22°C |
 | 23 | influencer | randomly chooses "golden hour aesthetic" or "dramatic storm content" |
 | 24 | panic | catastrophically overreacts to any pressure change |
 | 25 | nostalgia | reports actual observations from this exact date one year ago |
@@ -49,7 +49,6 @@ BOGO is a 27-member ensemble where each member applies a different flavor of wro
 | temperature | ±5.0 °C |
 | dewpoint | ±3.0 °C |
 | pressure | ±3.0 hPa |
-| precip_prob | ±0.20, clamped [0, 1] |
 
 chaos uses 3× base; mercury-retrograde uses 10× during retrograde, 0.5× otherwise.
 

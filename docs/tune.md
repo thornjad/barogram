@@ -30,8 +30,7 @@ times. Learning that structure is more useful than averaging over it.
 
 Barogram uses a simplified version of this principle. After enough forecasts have been
 scored, `tune` computes a **skill score** for each member: how much better (or worse) it
-performs relative to a naive reference model. For temperature, dewpoint, and precipitation
-probability the reference is `climatological_mean`; for pressure it is `persistence`.
+performs relative to a naive reference model. For temperature and dewpoint the reference is `climatological_mean`; for pressure it is `persistence`.
 
 Skill is defined as `1 - loss_member / loss_reference`. A skill of zero means the member
 performs exactly as well as the reference; positive skill means it beats the reference;
@@ -84,8 +83,4 @@ When a sector has fewer than `--min-runs` scored rows, the blend collapses to th
 Huber loss entirely. The pooled fraction is permanent — it does not shrink to zero as data
 accumulates — so the all-sector signal always contributes a small stabilizing influence.
 
-One variable-specific note: the `mae` column in the forecasts table stores Brier score
-(squared error) for `precip_prob` and absolute error for all other variables. `tune`
-uses the `error` column (signed linear difference) for all Huber loss computations, so
-the tuning is consistent across variables. The `mae` column is used only by the
-dashboard for display.
+The `mae` column in the forecasts table stores absolute error. `tune` uses the `error` column (signed linear difference) for all Huber loss computations. The `mae` column is used only by the dashboard for display.
