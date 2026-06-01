@@ -4565,11 +4565,9 @@ def generate(
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2/plotly.min.js"></script>
 <script>
 const GENERATED_AT = {now};
-(function() {{
-  if (Date.now() / 1000 - GENERATED_AT > 6 * 3600) {{
-    document.getElementById('stale-age-banner').style.display = '';
-  }}
-}})();
+if (Date.now() / 1000 - GENERATED_AT > 6 * 3600) {{
+  document.getElementById('stale-age-banner').style.display = '';
+}}
 function plotBg() {{
     const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     return dark
