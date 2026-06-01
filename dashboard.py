@@ -271,6 +271,8 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .acc-ok { color: #555; }
 .acc-low { color: #8b4400; }
 .acc-poor { color: #8b2020; }
+.acc-cell.acc-best { background: #d7ecd7; }
+.acc-cell.acc-worst { background: #f0d8d8; }
 .acc-lead-table th.model-name-cell { text-align: left; font-weight: 500; padding-right: 16px; }
 .acc-lead-table .baseline-row th.model-name-cell { color: #bbb; }
 .acc-overall-table td { text-align: center; font-size: 15px; font-weight: 600; }
@@ -763,6 +765,8 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     .acc-ok { color: #aaa; }
     .acc-low { color: #cc8844; }
     .acc-poor { color: #cc6666; }
+    .acc-cell.acc-best { background: #1e3a1e; }
+    .acc-cell.acc-worst { background: #3a1e1e; }
     .acc-lead-table .baseline-row th.model-name-cell { color: #555; }
     .baseline-row td { color: #555; }
     .baseline-row .model-id-cell { color: #444; }
@@ -3807,7 +3811,7 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
         cells = ""
         for lt in lts:
             data_attrs = "".join(
-                f' data-{var}="{model_data[name][var].get(lt):.0f}"'
+                f' data-{var}="{model_data[name][var].get(lt)!r}"'
                 if model_data[name][var].get(lt) is not None
                 else f' data-{var}=""'
                 for var in _ACC_VARIABLES
@@ -3815,7 +3819,10 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
             def_skill = model_data[name]["temperature"].get(lt)
             display = f"{def_skill:.0f}%" if def_skill is not None else "—"
             cls = _acc_cls(def_skill)
-            cells += f'<td class="acc-cell{cls}"{data_attrs}>{display}</td>'
+            cells += (
+                f'<td class="acc-cell{cls}" data-lead="{lt}"'
+                f' data-mid="{meta["model_id"]}"{data_attrs}>{display}</td>'
+            )
         mbtn = ""
         if member_models and name in member_models:
             mbtn = f' <button class="member-btn" data-model="{name}">members</button>'
@@ -4045,17 +4052,44 @@ document.getElementById('skill-all-models-toggle').addEventListener('click', fun
 def _accuracy_table_js() -> str:
     return """\
 function updateAccTable(varName) {
-    document.querySelectorAll('.acc-lead-table .acc-cell').forEach(function(cell) {
-        var raw = cell.getAttribute('data-' + varName);
-        if (!raw && raw !== '0') {
-            cell.textContent = '\u2014';
-            cell.className = 'acc-cell';
-        } else {
+    document.querySelectorAll('.acc-lead-table').forEach(function(table) {
+        var byLead = {};
+        table.querySelectorAll('.acc-cell').forEach(function(cell) {
+            var raw = cell.getAttribute('data-' + varName);
+            if (raw === '' || raw === null) {
+                cell.textContent = '\u2014';
+                cell.className = 'acc-cell';
+                return;
+            }
             var pct = parseFloat(raw);
             cell.textContent = pct.toFixed(0) + '%';
             var suffix = pct >= 80 ? ' acc-excellent' : pct >= 50 ? ' acc-high' : pct >= 20 ? ' acc-mid' : pct >= 0 ? ' acc-ok' : pct >= -50 ? ' acc-low' : ' acc-poor';
             cell.className = 'acc-cell' + suffix;
-        }
+            var lead = cell.getAttribute('data-lead');
+            (byLead[lead] = byLead[lead] || []).push(
+                { cell: cell, val: pct, mid: parseInt(cell.getAttribute('data-mid'), 10) }
+            );
+        });
+        // highlight best (any model) and worst (excluding models 1 and 2) per lead column
+        var eps = 1e-9;
+        Object.keys(byLead).forEach(function(lead) {
+            var cells = byLead[lead];
+            var maxVal = -Infinity, minVal = Infinity;
+            cells.forEach(function(c) {
+                if (c.val > maxVal) maxVal = c.val;
+                if (c.mid !== 1 && c.mid !== 2 && c.val < minVal) minVal = c.val;
+            });
+            cells.forEach(function(c) {
+                if (Math.abs(c.val - maxVal) < eps) c.cell.classList.add('acc-best');
+            });
+            if (minVal < maxVal - eps) {
+                cells.forEach(function(c) {
+                    if (c.mid !== 1 && c.mid !== 2 && Math.abs(c.val - minVal) < eps) {
+                        c.cell.classList.add('acc-worst');
+                    }
+                });
+            }
+        });
     });
 }
 
@@ -4094,6 +4128,9 @@ document.querySelectorAll('.acc-window-btn').forEach(function(btn) {
         updateAccWindow(btn.dataset.window);
     });
 });
+
+var accInitBtn = document.querySelector('.acc-filter-btn.active');
+updateAccTable(accInitBtn ? accInitBtn.dataset.var : 'temperature');
 """
 
 
