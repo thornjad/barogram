@@ -1,7 +1,11 @@
-.PHONY: all forecast score tune dashboard conditions test
+.PHONY: all run forecast score tune dashboard conditions test publish
 
-all:
-	uv run barogram run
+all: run
+
+run:
+	uv run barogram score
+	uv run barogram forecast
+	uv run barogram dashboard
 
 forecast:
 	uv run barogram forecast
@@ -20,3 +24,6 @@ conditions:
 
 test:
 	uv run pytest tests/
+
+publish:
+	/Users/jmt/.local/bin/barogram-publish

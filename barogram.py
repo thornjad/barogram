@@ -156,6 +156,7 @@ def cmd_forecast(args, conf):
         else None
     )
 
+    total_rows = 0
     failed = []
     for model in _MODELS:
         kwargs = {}
@@ -174,86 +175,22 @@ def cmd_forecast(args, conf):
         try:
             rows = model.run(obs, issued_at, **kwargs)
             db.insert_forecasts(conn_out, rows)
+            total_rows += len(rows)
             print(f"  {model.MODEL_NAME}: {len(rows)} rows")
         except Exception as e:
             print(f"  {model.MODEL_NAME}: ERROR — {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             failed.append(model.MODEL_NAME)
+
+    if total_rows == 0:
+        print("forecast failed: no rows written", file=sys.stderr)
+        sys.exit(1)
+
     db.set_metadata(conn_out, "last_forecast", str(issued_at))
     if failed:
         print(f"forecast complete with errors: {', '.join(failed)}", file=sys.stderr)
-        sys.exit(1)
-    print("forecast complete")
-
-
-def cmd_run(args, conf):
-    _sync_check()
-    issued_at = int(time.time())
-    output = Path(__file__).parent / "dashboard.html"
-    migrations_dir = Path(__file__).parent / "migrations"
-
-    try:
-        conn_in = db.open_input_db(conf.input_db)
-    except FileNotFoundError as e:
-        sys.exit(f"error: {e}")
-    try:
-        db.validate_schema(conn_in)
-    except ValueError as e:
-        sys.exit(f"error: {e}")
-
-    conn_out = db.open_output_db(conf.output_db)
-    db.run_migrations(conn_out, migrations_dir)
-
-    print("scoring...")
-    result = scorer.run(conn_in, conn_out)
-    print(f"  scored {result['scored']}, skipped {result['skipped']}")
-
-    obs = db.latest_tempest_obs(conn_in)
-    if obs is None:
-        sys.exit("error: no Tempest observations in input database")
-
-    shared_all_obs = (
-        db.tempest_obs_in_range(conn_in, 0, issued_at)
-        if any(getattr(m, "NEEDS_ALL_OBS", False) for m in _MODELS)
-        else None
-    )
-    shared_location = (
-        db.tempest_station_location(conn_in)
-        if any(getattr(m, "NEEDS_LOCATION", False) for m in _MODELS)
-        else None
-    )
-
-    print("forecasting...")
-    failed = []
-    for model in _MODELS:
-        kwargs = {}
-        if getattr(model, "NEEDS_CONF", False):
-            kwargs["conf"] = conf
-        if getattr(model, "NEEDS_CONN_IN", False):
-            kwargs["conn_in"] = conn_in
-        if getattr(model, "NEEDS_CONN_OUT", False):
-            kwargs["conn_out"] = conn_out
-        if getattr(model, "NEEDS_WEIGHTS", False):
-            kwargs["weights"] = db.load_weights(conn_out, model.MODEL_ID)
-        if getattr(model, "NEEDS_ALL_OBS", False):
-            kwargs["all_obs"] = shared_all_obs
-        if getattr(model, "NEEDS_LOCATION", False):
-            kwargs["location"] = shared_location
-        try:
-            rows = model.run(obs, issued_at, **kwargs)
-            db.insert_forecasts(conn_out, rows)
-            print(f"  {model.MODEL_NAME}: {len(rows)} rows")
-        except Exception as e:
-            print(f"  {model.MODEL_NAME}: ERROR — {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-            failed.append(model.MODEL_NAME)
-    db.set_metadata(conn_out, "last_forecast", str(issued_at))
-    if failed:
-        print(f"forecast errors: {', '.join(failed)}", file=sys.stderr)
-
-    print("building dashboard...")
-    dash.generate(conn_in, conn_out, output, machine_id=args.machine_id)
-    print(f"  wrote {output}")
+    else:
+        print("forecast complete")
 
 
 def cmd_dashboard(args, conf):
@@ -717,9 +654,6 @@ def main():
         help="optional label shown in dashboard timestamps (e.g. 'secondary')",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="command")
-    subparsers.add_parser(
-        "run", help="score pending forecasts, run models, and rebuild dashboard"
-    )
     subparsers.add_parser("conditions", help="show latest observed conditions")
     subparsers.add_parser(
         "forecast", help="run forecast models and write to output database"
@@ -787,9 +721,7 @@ def main():
 
     conf = cfg.load(args.config)
 
-    if args.command == "run":
-        cmd_run(args, conf)
-    elif args.command == "conditions":
+    if args.command == "conditions":
         cmd_conditions(args, conf)
     elif args.command == "forecast":
         cmd_forecast(args, conf)

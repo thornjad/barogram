@@ -75,8 +75,8 @@ The dashboard requires internet connectivity to load Plotly from CDN.
 
 ### Typical workflow
 
-`run` fires automatically (e.g. every 3 hours via a cron job or launchd) and handles the
-score → forecast → dashboard pipeline. `tune` is a separate, infrequent step — run it
+`make run` fires automatically (e.g. every 3 hours via a cron job or launchd) and handles the
+score → forecast → dashboard pipeline, stopping if the forecast step fails. `tune` is a separate, infrequent step — run it
 periodically once enough scoring data has accumulated to meaningfully differentiate ensemble
 members. See [docs/tune.md](docs/tune.md) for details.
 
@@ -85,7 +85,8 @@ members. See [docs/tune.md](docs/tune.md) for details.
 A `Makefile` wraps the common commands for convenience:
 
 ```bash
-make          # equivalent to uv run barogram run
+make          # score → forecast → dashboard (stops if forecast fails)
+make run      # same as bare make
 make forecast
 make score
 make tune     # tune weights, then rebuild dashboard
@@ -97,7 +98,6 @@ make test
 ### Examples
 
 ```bash
-uv run barogram run
 uv run barogram conditions
 uv run barogram forecast
 uv run barogram score
@@ -114,7 +114,7 @@ uv run barogram --help
 ## Multi-machine sync
 
 If you run barogram on multiple machines with the output database synced via Syncthing,
-write commands (`run`, `forecast`, `score`, `tune`) will check that the local Syncthing
+write commands (`forecast`, `score`, `tune`) will check that the local Syncthing
 folder is idle before writing, reducing the chance of sync conflicts.
 
 Create `barogram.local.toml` (gitignored and stignored) from the example:

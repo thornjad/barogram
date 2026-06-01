@@ -9,13 +9,17 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 
 | Command      | Description                                          |
 |--------------|------------------------------------------------------|
-| `run`        | Score pending forecasts, run all models, rebuild dashboard |
 | `forecast`   | Run all models, write forecast rows                  |
 | `score`      | Score past forecasts against observations            |
 | `tune`       | Compute skill-score member weights from scoring history |
 | `dashboard`  | Regenerate dashboard.html                            |
 | `conditions` | Print latest Tempest and NWS observations            |
 | `query`      | Run a SQL query against barogram.db or wxlog         |
+
+There is no `run` subcommand. `make run` composes the full cycle — `score`, then
+`forecast`, then `dashboard` — as separate steps, and stops if `forecast` exits
+non-zero (it does so only when no forecast rows were written), so a stale or empty
+forecast never reaches the dashboard or publish step.
 
 ### Data investigation with `query`
 
