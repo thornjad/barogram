@@ -2324,6 +2324,13 @@ def _ensemble_forecast_section(
             f'</div>'
         )
         refs = []
+        if corrected_ref is not None:
+            refs.append(_ref_panel(
+                'Corrected',
+                corrected_ref.get('temperature'), corrected_ref.get('dewpoint'),
+                temp_val,
+                corrected_time_str,
+            ))
         if tempest_ref is not None:
             refs.append(_ref_panel(
                 'Tempest',
@@ -2337,13 +2344,6 @@ def _ensemble_forecast_section(
                 nws_ref.get('temperature'), nws_ref.get('dewpoint'),
                 temp_val,
                 nws_time_str,
-            ))
-        if corrected_ref is not None:
-            refs.append(_ref_panel(
-                'Corrected',
-                corrected_ref.get('temperature'), corrected_ref.get('dewpoint'),
-                temp_val,
-                corrected_time_str,
             ))
         refs_html = (
             '<div class="fcst-row-refs">' + ''.join(refs) + '</div>'
