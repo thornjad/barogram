@@ -4344,6 +4344,7 @@ def generate(
     _lf = db.get_metadata(conn_out, "last_forecast")
     _lt = db.get_metadata(conn_out, "last_tune")
     last_forecast_str = fmt.ts(int(_lf)) if _lf else "\u2014"
+    last_forecast_epoch = int(_lf) if _lf else 0
     last_tune_str = fmt.ts(int(_lt)) if _lt else "\u2014"
 
     # staleness check: models whose last issued_at is >2h behind last_forecast
@@ -4473,7 +4474,7 @@ def generate(
 </header>
 {staleness_banner}
 <div id="stale-age-banner" class="stale-banner stale-age-banner" style="display:none">
-  <strong>Heads up:</strong> this dashboard was generated more than 6 hours ago and may not reflect current conditions.
+  <strong>Heads up:</strong> the latest forecast is more than 6 hours old and may not reflect current conditions.
 </div>
 <section class="section" id="about">
   <p>Barogram is a pet forecast ensemble, a small collection of models I run for fun and to learn more about how forecasting actually works. Every three hours, they look at the latest readings from a backyard Tempest weather station in the Twin Cities, MN and a nearby NWS airport station, then each independently predict local temperature, dew point, pressure, and precipitation probability for the next 6 to 24 hours.</p>
@@ -4564,8 +4565,8 @@ def generate(
 </div>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2/plotly.min.js"></script>
 <script>
-const GENERATED_AT = {now};
-if (Date.now() / 1000 - GENERATED_AT > 6 * 3600) {{
+const LAST_FORECAST = {last_forecast_epoch};
+if (LAST_FORECAST && Date.now() / 1000 - LAST_FORECAST > 6 * 3600) {{
   document.getElementById('stale-age-banner').style.display = '';
 }}
 function plotBg() {{
