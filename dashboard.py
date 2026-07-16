@@ -1441,7 +1441,7 @@ def _rolling_mean(values: list, window: int = 10) -> list:
 
 
 def _mae_timeseries_data(timeseries_rows: list) -> dict:
-    """lead (str) -> model -> {is_baseline, is_persistence, is_ensemble, model_id,
+    """lead (str) -> model -> {is_baseline, is_ensemble, model_id,
                                series: {var|avg -> {x, y_ratio, y_ratio_rolling}}}
 
     y_ratio = MAE / climo_MAE for the same (var, lead, issued_at); 1.0 = matches climo.
@@ -1462,8 +1462,9 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
         c_ts: dict = raw[lead].get("climatological_mean", {})
         result[str(lead)] = {}
         for model, vars_ in raw[lead].items():
+            if model == "persistence":
+                continue
             is_baseline = model == "climatological_mean"
-            is_persistence = model == "persistence"
             is_ensemble = model_meta[model]["is_ensemble"]
             series: dict = {}
             for var, ts in vars_.items():
@@ -1495,7 +1496,6 @@ def _mae_timeseries_data(timeseries_rows: list) -> dict:
             series["avg"] = {"x": ax, "y_ratio": ay_ratio, "y_ratio_rolling": _rolling_mean(ay_ratio)}
             result[str(lead)][model] = {
                 "is_baseline": is_baseline,
-                "is_persistence": is_persistence,
                 "is_ensemble": is_ensemble,
                 "model_id": model_meta[model]["model_id"],
                 "series": series,
@@ -1655,25 +1655,23 @@ function drawMaeCharts() {{
         const traces = Object.entries(leadData).map(function([model, info]) {{
             const s = (info.series || {{}})[maeActiveVar] || {{}};
             const isBaseline = info.is_baseline;
-            const isPersistence = info.is_persistence;
-            const isRef = isBaseline || isPersistence;
             const isEns = info.is_ensemble;
-            const color = isRef ? '#aaaaaa' : maeModelColors[model];
-            const dash = isBaseline ? 'longdash' : (isPersistence ? 'dot' : (isEns ? 'dash' : 'solid'));
-            const y = (smoothMode && !isRef) ? (s.y_ratio_rolling || []) : (s.y_ratio || []);
+            const color = isBaseline ? '#aaaaaa' : maeModelColors[model];
+            const dash = isBaseline ? 'longdash' : (isEns ? 'dash' : 'solid');
+            const y = (smoothMode && !isBaseline) ? (s.y_ratio_rolling || []) : (s.y_ratio || []);
             return {{
                 type: 'scatter',
-                mode: isRef ? 'lines' : (smoothMode ? 'lines' : 'lines+markers'),
+                mode: isBaseline ? 'lines' : (smoothMode ? 'lines' : 'lines+markers'),
                 name: String(info.model_id),  // deliberate: full names overflow chart legend
                 x: s.x || [],
                 y: y,
-                line: {{ width: isRef ? 1.5 : 2, dash: dash, color: color }},
+                line: {{ width: isBaseline ? 1.5 : 2, dash: dash, color: color }},
                 marker: {{ size: 5, color: color }}
             }};
         }});
         if (!smoothMode) {{
             Object.entries(leadData).forEach(function([model, info]) {{
-                if (info.is_baseline || info.is_persistence) return;
+                if (info.is_baseline) return;
                 const s = (info.series || {{}})[maeActiveVar] || {{}};
                 const yr = s.y_ratio_rolling || [];
                 if (!yr.length) return;
@@ -4510,7 +4508,7 @@ def generate(
   <div class="table-scroll">{acc_lead_table_html}</div>
   <h3 class="obs-subhead">Skill over time</h3>
   <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button></div>
-  <p class="chart-legend-note">Y-axis: MAE ÷ climo MAE per run. 1.0 = same error as climatological mean · below 1.0 = better · above 1.0 = worse. Grey: climo (long-dash) and persistence (dotted). Per-run detail: solid with rolling average overlay.</p>
+  <p class="chart-legend-note">Y-axis: MAE ÷ climo MAE per run. 1.0 = same error as climatological mean · below 1.0 = better · above 1.0 = worse. Grey long-dash: climo. Per-run detail: solid with rolling average overlay.</p>
   <div class="mae-charts-grid">
     {mae_chart_divs}
   </div>

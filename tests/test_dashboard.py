@@ -62,46 +62,35 @@ def test_timeseries_climo_ratio_is_one():
     assert climo["series"]["pressure"]["y_ratio"] == [1.0]
 
 
-def test_timeseries_persistence_ratio_vs_climo():
+def test_timeseries_persistence_excluded():
     rows = [
         _make_ts_row(2, "climatological_mean", "base", _T0, "pressure", 1.0),
         _make_ts_row(1, "persistence", "base", _T0, "pressure", 2.0),
     ]
     result = dashboard._mae_timeseries_data(rows)
-    pers = result["24"]["persistence"]
-    assert pers["series"]["pressure"]["y_ratio"] == [2.0]
+    assert "persistence" not in result["24"]
 
 
 def test_timeseries_is_baseline_flag():
     rows = [
         _make_ts_row(2, "climatological_mean", "base", _T0, "pressure", 1.0),
-        _make_ts_row(1, "persistence", "base", _T0, "pressure", 2.0),
+        _make_ts_row(201, "tempest_forecast", "external", _T0, "pressure", 2.0),
     ]
     result = dashboard._mae_timeseries_data(rows)
     assert result["24"]["climatological_mean"]["is_baseline"] is True
-    assert result["24"]["persistence"]["is_baseline"] is False
-
-
-def test_timeseries_is_persistence_flag():
-    rows = [
-        _make_ts_row(2, "climatological_mean", "base", _T0, "pressure", 1.0),
-        _make_ts_row(1, "persistence", "base", _T0, "pressure", 2.0),
-    ]
-    result = dashboard._mae_timeseries_data(rows)
-    assert result["24"]["persistence"]["is_persistence"] is True
-    assert result["24"]["climatological_mean"]["is_persistence"] is False
+    assert result["24"]["tempest_forecast"]["is_baseline"] is False
 
 
 def test_timeseries_rolling_present():
     rows = [
         _make_ts_row(2, "climatological_mean", "base", _T0, "pressure", 1.0),
         _make_ts_row(2, "climatological_mean", "base", _T1, "pressure", 1.0),
-        _make_ts_row(1, "persistence", "base", _T0, "pressure", 2.0),
-        _make_ts_row(1, "persistence", "base", _T1, "pressure", 2.0),
+        _make_ts_row(201, "tempest_forecast", "external", _T0, "pressure", 2.0),
+        _make_ts_row(201, "tempest_forecast", "external", _T1, "pressure", 2.0),
     ]
     result = dashboard._mae_timeseries_data(rows)
-    pers = result["24"]["persistence"]["series"]["pressure"]
-    assert "y_ratio_rolling" in pers
-    assert len(pers["y_ratio_rolling"]) == len(pers["y_ratio"])
+    tempest = result["24"]["tempest_forecast"]["series"]["pressure"]
+    assert "y_ratio_rolling" in tempest
+    assert len(tempest["y_ratio_rolling"]) == len(tempest["y_ratio"])
 
 
