@@ -650,7 +650,6 @@ def skill_timeseries_multi(
             from forecasts
             where scored_at is not null
               and member_id = 0
-              and model_id != 1
               and variable in ({active_placeholder})
               and issued_at >= ?
             group by day, model_id, model, variable, lead_hours
