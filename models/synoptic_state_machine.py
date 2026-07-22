@@ -11,6 +11,14 @@
 #   5  coarse-4             coarsened binary × conv — 24 cells; more data per cell
 #   6  full-4+ptend         (wind_rot, dp_trend, cloud, conv, p_tend) — 243 cells; abstains at night
 #   7  no-cloud+ptend       (wind_rot, dp_trend, conv, p_tend) — 81 cells; works at night
+#   8  moisture-only        (dp_trend,) — 3 cells
+#   9  convective-only      (conv,) — 3 cells; never abstains for missing signal
+#  10  moisture-ptend       (dp_trend, p_tend) — 9 cells
+#  11  moisture-conv-ptend  (dp_trend, conv, p_tend) — 27 cells
+#  12  moisture-cloud       (dp_trend, cloud) — 9 cells; abstains at night
+#  13  no-wind              (dp_trend, cloud, conv, p_tend) — 81 cells; drops wind_rot
+#  14  wind-only            (wind_rot,) — 3 cells
+#  15  convective-cloud     (conv, cloud) — 9 cells; abstains at night
 
 import statistics
 
@@ -43,7 +51,7 @@ VARIABLES = {
 }
 
 _MIN_SAMPLES = 3
-_ALL_MEMBER_IDS = [1, 2, 3, 4, 5, 6, 7]
+_ALL_MEMBER_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 _PTEND_THRESHOLD = 0.5
 
 
@@ -84,6 +92,14 @@ def _member_states(rot, dp, cloud, conv, p_tend) -> dict:
            if None not in (rot, dp, cloud) else None,
         6: (rot, dp, cloud, conv, p_tend) if None not in (rot, dp, cloud, p_tend) else None,
         7: (rot, dp, conv, p_tend)        if None not in (rot, dp, p_tend) else None,
+        8: (dp,)                  if dp is not None else None,
+        9: (conv,),
+        10: (dp, p_tend)          if None not in (dp, p_tend) else None,
+        11: (dp, conv, p_tend)    if None not in (dp, p_tend) else None,
+        12: (dp, cloud)           if None not in (dp, cloud) else None,
+        13: (dp, cloud, conv, p_tend) if None not in (dp, cloud, p_tend) else None,
+        14: (rot,)                if rot is not None else None,
+        15: (conv, cloud)         if cloud is not None else None,
     }
 
 

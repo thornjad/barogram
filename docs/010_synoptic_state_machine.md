@@ -52,6 +52,20 @@ produced non-None values.
 | 5 | coarse-4 | coarsened wind, dp, cloud, convective | 2×2×2×3 = 24 | abstains at night; more data per cell |
 | 6 | full-4+ptend | wind, dp, cloud, convective, pressure tendency | 3×3×3×3×3 = 243 | abstains at night; adds pressure trend |
 | 7 | no-cloud+ptend | wind, dp, convective, pressure tendency | 3×3×3×3 = 81 | works at night; adds pressure trend |
+| 8 | moisture-only | dp | 3 | dp trend alone |
+| 9 | convective-only | convective | 3 | convective alone; never abstains for a missing signal |
+| 10 | moisture-ptend | dp, pressure tendency | 3×3 = 9 | dp paired with ptend instead of convective |
+| 11 | moisture-conv-ptend | dp, convective, pressure tendency | 3×3×3 = 27 | the three signals that don't require cloud or wind |
+| 12 | moisture-cloud | dp, cloud | 3×3 = 9 | abstains at night; dp paired with cloud instead of convective |
+| 13 | no-wind | dp, cloud, convective, pressure tendency | 3×3×3×3 = 81 | full-4+ptend minus wind rotation |
+| 14 | wind-only | wind | 3 | wind rotation alone; weak contrast baseline |
+| 15 | convective-cloud | convective, cloud | 3×3 = 9 | abstains at night; sky-condition pair, no moisture signal |
+
+Members 8–15 riff on member 4 (moisture-convective), the smallest, most consistently
+available member of the original seven: they explore why it holds up (few cells, no
+wind-rotation dependency, always-defined convective signal) by isolating and recombining
+signals, minus the wind-rotation dependency where possible. 9 and 14 are deliberately
+weak — single-signal contrast baselines to see how far a single category goes.
 
 Member 5 coarsens the first three signals to binary categories to increase sample counts:
 
