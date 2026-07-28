@@ -3970,7 +3970,12 @@ def _skill_timeseries_data(rows: list) -> dict:
 
 def _skill_timeseries_html() -> str:
     """Heading + window-toggled chart containers + all-models toggle for skill-over-time."""
-    windows = [("14d", ""), ("120d", ' style="display:none"'), ("alltime", ' style="display:none"')]
+    windows = [
+        ("14d", ""),
+        ("120d", ' style="display:none"'),
+        ("alltime", ' style="display:none"'),
+        ("10r", ' style="display:none"'),
+    ]
     parts = [
         '<h3 class="obs-subhead">Skill Over Time</h3>',
         '<div class="mae-filter-bar"><button id="skill-all-models-toggle" class="mae-raw-btn">All models</button></div>',
@@ -3986,10 +3991,10 @@ def _skill_timeseries_html() -> str:
     return "\n".join(parts)
 
 
-def _skill_timeseries_js(data_14d: dict, data_120d: dict, data_alltime: dict) -> str:
-    """Plotly + toggle logic for the three skill-over-time charts."""
+def _skill_timeseries_js(data_14d: dict, data_120d: dict, data_alltime: dict, data_10r: dict) -> str:
+    """Plotly + toggle logic for the four skill-over-time charts."""
     import json as _json
-    windows = [("14d", data_14d), ("120d", data_120d), ("alltime", data_alltime)]
+    windows = [("14d", data_14d), ("120d", data_120d), ("alltime", data_alltime), ("10r", data_10r)]
     data_by_window: dict = {}
     for wid, d in windows:
         data_by_window[wid] = d
@@ -4038,12 +4043,12 @@ function renderSkillTimeseries(wid) {{
     }}, {{responsive: true}});
 }}
 
-['14d', '120d', 'alltime'].forEach(function(wid) {{ renderSkillTimeseries(wid); }});
+['14d', '120d', 'alltime', '10r'].forEach(function(wid) {{ renderSkillTimeseries(wid); }});
 
 document.getElementById('skill-all-models-toggle').addEventListener('click', function() {{
     skillShowAll = !skillShowAll;
     this.classList.toggle('active', skillShowAll);
-    ['14d', '120d', 'alltime'].forEach(function(wid) {{ renderSkillTimeseries(wid); }});
+    ['14d', '120d', 'alltime', '10r'].forEach(function(wid) {{ renderSkillTimeseries(wid); }});
 }});
 """
 
@@ -4100,13 +4105,10 @@ document.querySelectorAll('.acc-filter-btn').forEach(function(btn) {
 });
 
 function updateAccWindow(win) {
-    var skillWin = win === '10r' ? '14d' : win;
-    ['14d', '120d', 'alltime'].forEach(function(w) {
-        var el = document.getElementById('skill-timeseries-' + w);
-        if (el) el.style.display = (w === skillWin) ? '' : 'none';
-    });
     ['14d', '120d', 'alltime', '10r'].forEach(function(w) {
-        var el = document.getElementById('acc-overall-' + w);
+        var el = document.getElementById('skill-timeseries-' + w);
+        if (el) el.style.display = (w === win) ? '' : 'none';
+        el = document.getElementById('acc-overall-' + w);
         if (el) el.style.display = (w === win) ? '' : 'none';
         el = document.getElementById('acc-lead-' + w);
         if (el) el.style.display = (w === win) ? '' : 'none';
@@ -4114,7 +4116,7 @@ function updateAccWindow(win) {
     var activeBtn = document.querySelector('.acc-filter-btn.active');
     if (activeBtn) updateAccTable(activeBtn.dataset.var);
     window.setTimeout(function() {
-        var c = document.getElementById('skill-timeseries-chart-' + skillWin);
+        var c = document.getElementById('skill-timeseries-chart-' + win);
         if (c) Plotly.Plots.resize(c);
     }, 0);
 }
@@ -4290,11 +4292,13 @@ def generate(
     acc_rows_10r = db.accuracy_by_lead(conn_out, 10)
     acc_count_10r = db.accuracy_run_count_last_n(conn_out, 10)
     _skill_ts = db.skill_timeseries_multi(conn_out, [_14d, _120d, 0])
+    _skill_ts_10r = db.skill_timeseries_last_n_runs(conn_out, 10)
     skill_ts_html = _skill_timeseries_html()
     skill_ts_js = _skill_timeseries_js(
         _skill_timeseries_data(_skill_ts[_14d]),
         _skill_timeseries_data(_skill_ts[_120d]),
         _skill_timeseries_data(_skill_ts[0]),
+        _skill_timeseries_data(_skill_ts_10r),
     )
     _counts = db.accuracy_run_count_multi(conn_out, [_14d, _120d, 0])
     acc_count_14d = _counts[_14d]
@@ -4362,6 +4366,22 @@ def generate(
             f'<div class="stale-banner">'
             f'<strong>Warning:</strong> the following models did not run in the last forecast cycle '
             f'and may have stale data: {model_list}.'
+            f'</div>'
+        )
+
+    # observation staleness: last Tempest reading >2h old means every model is
+    # forecasting off dead input even if the forecast job itself ran on schedule
+    obs_age = now - tempest["timestamp"] if tempest else None
+    obs_staleness_banner = ""
+    if obs_age is None or obs_age > 7200:
+        if obs_age is None:
+            age_str = "no readings found"
+        else:
+            age_str = f"{obs_age / 3600:.1f} hours old"
+        obs_staleness_banner = (
+            f'<div class="stale-banner">'
+            f'<strong>Warning:</strong> latest Tempest observation is {age_str} '
+            f'&mdash; forecasts may be based on stale input regardless of when they were generated.'
             f'</div>'
         )
 
@@ -4471,6 +4491,7 @@ def generate(
   </div>
 </header>
 {staleness_banner}
+{obs_staleness_banner}
 <div id="stale-age-banner" class="stale-banner stale-age-banner" style="display:none">
   <strong>Heads up:</strong> the latest forecast is more than 6 hours old and may not reflect current conditions.
 </div>

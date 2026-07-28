@@ -620,23 +620,6 @@ def skill_timeseries_multi(
     for since in since_epochs:
         active_vars = ("temperature", "dewpoint", "pressure")
 
-        climo_lookup: dict[tuple[str, int], float] = {}
-        var_placeholder = ",".join("?" * len(active_vars))
-        for r in conn.execute(
-            f"""
-            select variable, lead_hours, avg(mae) as climo_mae
-            from forecasts
-            where scored_at is not null
-              and member_id = 0
-              and model_id = 2
-              and variable in ({var_placeholder})
-              and issued_at >= ?
-            group by variable, lead_hours
-            """,
-            (*active_vars, since),
-        ).fetchall():
-            climo_lookup[(r["variable"], r["lead_hours"])] = r["climo_mae"]
-
         active_placeholder = ",".join("?" * len(active_vars))
         daily_rows = conn.execute(
             f"""
@@ -658,9 +641,14 @@ def skill_timeseries_multi(
             (*active_vars, since),
         ).fetchall()
 
+        climo_by_day: dict[tuple[str, str, int], float] = {}
+        for r in daily_rows:
+            if r["model_id"] == 2:
+                climo_by_day[(r["day"], r["variable"], r["lead_hours"])] = r["avg_mae"]
+
         agg: dict[tuple[str, int], dict] = {}
         for r in daily_rows:
-            climo_mae = climo_lookup.get((r["variable"], r["lead_hours"]))
+            climo_mae = climo_by_day.get((r["day"], r["variable"], r["lead_hours"]))
             if climo_mae is None or climo_mae <= 0:
                 continue
             skill = (1.0 - r["avg_mae"] / climo_mae) * 100.0
@@ -677,6 +665,71 @@ def skill_timeseries_multi(
         out.sort(key=lambda r: (r["day"], r["model_id"]))
         result[since] = out
     return result
+
+
+def skill_timeseries_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
+    """Per-run avg skill for ensemble/nws/tempest vs climo, over the last n scored runs.
+
+    Same skill calculation as skill_timeseries_multi (per variable/lead_hours skill,
+    then averaged) but grouped by run instead of by calendar day, so "last N runs"
+    reflects exactly N forecast runs rather than a time window that may span more.
+
+    Returns a list of row dicts with keys day, model_id, model, avg_skill — "day" here
+    is a run timestamp label, kept as that key name for compatibility with
+    _skill_timeseries_data.
+    """
+    active_vars = ("temperature", "dewpoint", "pressure")
+    active_placeholder = ",".join("?" * len(active_vars))
+    run_rows = conn.execute(
+        f"""
+        with recent as (
+            select distinct issued_at
+            from forecasts
+            where scored_at is not null
+            order by issued_at desc
+            limit ?
+        )
+        select
+            datetime(f.issued_at, 'unixepoch', 'localtime') as run,
+            f.model_id,
+            f.model,
+            f.variable,
+            f.lead_hours,
+            avg(f.mae) as avg_mae
+        from forecasts f
+        join recent r on r.issued_at = f.issued_at
+        where f.scored_at is not null
+          and f.member_id = 0
+          and f.variable in ({active_placeholder})
+        group by run, f.model_id, f.model, f.variable, f.lead_hours
+        order by run
+        """,
+        (n, *active_vars),
+    ).fetchall()
+
+    climo_by_run: dict[tuple[str, str, int], float] = {}
+    for r in run_rows:
+        if r["model_id"] == 2:
+            climo_by_run[(r["run"], r["variable"], r["lead_hours"])] = r["avg_mae"]
+
+    agg: dict[tuple[str, int], dict] = {}
+    for r in run_rows:
+        climo_mae = climo_by_run.get((r["run"], r["variable"], r["lead_hours"]))
+        if climo_mae is None or climo_mae <= 0:
+            continue
+        skill = (1.0 - r["avg_mae"] / climo_mae) * 100.0
+        key = (r["run"], r["model_id"])
+        slot = agg.setdefault(key, {"sum": 0.0, "n": 0, "model": r["model"]})
+        slot["sum"] += skill
+        slot["n"] += 1
+
+    out = [
+        {"day": run, "model_id": mid, "model": slot["model"], "avg_skill": slot["sum"] / slot["n"]}
+        for (run, mid), slot in agg.items()
+        if slot["n"] > 0
+    ]
+    out.sort(key=lambda r: (r["day"], r["model_id"]))
+    return out
 
 
 def bias_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:
