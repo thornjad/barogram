@@ -607,24 +607,28 @@ def skill_timeseries_multi(
     conn: sqlite3.Connection,
     since_epochs: list,
 ) -> dict:
-    """Per-day avg skill for ensemble/nws/tempest vs climo, across multiple time windows.
+    """Per-run avg skill for ensemble/nws/tempest vs climo, across multiple time windows.
 
     Skill is computed per (variable, lead_hours) pair first, then averaged — matching
     the table calculation exactly. Mixing MAE across variables before computing skill
     is wrong because temperature (°C) and pressure (hPa) are on different scales.
+    Grouped by individual forecast run (issued_at), not calendar day, so every run in
+    the window shows as its own point instead of being averaged into one per day.
 
-    Returns {since_epoch: list of row dicts with keys day, model_id, model, avg_skill}.
-    Since = 0 is the all-time sentinel; issued_at >= 0 is always true for any valid epoch.
+    Returns {since_epoch: list of row dicts with keys day, model_id, model, avg_skill}
+    ("day" holds a run timestamp label, kept as that key name for compatibility with
+    _skill_timeseries_data). Since = 0 is the all-time sentinel; issued_at >= 0 is
+    always true for any valid epoch.
     """
     result = {}
     for since in since_epochs:
         active_vars = ("temperature", "dewpoint", "pressure")
 
         active_placeholder = ",".join("?" * len(active_vars))
-        daily_rows = conn.execute(
+        run_rows = conn.execute(
             f"""
             select
-                date(issued_at, 'unixepoch', 'localtime') as day,
+                datetime(issued_at, 'unixepoch', 'localtime') as run,
                 model_id,
                 model,
                 variable,
@@ -635,31 +639,31 @@ def skill_timeseries_multi(
               and member_id = 0
               and variable in ({active_placeholder})
               and issued_at >= ?
-            group by day, model_id, model, variable, lead_hours
-            order by day
+            group by run, model_id, model, variable, lead_hours
+            order by run
             """,
             (*active_vars, since),
         ).fetchall()
 
-        climo_by_day: dict[tuple[str, str, int], float] = {}
-        for r in daily_rows:
+        climo_by_run: dict[tuple[str, str, int], float] = {}
+        for r in run_rows:
             if r["model_id"] == 2:
-                climo_by_day[(r["day"], r["variable"], r["lead_hours"])] = r["avg_mae"]
+                climo_by_run[(r["run"], r["variable"], r["lead_hours"])] = r["avg_mae"]
 
         agg: dict[tuple[str, int], dict] = {}
-        for r in daily_rows:
-            climo_mae = climo_by_day.get((r["day"], r["variable"], r["lead_hours"]))
+        for r in run_rows:
+            climo_mae = climo_by_run.get((r["run"], r["variable"], r["lead_hours"]))
             if climo_mae is None or climo_mae <= 0:
                 continue
             skill = (1.0 - r["avg_mae"] / climo_mae) * 100.0
-            key = (r["day"], r["model_id"])
+            key = (r["run"], r["model_id"])
             slot = agg.setdefault(key, {"sum": 0.0, "n": 0, "model": r["model"]})
             slot["sum"] += skill
             slot["n"] += 1
 
         out = [
-            {"day": day, "model_id": mid, "model": slot["model"], "avg_skill": slot["sum"] / slot["n"]}
-            for (day, mid), slot in agg.items()
+            {"day": run, "model_id": mid, "model": slot["model"], "avg_skill": slot["sum"] / slot["n"]}
+            for (run, mid), slot in agg.items()
             if slot["n"] > 0
         ]
         out.sort(key=lambda r: (r["day"], r["model_id"]))

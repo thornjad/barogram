@@ -3948,7 +3948,7 @@ def _trend_values(ys: list) -> list | None:
 
 
 def _skill_timeseries_data(rows: list) -> dict:
-    """Pivot per-day avg_skill rows into per-model series for all models."""
+    """Pivot per-run avg_skill rows into per-model series for all models."""
     from collections import defaultdict
     by_day: dict = defaultdict(dict)
     model_names: dict = {}
@@ -3979,7 +3979,7 @@ def _skill_timeseries_html() -> str:
     parts = [
         '<h3 class="obs-subhead">Skill Over Time</h3>',
         '<div class="mae-filter-bar"><button id="skill-all-models-toggle" class="mae-raw-btn">All models</button></div>',
-        '<p class="chart-legend-note">Daily forecast skill vs. climatological mean (0% line). '
+        '<p class="chart-legend-note">Per-run forecast skill vs. climatological mean (0% line). '
         'Averaged across all variables. Default: ensemble, NWS, Tempest Forecast.</p>',
     ]
     for wid, hidden in windows:
