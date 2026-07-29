@@ -12,13 +12,13 @@ NEEDS_ALL_OBS = True
 NEEDS_WEIGHTS = True
 
 # (member_id, name, degree, window_h, half_life_min, ridge_alpha, max_lead_h)
-# max_lead_h: None = no restriction; int = skip evaluation for leads > this value.
-# rule: linear capped at 2× window, quadratic at 1× window, to prevent explosive extrapolation.
+# max_lead_h: skip evaluation for leads > this value. Every member gets one — no
+# extrapolating further than the window it was fit on, degree or member id notwithstanding.
 _MEMBERS = [
     (1,  "linear-1h",      1, 1,   None, 0.0,  6),
     (2,  "linear-3h",      1, 3,   None, 0.0,  6),
     (3,  "linear-6h",      1, 6,   None, 0.0,  12),
-    (4,  "linear-12h",     1, 12,  None, 0.0,  None),
+    (4,  "linear-12h",     1, 12,  None, 0.0,  12),
     (5,  "wls-3h-hl20",    1, 3,   20,   0.0,  6),
     (6,  "wls-6h-hl45",    1, 6,   45,   0.0,  12),
     (7,  "wls-6h-hl120",   1, 6,   120,  0.0,  12),
@@ -26,12 +26,12 @@ _MEMBERS = [
     (9,  "quad-6h",        2, 6,   None, 0.0,  6),
     (10, "ridge-6h",       1, 6,   None, 5.0,  12),
     # longer windows: fill the 18h/24h gap and sweep the window-vs-skill hypothesis
-    (11, "linear-18h",     1, 18,  None, 0.0,  None),
-    (12, "linear-24h",     1, 24,  None, 0.0,  None),
-    (13, "linear-36h",     1, 36,  None, 0.0,  None),
-    (14, "linear-48h",     1, 48,  None, 0.0,  None),
-    (15, "wls-18h-hl240",  1, 18,  240,  0.0,  None),
-    (16, "wls-24h-hl360",  1, 24,  360,  0.0,  None),
+    (11, "linear-18h",     1, 18,  None, 0.0,  18),
+    (12, "linear-24h",     1, 24,  None, 0.0,  24),
+    (13, "linear-36h",     1, 36,  None, 0.0,  36),
+    (14, "linear-48h",     1, 48,  None, 0.0,  48),
+    (15, "wls-18h-hl240",  1, 18,  240,  0.0,  18),
+    (16, "wls-24h-hl360",  1, 24,  360,  0.0,  24),
 ]
 _ALL_MEMBER_IDS = [m[0] for m in _MEMBERS]
 _MIN_PTS = {1: 2, 2: 3}
