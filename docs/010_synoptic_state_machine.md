@@ -118,6 +118,41 @@ Change in `station_pressure` between now and 3h ago. A rise greater than 0.5 hPa
 **rising**, a fall greater than 0.5 hPa is **falling**, otherwise **steady**. Returns
 None when the 3h prior observation is unavailable. Used by members 6 and 7 only.
 
+## Expansion members (16-94)
+
+Added 2026-08-20 after per-member weight analysis showed the productive signal core is
+moisture trend, convective state, and pressure tendency, with wind rotation and cloud
+cover contributing little as joint dimensions (see the members 8-15 finding above). Four
+parametric families, 79 members total. Exact `(member_id, name)` assignment lives in
+`migrations/039_synoptic_state_machine_expansion.sql`; the generation order in
+`models/synoptic_state_machine.py`'s `_build_expansion_states` must match it exactly.
+
+- **ptend sweep (16-63, 48 members)**: pressure tendency at windows
+  {1,2,4,5,6,12,18,24}h (3h is the original signal, untouched) × granularity
+  (3-category, matching the original rising/steady/falling; or 5-bucket "graded",
+  adding strong_rising/strong_falling splits) × pairing (+dp_trend, +dp_trend+convective,
+  or isolated alone). Windows 7-10h were considered and dropped as redundant with the
+  1-6h cluster; 12/18/24h were kept since they capture full frontal-passage-scale
+  pressure change rather than hourly noise.
+- **gust (64-75, 12 members)**: `wind_gust / wind_avg` ratio at windows {1,3,6}h,
+  categorized smooth/breezy/gusty. Turbulence proxy, orthogonal to wind_rotation
+  (direction) and unused anywhere else in the model. Paired with +dp_trend, +convective,
+  +pressure_tendency (3h), or +dp_trend+convective.
+- **temptrend (76-87, 12 members)**: raw `air_temp` trend at windows {1,3,6,12}h,
+  distinct from the dp_trend spread signal — captures warm/cold air advection
+  independent of moisture. Paired with +pressure_tendency(3h), +dp_trend+pressure_tendency(3h),
+  or +convective.
+- **preciprate (88-93, 6 members)**: precip accumulation rate trend
+  (accelerating/steady/decelerating) at windows {30min,1h,3h}, comparing the rate over
+  the last window to the window before it. Paired with +convective or +dp_trend.
+- **moisture-convective-cloud (94, 1 member)**: dp_trend + convective + cloud, three-way.
+  Denser than member 12's dp_trend+cloud pairing, which scored near-zero weight; tests
+  whether cloud has any marginal value once paired with convective instead of alone.
+
+None of these change any existing member's signal definition or state tuple. Existing
+members 1-15 are only ever modified for a confirmed bug, never for weight/performance
+reasons.
+
 ## Limitations
 
 - **full-4, coarse-4, and full-4+ptend** are blind at night because the cloud signal is
