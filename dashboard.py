@@ -2197,7 +2197,10 @@ def _ensemble_forecast_section(
     )
 
     # {variable: {lead_hours: (value, spread)}} for barogram ensemble
-    ens_table: dict[str, dict[int, tuple]] = {v: {} for v in VARIABLES}
+    # pressure excluded: the ensemble no longer combines or outputs it
+    ens_table: dict[str, dict[int, tuple]] = {
+        v: {} for v in VARIABLES if v != "pressure"
+    }
     lead_valid_at: dict[int, int] = {}
     for row in ens_rows:
         if row["variable"] in ens_table:
@@ -2219,7 +2222,6 @@ def _ensemble_forecast_section(
             corrected_by_lead.setdefault(row["lead_hours"], {})[row["variable"]] = row["value"]
             corrected_vat.setdefault(row["lead_hours"], row["valid_at"])
 
-    slp_offset = _slp_correction(tempest, elevation_m)
     now: dict[str, float | None] = {}
     if tempest:
         sp = tempest["station_pressure"]
@@ -2284,7 +2286,7 @@ def _ensemble_forecast_section(
         )
 
     def _card(label: str, is_now: bool,
-              temp_val, dew_val, pres_val, wind_val,
+              temp_val, dew_val, wind_val,
               temp_spread=None,
               tempest_ref=None, nws_ref=None, corrected_ref=None,
               tempest_time_str: str | None = None,
@@ -2306,8 +2308,6 @@ def _ensemble_forecast_section(
         details = []
         if dew_val is not None:
             details.append(f'<span class="detail-label">Dew</span> {_to_f(dew_val):.0f}\u00b0F')
-        if pres_val is not None:
-            details.append(f'<span class="detail-label">Pres</span> {pres_val:.1f} hPa')
         if wind_val is not None:
             details.append(f'<span class="detail-label">Wind</span> {_to_mph(wind_val):.0f} mph')
         details_html = (
@@ -2353,8 +2353,6 @@ def _ensemble_forecast_section(
     for lead in [6, 12, 18, 24]:
         t_cell = ens_table.get("temperature", {}).get(lead)
         d_cell = ens_table.get("dewpoint", {}).get(lead)
-        p_cell = ens_table.get("pressure", {}).get(lead)
-        p_raw = p_cell[0] if p_cell else None
         vat = lead_valid_at.get(lead)
         nws_result = _nws_at(vat) if vat else None
         nws_ts, nws_entry = nws_result if nws_result else (None, None)
@@ -2362,7 +2360,6 @@ def _ensemble_forecast_section(
             _lead_label(lead), False,
             t_cell[0] if t_cell else None,
             d_cell[0] if d_cell else None,
-            p_raw + slp_offset if p_raw is not None else None,
             None,
             t_cell[1] if t_cell else None,
             tempest_by_lead.get(lead) or None,
