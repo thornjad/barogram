@@ -234,6 +234,19 @@ def test_ensemble_inputs_excludes_nonzero_member_id():
     assert rows == []
 
 
+def test_ensemble_inputs_excludes_pressure():
+    conn = make_output_db()
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value)
+        values (1, 'persistence', 0, 1700000000, 1700021600, 6, 'pressure', 1013.0)
+        """
+    )
+    rows = db.ensemble_inputs(conn, 1700000000)
+    assert rows == []
+
+
 # --- huber_delta_per_variable ---
 
 _BASE_ISSUED = 1_700_000_000

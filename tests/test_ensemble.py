@@ -122,20 +122,34 @@ def test_model_name_is_barogram_ensemble():
 
 
 def test_missing_variable_in_one_model_excluded():
-    # diurnal_curve omits pressure; the ensemble should still produce results
-    # for pressure from the models that do cover it
+    # a variable present in only some base models still forms a partial
+    # ensemble from the ones that cover it
     conn = make_output_db()
-    _seed(conn, 1, "persistence", "pressure", 1013.0)
-    # model 6 (diurnal_curve) has no pressure row — not seeded
+    _seed(conn, 1, "persistence", "dewpoint", 8.0)
+    # model 6 (diurnal_curve) has no dewpoint row — not seeded
     obs = make_obs()
 
     rows = ens.run(obs, _ISSUED_AT, conn_out=conn)
 
-    pressure_mean = next(
-        (r for r in rows if r["member_id"] == 0 and r["variable"] == "pressure"), None
+    dewpoint_mean = next(
+        (r for r in rows if r["member_id"] == 0 and r["variable"] == "dewpoint"), None
     )
-    assert pressure_mean is not None
-    assert abs(pressure_mean["value"] - 1013.0) < 1e-9
+    assert dewpoint_mean is not None
+    assert abs(dewpoint_mean["value"] - 8.0) < 1e-9
+
+
+def test_pressure_excluded_from_ensemble():
+    # base models keep predicting and scoring pressure individually, but the
+    # ensemble itself never combines or outputs it
+    conn = make_output_db()
+    _seed(conn, 1, "persistence", "pressure", 1013.0)
+    _seed(conn, 2, "climatological_mean", "pressure", 1015.0)
+    _seed(conn, 1, "persistence", "temperature", 15.0)
+    obs = make_obs()
+
+    rows = ens.run(obs, _ISSUED_AT, conn_out=conn)
+
+    assert all(r["variable"] != "pressure" for r in rows)
 
 
 def test_required_keys_present():
