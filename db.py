@@ -821,13 +821,18 @@ def sync_ensemble_members(conn: sqlite3.Connection) -> None:
 
 
 def ensemble_inputs(conn: sqlite3.Connection, issued_at: int) -> list:
-    """Fetch member_id=0 rows from base models for a given forecast run."""
+    """Fetch member_id=0 rows from base models for a given forecast run.
+
+    Excludes pressure: the ensemble doesn't combine or output pressure, even
+    though base models keep predicting and scoring it individually.
+    """
     return conn.execute(
         """
         select f.model_id, f.variable, f.lead_hours, f.value, f.valid_at
         from forecasts f
         join models m on m.id = f.model_id
         where f.issued_at = ? and f.member_id = 0 and m.type = 'base'
+          and f.variable != 'pressure'
         """,
         (issued_at,),
     ).fetchall()
