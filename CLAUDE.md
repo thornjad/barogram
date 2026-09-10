@@ -111,6 +111,10 @@ lowercase as well.
 | 9   | surface_signs                | base     | done   |
 | 12  | bogo                         | base     | done   |
 | 15  | dry_airmass_diurnal          | base     | done   |
+| 16  | pressure_trend_cascade       | base     | done   |
+| 17  | pressure_damped_diurnal      | base     | done   |
+| 18  | pressure_consensus_transfer  | base     | done   |
+| 19  | inverse_pressure_transfer    | base     | done   |
 | 100 | barogram_ensemble            | ensemble | done   |
 | 200 | nws                          | external | done   |
 | 201 | tempest_forecast             | external | done   |

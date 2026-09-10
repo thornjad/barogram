@@ -26,9 +26,13 @@ import models.climo_deviation as climo_deviation
 import models.diurnal_curve as diurnal_curve
 import models.ensemble as barogram_ensemble
 import models.external_corrected as external_corrected
+import models.inverse_pressure_transfer as inverse_pressure_transfer
 import models.nws as nws_model
 import models.persistence as persistence
+import models.pressure_consensus_transfer as pressure_consensus_transfer
+import models.pressure_damped_diurnal as pressure_damped_diurnal
 import models.pressure_tendency as pressure_tendency
+import models.pressure_trend_cascade as pressure_trend_cascade
 import models.surface_signs as surface_signs
 import models.synoptic_state_machine as synoptic_state_machine
 import models.tempest_forecast as tempest_forecast_model
@@ -59,6 +63,10 @@ _MODELS = [
     surface_signs,
     synoptic_state_machine,
     bogo,
+    pressure_trend_cascade,
+    pressure_damped_diurnal,
+    pressure_consensus_transfer,  # reads pressure predictions written above, this run
+    inverse_pressure_transfer,    # reads temp/dewpoint predictions written above, this run
     nws_model,
     tempest_forecast_model,
     external_corrected,

@@ -16,6 +16,10 @@
 | 13 | full_state_analog | [013_full_state_analog.md](013_full_state_analog.md) |
 | 14 | multivariate_trend | [014_multivariate_trend.md](014_multivariate_trend.md) |
 | 15 | dry_airmass_diurnal | [015_dry_airmass_diurnal.md](015_dry_airmass_diurnal.md) |
+| 16 | pressure_trend_cascade | [016_pressure_trend_cascade.md](016_pressure_trend_cascade.md) |
+| 17 | pressure_damped_diurnal | [017_pressure_damped_diurnal.md](017_pressure_damped_diurnal.md) |
+| 18 | pressure_consensus_transfer | [018_pressure_consensus_transfer.md](018_pressure_consensus_transfer.md) |
+| 19 | inverse_pressure_transfer | [019_inverse_pressure_transfer.md](019_inverse_pressure_transfer.md) |
 | 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
 | 200 | nws | — |
 | 201 | tempest_forecast | — |

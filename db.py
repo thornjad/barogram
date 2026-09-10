@@ -838,6 +838,32 @@ def ensemble_inputs(conn: sqlite3.Connection, issued_at: int) -> list:
     ).fetchall()
 
 
+def base_model_forecasts(
+    conn: sqlite3.Connection,
+    issued_at: int,
+    variables: list[str],
+    member_id: int = 0,
+    model_type: str = "base",
+) -> list[dict]:
+    """member_id rows for the given variables from this run's other base models.
+
+    Lets a model consume another model's prediction as its own input (e.g. a
+    consensus model reading several base models' predicted pressure), scoped to
+    the current forecast run (issued_at) so a model only ever sees fresh input.
+    """
+    placeholders = ",".join("?" * len(variables))
+    return [dict(r) for r in conn.execute(
+        f"""
+        select f.model_id, f.model, f.variable, f.lead_hours, f.value, f.valid_at
+        from forecasts f
+        join models m on m.id = f.model_id
+        where f.issued_at = ? and f.member_id = ? and m.type = ?
+          and f.variable in ({placeholders})
+        """,
+        (issued_at, member_id, model_type, *variables),
+    ).fetchall()]
+
+
 def all_members_for_ensemble_models(conn: sqlite3.Connection) -> list:
     """Return all non-zero members for models that appear in the members table."""
     return conn.execute(
