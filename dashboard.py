@@ -13,16 +13,16 @@ import models.pressure_tendency as pressure_tendency
 VARIABLES = ["temperature", "dewpoint", "pressure"]
 
 _MODEL_TOOLTIPS: dict[str, str] = {
-    "persistence": "Current observed value held constant across all lead times. The null hypothesis — any useful model has to beat this.",
+    "persistence": "Current observed value held constant across all lead times. The null hypothesis: any useful model has to beat this.",
     "climatological_mean": "Historical average for this month and hour from the local Tempest archive. Ignores current conditions entirely.",
     "weighted_climatological_mean": "Like climatological_mean, but recent observations carry more weight. Multiple members test different recency weighting strategies.",
     "climo_deviation": "Adds the current anomaly (how today differs from climatology) to the future baseline, with multiple decay rates for how fast the anomaly fades.",
     "pressure_tendency": "Extrapolates from the recent pressure time series using polynomial regression and a categorical Zambretti classifier.",
     "diurnal_curve": "Fits a daily temperature/dewpoint cycle to recent observations and projects it forward using sine, piecewise, and asymmetric cosine curves.",
-    "airmass_diurnal": "Scales the diurnal curve by solar clearness index and other Tempest signals — wind sector, dewpoint depression, pressure departure, cloud character.",
+    "airmass_diurnal": "Scales the diurnal curve by solar clearness index and other Tempest signals: wind sector, dewpoint depression, pressure departure, cloud character.",
     "analog": "Finds historical days most similar to current conditions and uses their subsequent weather as the forecast. Improves as the local archive grows.",
     "surface_signs": "Reads physical cues (wind rotation, moisture trend, solar cover, convective activity) and applies historically learned conditional deltas for each signal independently.",
-    "synoptic_state_machine": "Classifies current conditions as a joint state from four signals (wind rotation, moisture trend, solar cover, convective activity), so signal interactions — not just each signal in isolation — shape the learned deltas.",
+    "synoptic_state_machine": "Classifies current conditions as a joint state from four signals (wind rotation, moisture trend, solar cover, convective activity), so signal interactions, not just each signal in isolation, shape the learned deltas.",
     "bogo": "A collection of deliberately wrong forecasting strategies. Scored for entertainment; expected to perform poorly.",
     "barogram_ensemble": "Weighted average of all base models, with weights set by Huber skill scores per variable, lead, and time-of-day sector.",
     "nws": "NWS hourly forecast from api.weather.gov, snapped to the standard 6/12/18/24h lead times. Not included in the barogram ensemble.",
@@ -208,6 +208,7 @@ h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .obs-table td { padding: 2px 0; }
 .run-meta { font-size: 13px; color: #444; background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 12px 16px; }
 .run-meta strong { font-weight: 600; }
+.forecast-table-scroll { overflow-x: auto; }
 table.forecast-table {
     width: 100%;
     border-collapse: collapse;
@@ -588,20 +589,22 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     }
     .ap-card-lead-val { font-size: 12px; color: #333; }
 }
-.forecast-rows { display: flex; flex-direction: column; gap: 6px; }
+.forecast-rows { display: flex; flex-direction: row; gap: 6px; overflow-x: auto; padding-bottom: 6px; }
 .fcst-row {
-    display: grid;
-    grid-template-columns: 130px 1fr;
+    display: flex;
+    flex-direction: column;
     gap: 16px;
+    min-width: 150px;
+    flex: 0 0 auto;
     background: #fff;
     border: 1px solid #ddd;
     border-radius: 4px;
     padding: 12px 16px;
-    align-items: start;
+    align-items: stretch;
 }
 .fcst-row.now-row { border-color: #b0c4de; background: #f5f8fc; }
 .fcst-row-main { }
-.fcst-row-refs { display: flex; gap: 20px; }
+.fcst-row-refs { display: flex; flex-direction: column; gap: 20px; }
 .fcst-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#888; margin-bottom:6px; }
 .fcst-temp { font-size:26px; font-weight:700; color:#1a1a1a; line-height:1; }
 .fcst-temp-spread { font-size:11px; color:#aaa; margin-top:2px; margin-bottom:8px; }
@@ -1074,9 +1077,9 @@ def _external_corrected_source_weights_html(rows: list) -> str:
         f'<h3>external_corrected'
         f' <span class="model-id-cell">(model 202)</span></h3>'
         f'<p class="window-label" style="margin-bottom:6px">'
-        f'NWS group (members 1–5) vs. Tempest group (members 6–10) — '
+        f'NWS group (members 1–5) vs. Tempest group (members 6–10), '
         f'inverse-MAE weighting per variable, lead, and time of day. '
-        f'Blue = NWS leads, orange = Tempest leads. — = insufficient history.'
+        f'Blue = NWS leads, orange = Tempest leads. \u2014 means insufficient history.'
         f'</p>'
         f'<div class="table-scroll">'
         f'<table class="weight-table">'
@@ -1135,13 +1138,17 @@ def _zambretti_panel_html(z: dict | None) -> str:
     rate_str = f"{rate:+.2f} hPa/h" if rate is not None else "\u2014"
     return (
         f'<div class="card" style="margin-top:12px">'
-        f'<h3>Barometer says: {z["description"]}'
+        f'<h3>Zambretti forecast for today: {z["description"]}'
         f' <span class="station-id">({z["letter"]})</span></h3>'
         f'<p class="zambretti-tendency">'
-        f'Tendency: {cat} &mdash; {rate_str}'
+        f'Tendency: {cat} ({rate_str})'
+        f'</p>'
+        f'<p class="zambretti-tendency">'
+        f'Wind: {z["wind_dir_text"]}, {z["season_text"]}'
         f'</p>'
         f'<p class="zambretti-algo">'
-        f'Zambretti algorithm &mdash; sea-level pressure'
+        f'Zambretti algorithm: sea-level pressure, trend, wind direction, season, '
+        f'as of ~9 AM solar time'
         f'</p>'
         f'</div>'
     )
@@ -1264,10 +1271,12 @@ def _forecast_table_html(table: dict, lead_times: list, slp_offset: float = 0.0)
             rows.append(f'<tr><th>SLP</th>{"".join(slp_cells)}</tr>')
 
     return (
+        '<div class="forecast-table-scroll">'
         '<table class="forecast-table">'
         f'<thead><tr><th>Variable</th>{header_cells}</tr></thead>'
         f'<tbody>{"".join(rows)}</tbody>'
         '</table>'
+        '</div>'
     )
 
 
@@ -1314,7 +1323,7 @@ def _model_runs_html(
             f'<strong><span class="model-id-cell">{model_id}</span> <span{title_attr}>{model}</span></strong>'
             f'{type_badge}'
             f'{member_toggle}'
-            f'<span class="run-detail">issued {fmt.ts(issued_at)} &mdash; {len(model_rows)} rows</span>'
+            f'<span class="run-detail">issued {fmt.ts(issued_at)} ({len(model_rows)} rows)</span>'
             f'</div>'
             f'{table_html}'
             f'{member_panel}'
@@ -1429,78 +1438,6 @@ renderAll(tempestHistory, 'tempest-obs-tbody');
 renderAll(nwsHistory, 'nws-obs-tbody');
 """
 
-
-
-def _rolling_mean(values: list, window: int = 10) -> list:
-    """Trailing rolling mean of `window` points; None values are skipped."""
-    out = []
-    for i in range(len(values)):
-        chunk = [x for x in values[max(0, i - window + 1): i + 1] if x is not None]
-        out.append(sum(chunk) / len(chunk) if chunk else None)
-    return out
-
-
-def _mae_timeseries_data(timeseries_rows: list) -> dict:
-    """lead (str) -> model -> {is_baseline, is_ensemble, model_id,
-                               series: {var|avg -> {x, y_ratio, y_ratio_rolling}}}
-
-    y_ratio = MAE / climo_MAE for the same (var, lead, issued_at); 1.0 = matches climo.
-    Average series averages dimensionless ratios across variables (safe to mix
-    because units cancel).
-    """
-    raw: dict = {}
-    model_meta: dict = {}
-    for row in timeseries_rows:
-        lead = row["lead_hours"]
-        model_meta[row["model"]] = {"is_ensemble": row["type"] == "ensemble", "model_id": row["model_id"]}
-        raw.setdefault(lead, {}).setdefault(row["model"], {}).setdefault(
-            row["variable"], {}
-        )[row["issued_at"]] = row["avg_mae"]
-
-    result: dict = {}
-    for lead in sorted(raw):
-        c_ts: dict = raw[lead].get("climatological_mean", {})
-        result[str(lead)] = {}
-        for model, vars_ in raw[lead].items():
-            if model == "persistence":
-                continue
-            is_baseline = model == "climatological_mean"
-            is_ensemble = model_meta[model]["is_ensemble"]
-            series: dict = {}
-            for var, ts in vars_.items():
-                c_var = c_ts.get(var, {})
-                x, y_ratio = [], []
-                for issued in sorted(ts):
-                    mae = ts[issued]
-                    denom = c_var.get(issued)
-                    ratio = 1.0 if is_baseline else (mae / denom if denom else None)
-                    x.append(fmt.iso_ts(issued))
-                    y_ratio.append(ratio)
-                series[var] = {"x": x, "y_ratio": y_ratio, "y_ratio_rolling": _rolling_mean(y_ratio)}
-            # average series: mean skill ratio across variables (dimensionless)
-            all_issued = sorted(set().union(*[set(ts) for ts in vars_.values()]))
-            ax, ay_ratio = [], []
-            for issued in all_issued:
-                ratios = []
-                for var, ts in vars_.items():
-                    if issued not in ts:
-                        continue
-                    mae = ts[issued]
-                    c_var = c_ts.get(var, {})
-                    c = c_var.get(issued)
-                    if is_baseline or c:
-                        ratios.append(1.0 if is_baseline else mae / c)
-                if ratios:
-                    ax.append(fmt.iso_ts(issued))
-                    ay_ratio.append(sum(ratios) / len(ratios))
-            series["avg"] = {"x": ax, "y_ratio": ay_ratio, "y_ratio_rolling": _rolling_mean(ay_ratio)}
-            result[str(lead)][model] = {
-                "is_baseline": is_baseline,
-                "is_ensemble": is_ensemble,
-                "model_id": model_meta[model]["model_id"],
-                "series": series,
-            }
-    return result
 
 
 def _bias_timeseries_data(rows: list) -> dict:
@@ -1625,107 +1562,6 @@ def _diurnal_data(rows: list) -> dict:
             }
     return result
 
-
-def _mae_timeseries_js(timeseries_data: dict) -> str:
-    data_json = json.dumps(timeseries_data)
-    filter_labels_json = json.dumps({
-        "avg": "Average skill vs climo",
-        "temperature": "Temperature skill vs climo",
-        "dewpoint": "Dew Point skill vs climo",
-        "pressure": "Pressure skill vs climo",
-    })
-    return f"""const maeLeadData = {data_json};
-const maeFilterLabels = {filter_labels_json};
-const maeLeads = Object.keys(maeLeadData).map(Number).sort(function(a,b){{return a-b;}});
-
-const MAE_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
-const maeAllModels = [...new Set(
-    Object.values(maeLeadData).flatMap(function(d){{return Object.keys(d);}})
-)].sort();
-const maeModelColors = {{}};
-maeAllModels.forEach(function(m, i) {{ maeModelColors[m] = MAE_PALETTE[i % MAE_PALETTE.length]; }});
-if (maeAllModels.includes('bogo')) maeModelColors['bogo'] = '#b0d8b0';
-
-let maeActiveVar = 'avg';
-let smoothMode = true;
-
-function drawMaeCharts() {{
-    maeLeads.forEach(function(lead) {{
-        const leadData = maeLeadData[String(lead)] || {{}};
-        const traces = Object.entries(leadData).map(function([model, info]) {{
-            const s = (info.series || {{}})[maeActiveVar] || {{}};
-            const isBaseline = info.is_baseline;
-            const isEns = info.is_ensemble;
-            const color = isBaseline ? '#aaaaaa' : maeModelColors[model];
-            const dash = isBaseline ? 'longdash' : (isEns ? 'dash' : 'solid');
-            const y = (smoothMode && !isBaseline) ? (s.y_ratio_rolling || []) : (s.y_ratio || []);
-            return {{
-                type: 'scatter',
-                mode: isBaseline ? 'lines' : (smoothMode ? 'lines' : 'lines+markers'),
-                name: String(info.model_id),  // deliberate: full names overflow chart legend
-                x: s.x || [],
-                y: y,
-                line: {{ width: isBaseline ? 1.5 : 2, dash: dash, color: color }},
-                marker: {{ size: 5, color: color }}
-            }};
-        }});
-        if (!smoothMode) {{
-            Object.entries(leadData).forEach(function([model, info]) {{
-                if (info.is_baseline) return;
-                const s = (info.series || {{}})[maeActiveVar] || {{}};
-                const yr = s.y_ratio_rolling || [];
-                if (!yr.length) return;
-                const color = maeModelColors[model];
-                traces.push({{
-                    type: 'scatter', mode: 'lines',
-                    name: String(info.model_id) + ' (10-run avg)',
-                    x: s.x || [], y: yr,
-                    line: {{ width: 1.5, dash: 'dashdot', color: color }},
-                    showlegend: false
-                }});
-            }});
-        }}
-        const varLabel = maeFilterLabels[maeActiveVar] || maeActiveVar;
-        const title = '+' + lead + 'h — ' + varLabel;
-        Plotly.react('mae-chart-' + lead, traces, {{
-            title: {{ text: title, font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-            margin: {{ t: 40, b: 100, l: 50, r: 16 }},
-            xaxis: {{ type: 'date', tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
-            yaxis: {{ tickfont: {{ size: 11 }}, rangemode: 'tozero',
-                title: {{ text: 'MAE ÷ climo MAE', font: {{ size: 10 }} }} }},
-            height: 380,
-            showlegend: true,
-            legend: {{ orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{ size: 10 }} }},
-            shapes: [{{
-                type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: 1, y1: 1,
-                line: {{ color: '#888', width: 1.5, dash: 'dot' }},
-                label: {{ text: 'climo baseline', font: {{ size: 9 }}, xanchor: 'right', yanchor: 'bottom' }}
-            }}],
-            font: {{ color: plotBg().font }},
-            paper_bgcolor: plotBg().paper,
-            plot_bgcolor: plotBg().plot
-        }}, {{responsive: true}});
-    }});
-}}
-
-document.querySelectorAll('.mae-filter-btn').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-        document.querySelectorAll('.mae-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
-        btn.classList.add('active');
-        maeActiveVar = btn.dataset.var;
-        drawMaeCharts();
-    }});
-}});
-
-document.getElementById('smooth-toggle').addEventListener('click', function() {{
-    smoothMode = !smoothMode;
-    this.classList.toggle('active');
-    this.textContent = smoothMode ? 'Per-run detail' : 'Smooth';
-    drawMaeCharts();
-}});
-
-drawMaeCharts();
-"""
 
 
 def _member_forecast_js(member_rows: list, lead_times: list) -> str:
@@ -2187,7 +2023,7 @@ def _ensemble_forecast_section(
         return (
             '<section class="section">\n'
             '  <h2>Ensemble Forecast</h2>\n'
-            '  <p class="muted">Ensemble model not yet available &mdash; in development.</p>\n'
+            '  <p class="muted">Ensemble model not yet available (in development).</p>\n'
             '</section>\n'
         )
 
@@ -2350,7 +2186,7 @@ def _ensemble_forecast_section(
         return f'<div class="{cls}">{main_html}{refs_html}</div>\n'
 
     cards = ""
-    for lead in [6, 12, 18, 24]:
+    for lead in sorted(lead_valid_at):
         t_cell = ens_table.get("temperature", {}).get(lead)
         d_cell = ens_table.get("dewpoint", {}).get(lead)
         vat = lead_valid_at.get(lead)
@@ -2372,7 +2208,7 @@ def _ensemble_forecast_section(
 
     return (
         '<section class="section" id="forecast">\n'
-        f'  <h2>Ensemble Forecast &mdash; {issued_str}</h2>\n'
+        f'  <h2>Ensemble Forecast: {issued_str}</h2>\n'
         '  <div class="forecast-rows">\n'
         f'{cards}'
         '  </div>\n'
@@ -2679,7 +2515,7 @@ def _learnings_weights_table_html(weight_rows: list) -> str:
     if not weight_rows:
         return (
             '<p class="no-data">Tuning weights not yet computed for airmass_diurnal'
-            ' &mdash; run <code>barogram tune</code> after sufficient scored forecasts.</p>'
+            '. Run <code>barogram tune</code> after sufficient scored forecasts.</p>'
         )
     # group by (variable, lead_hours) → {member_id: weight}
     cells: dict = {}
@@ -2778,8 +2614,8 @@ def _hyp_b_status(data: dict) -> str:
     r = num / denom_sq ** 0.5
     if r < -0.7:
         verdict = (
-            f"clearness and sky cover are moving in opposite directions as expected "
-            f"— cloudier days show lower clearness. Relationship is consistent ({n} days of data)."
+            f"clearness and sky cover are moving in opposite directions as expected. "
+            f"Cloudier days show lower clearness. Relationship is consistent ({n} days of data)."
         )
     elif r < -0.4:
         verdict = (
@@ -2794,8 +2630,8 @@ def _hyp_b_status(data: dict) -> str:
         )
     else:
         verdict = (
-            f"clearness and sky cover are both going up and down together ({n} days of data) "
-            f"— they should be moving in opposite directions. Worth investigating."
+            f"clearness and sky cover are both going up and down together ({n} days of data), "
+            f"but they should be moving in opposite directions. Worth investigating."
         )
     return f"<strong>Status:</strong> {verdict}"
 
@@ -2850,7 +2686,7 @@ def _hyp_d_status(data: dict) -> str:
     if last_dew is not None and last_pres is not None:
         if last_pres > 15:
             verdict = (
-                " Trade-off confirmed — pressure error is large, "
+                " Trade-off confirmed: pressure error is large, "
                 "but this model was built to ignore pressure accuracy in favor of dewpoint."
             )
         elif last_pres > 6:
@@ -2882,15 +2718,15 @@ def _hyp_e_status(data: dict) -> str:
     verdict = ""
     if 6 in gaps and 24 in gaps:
         if gaps[6] > 0 and gaps[24] < 0:
-            verdict = " Advantage reverses at longer leads — persistence beats climo_deviation at +24h."
+            verdict = " Advantage reverses at longer leads: persistence beats climo_deviation at +24h."
         elif gaps[6] < 0 and gaps[24] < 0:
             verdict = " Persistence beats climo_deviation at both leads."
         elif gaps[6] > gaps[24] + 0.15:
             verdict = " Advantage decaying with lead as expected."
         elif abs(gaps[6] - gaps[24]) <= 0.15:
-            verdict = " Gap roughly constant across leads — recency signal not decaying."
+            verdict = " Gap roughly constant across leads. Recency signal not decaying."
         else:
-            verdict = " Advantage grows with lead — unexpected pattern."
+            verdict = " Advantage grows with lead. Unexpected pattern."
     return f"<strong>Status:</strong> {'; '.join(parts)}.{verdict}"
 
 
@@ -2964,11 +2800,11 @@ def _hyp_g_status(data: dict) -> str:
         elif gaps[6] > 0 and gaps[24] < 0:
             verdict = " diurnal_curve closes gap and leads at longer horizons."
         elif gaps[24] < gaps[6] - 0.15:
-            verdict = " Gap shrinks at longer leads — diurnal explanation has some support."
+            verdict = " Gap shrinks at longer leads. Diurnal explanation has some support."
         elif abs(gaps[24] - gaps[6]) <= 0.15:
-            verdict = " Gap constant across leads — recency signal, not diurnal cycle, is the driver."
+            verdict = " Gap constant across leads. Recency signal, not diurnal cycle, is the driver."
         else:
-            verdict = " Gap grows at longer leads — diurnal_curve worsens with time."
+            verdict = " Gap grows at longer leads. diurnal_curve worsens with time."
     elif gaps:
         only_gap = list(gaps.values())[0]
         if only_gap <= 0:
@@ -3028,7 +2864,7 @@ def _learnings_section_html(data: dict) -> str:
         '<section class="section" id="learnings">\n'
         "  <h2>Learnings</h2>\n"
         '  <p class="learnings-intro">Tracked hypotheses that accumulate evidence over time.'
-        " Thin data is expected early &mdash; the goal is to watch these relationships evolve.</p>\n"
+        " Thin data is expected early. The goal is to watch these relationships evolve.</p>\n"
         "\n"
         # --- Hypothesis A ---
         "  <h3 class=\"obs-subhead\">Hypothesis A: Clearness persistence vs. pressure projection</h3>\n"
@@ -3063,7 +2899,7 @@ def _learnings_section_html(data: dict) -> str:
         "(clearness drops on cloudy days, sky cover rises). If they move <em>together</em> or "
         "persistently diverge, there may be a sensor issue or a real local microclimate "
         "difference between the Tempest site and KMSP. "
-        "NWS sky cover is never used as a model input &mdash; this is validation only."
+        "NWS sky cover is never used as a model input. This is validation only."
         "</p>\n"
         + status_b
         + (
@@ -3082,7 +2918,7 @@ def _learnings_section_html(data: dict) -> str:
         "<code>climo_deviation</code> on temperature at every lead. "
         "The line shows the rolling gap (ensemble MAE &minus; climo_deviation MAE, "
         "10-run mean) over time. "
-        "<strong>What to look for:</strong> the line trending toward or below zero &mdash; "
+        "<strong>What to look for:</strong> the line trending toward or below zero, "
         "that means the ensemble is learning to match or beat its best member. "
         "A flat or rising line means the weighting is not converging."
         "</p>\n"
@@ -3100,12 +2936,12 @@ def _learnings_section_html(data: dict) -> str:
         )
         + "\n"
         # --- Hypothesis D ---
-        '  <h3 class="obs-subhead">Hypothesis D: pressure_tendency &mdash; best and worst simultaneously</h3>\n'
+        '  <h3 class="obs-subhead">Hypothesis D: pressure_tendency, best and worst simultaneously</h3>\n'
         '  <p class="learnings-desc">'
         "<strong>Question:</strong> <code>pressure_tendency</code> is the best model for "
         "dewpoint at all leads, but its pressure MAE climbs steeply (40+ hPa at 24h vs "
         "persistence&rsquo;s 5 hPa). Both lines are shown at +12h with a 10-run rolling mean. "
-        "<strong>What to look for:</strong> the two lines diverging &mdash; low dewpoint, "
+        "<strong>What to look for:</strong> the two lines diverging: low dewpoint, "
         "high pressure. That&rsquo;s expected and confirms the model design trade-off. "
         "If pressure MAE starts dropping back toward dewpoint level, something has changed."
         "</p>\n"
@@ -3169,7 +3005,7 @@ def _learnings_section_html(data: dict) -> str:
         "<strong>What to look for:</strong> <code>diurnal_curve</code> closing the gap, "
         "especially at overnight leads (+18h/+24h) where solar effects matter less. "
         "If it never closes, the recency signal in <code>climo_deviation</code> is the "
-        "explanation &mdash; not the diurnal cycle."
+        "explanation, not the diurnal cycle."
         "</p>\n"
         + status_g
         + (
@@ -3188,12 +3024,12 @@ def _learnings_section_html(data: dict) -> str:
         + '  <h3 class="obs-subhead">Hypothesis H: Does trend window length have an optimal size?</h3>\n'
         '  <p class="learnings-desc">'
         "<strong>Question:</strong> For each lead time, is there an optimal trend window where "
-        "MAE is minimized &mdash; short enough to capture the recent signal, long enough to avoid "
+        "MAE is minimized: short enough to capture the recent signal, long enough to avoid "
         "noise? Or does skill simply improve monotonically with more history? "
         "<code>multivariate_trend</code> members span 1&ndash;48h windows; each point here is the "
         "all-time avg MAE for one (member, lead) pair. "
         "<strong>Note:</strong> early data for short-window members at long leads reflects "
-        "pre-fix era forecast errors &mdash; those members are now restricted to appropriate leads."
+        "pre-fix era forecast errors. Those members are now restricted to appropriate leads."
         "</p>\n"
         + status_h
         + (
@@ -3673,7 +3509,7 @@ function drawTrajectoryChart() {{
             type: 'scatter', mode: 'lines+markers',
             name: model,
             x: pts.x, y: pts.y,
-            line: {{ width: isExt ? 2.5 : 1.5, dash: isExt ? 'solid' : 'solid', color: color }},
+            line: {{ width: isExt ? 2.5 : 1.5, dash: isExt ? 'solid' : 'solid', color: color, shape: 'spline' }},
             marker: {{ size: isExt ? 7 : 5, color: color }},
             connectgaps: false
         }};
@@ -3720,6 +3556,10 @@ drawTrajectoryChart();
 
 
 _ACC_VARIABLES = ["temperature", "dewpoint", "pressure"]
+
+# lead hours shown in the accuracy-by-lead table and bias-over-time charts —
+# a fixed checkpoint set, not the full hourly resolution used elsewhere
+_KEY_LEADS = {1, 6, 12, 18, 24}
 
 
 def _skill_score(mae: float | None, climo_mae: float | None) -> float | None:
@@ -3950,18 +3790,19 @@ def _skill_timeseries_data(rows: list) -> dict:
     by_day: dict = defaultdict(dict)
     model_names: dict = {}
     for r in rows:
-        mid = r["model_id"]
-        by_day[r["day"]][mid] = r["avg_skill"]
-        model_names[mid] = r["model"]
-    days = sorted(by_day)
+        by_day[r["day"]][r["model_id"]] = r["avg_skill"]
+        model_names[r["model_id"]] = r["model"]
+
+    days = sorted(by_day.keys())
     models: dict = {}
     for mid, name in model_names.items():
-        skill = []
-        for day in days:
-            s = by_day[day].get(mid)
-            skill.append(round(s, 1) if s is not None else None)
-        trend = _trend_values(skill) if mid == 100 else None
-        models[mid] = {"name": name, "skill": skill, "trend": trend}
+        series = [by_day[d].get(mid) for d in days]
+        models[mid] = {"name": name, "skill": series}
+
+    ens = models.get(100)
+    if ens:
+        ens["trend"] = _trend_values(ens["skill"]) or []
+
     return {"days": days, "models": models}
 
 
@@ -4049,6 +3890,7 @@ document.getElementById('skill-all-models-toggle').addEventListener('click', fun
 }});
 """
 
+
 def _accuracy_table_js() -> str:
     return """\
 function updateAccTable(varName) {
@@ -4135,55 +3977,64 @@ def _recent_misses_html(rows: list) -> str:
     if not rows:
         return '<p class="muted">No scored forecasts in the last 14 days.</p>'
 
-    # rows are pre-sorted by model then mae desc; emit a group header on model change
-    header = (
-        '<table class="obs-history-table recent-misses-table">'
-        '<thead><tr>'
-        '<th>Variable</th><th>Lead</th><th>Valid</th>'
-        '<th>Predicted</th><th>Observed</th><th>Error</th>'
-        '</tr></thead><tbody>'
-    )
-    body_rows = []
-    current_model = None
+    # rows are pre-sorted by model then mae desc; group into one table per model
+    groups: dict = {}
     for row in rows:
-        model = row["model"]
-        if model != current_model:
-            current_model = model
+        groups.setdefault(row["model"], []).append(row)
+
+    sections = []
+    for model, model_rows in groups.items():
+        body_rows = []
+        for row in model_rows:
+            var = row["variable"]
+            val = row["value"]
+            obs = row["observed"]
+            err = row["error"]
+            if var in ("temperature", "dewpoint"):
+                pred_str = f"{_to_f(val):.1f}\u00b0F" if val is not None else "\u2014"
+                obs_str = f"{_to_f(obs):.1f}\u00b0F" if obs is not None else "\u2014"
+                err_disp = _diff_to_f(err)
+                err_thresh = 3
+            else:
+                pred_str = f"{val:.1f} hPa" if val is not None else "\u2014"
+                obs_str = f"{obs:.1f} hPa" if obs is not None else "\u2014"
+                err_disp = err
+                err_thresh = 3
+            if err_disp is not None:
+                sign = "+" if err_disp >= 0 else ""
+                err_cls = "mae-worse" if abs(err_disp) >= err_thresh else ""
+                err_str = f'<span class="{err_cls}">{sign}{err_disp:.1f}</span>'
+            else:
+                err_str = "\u2014"
+            valid_label = fmt.short_ts(row["valid_at"])
             body_rows.append(
-                f'<tr class="model-header"><th colspan="6">{model}</th></tr>'
+                f'<tr>'
+                f'<td>{_VARIABLE_LABEL.get(var, var)}</td>'
+                f'<td>+{row["lead_hours"]}h</td>'
+                f'<td>{valid_label}</td>'
+                f'<td style="text-align:right">{pred_str}</td>'
+                f'<td style="text-align:right">{obs_str}</td>'
+                f'<td style="text-align:right">{err_str}</td>'
+                f'</tr>'
             )
-        var = row["variable"]
-        val = row["value"]
-        obs = row["observed"]
-        err = row["error"]
-        if var in ("temperature", "dewpoint"):
-            pred_str = f"{_to_f(val):.1f}\u00b0F" if val is not None else "\u2014"
-            obs_str = f"{_to_f(obs):.1f}\u00b0F" if obs is not None else "\u2014"
-            err_disp = _diff_to_f(err)
-            err_thresh = 3
-        else:
-            pred_str = f"{val:.1f} hPa" if val is not None else "\u2014"
-            obs_str = f"{obs:.1f} hPa" if obs is not None else "\u2014"
-            err_disp = err
-            err_thresh = 3
-        if err_disp is not None:
-            sign = "+" if err_disp >= 0 else ""
-            err_cls = "mae-worse" if abs(err_disp) >= err_thresh else ""
-            err_str = f'<span class="{err_cls}">{sign}{err_disp:.1f}</span>'
-        else:
-            err_str = "\u2014"
-        valid_label = fmt.short_ts(row["valid_at"])
-        body_rows.append(
-            f'<tr>'
-            f'<td>{_VARIABLE_LABEL.get(var, var)}</td>'
-            f'<td>+{row["lead_hours"]}h</td>'
-            f'<td>{valid_label}</td>'
-            f'<td style="text-align:right">{pred_str}</td>'
-            f'<td style="text-align:right">{obs_str}</td>'
-            f'<td style="text-align:right">{err_str}</td>'
-            f'</tr>'
+        table = (
+            '<table class="obs-history-table recent-misses-table">'
+            '<thead><tr>'
+            '<th>Variable</th><th>Lead</th><th>Valid</th>'
+            '<th style="text-align:right">Predicted</th>'
+            '<th style="text-align:right">Observed</th>'
+            '<th style="text-align:right">Error</th>'
+            '</tr></thead><tbody>'
+            + "".join(body_rows)
+            + '</tbody></table>'
         )
-    return header + "".join(body_rows) + "</tbody></table>"
+        sections.append(
+            f'<details class="collapsible-section" style="margin-top:12px">'
+            f'<summary>{model}</summary>'
+            f'<div class="table-scroll" style="margin-top:8px">{table}</div>'
+            f'</details>'
+        )
+    return "".join(sections)
 
 
 def _write_fragment(html: str, out_dir: Path) -> None:
@@ -4271,9 +4122,11 @@ def generate(
     _scores_10 = db.score_summary_last_n_runs_multi(conn_out, [10])[10]
     members_10 = [r for r in _scores_10 if r["member_id"] > 0]
     member_models = {r["model"] for r in members_10}
-    timeseries = db.score_timeseries(conn_out, since=midnight_7d_ago)
     all_time_summary = [r for r in db.score_summary(conn_out) if r["member_id"] == 0]
-    bias_ts_rows = db.bias_timeseries(conn_out, since=midnight_7d_ago)
+    bias_ts_rows = [
+        r for r in db.bias_timeseries(conn_out, since=midnight_7d_ago)
+        if r["lead_hours"] in _KEY_LEADS
+    ]
     diurnal_rows = db.diurnal_errors(conn_out)
     weight_rows = db.all_weights_with_members(conn_out)
     all_members = db.all_members_for_ensemble_models(conn_out)
@@ -4283,10 +4136,10 @@ def generate(
     _14d = now - 14 * 86400
     _120d = now - 120 * 86400
     _acc = db.accuracy_windows(conn_out, [_14d, _120d, 0])
-    acc_rows_14d = _acc[_14d]
-    acc_rows_120d = _acc[_120d]
-    acc_rows_alltime = _acc[0]
-    acc_rows_10r = db.accuracy_by_lead(conn_out, 10)
+    acc_rows_14d = [r for r in _acc[_14d] if r["lead_hours"] in _KEY_LEADS]
+    acc_rows_120d = [r for r in _acc[_120d] if r["lead_hours"] in _KEY_LEADS]
+    acc_rows_alltime = [r for r in _acc[0] if r["lead_hours"] in _KEY_LEADS]
+    acc_rows_10r = [r for r in db.accuracy_by_lead(conn_out, 10) if r["lead_hours"] in _KEY_LEADS]
     acc_count_10r = db.accuracy_run_count_last_n(conn_out, 10)
     _skill_ts = db.skill_timeseries_multi(conn_out, [_14d, _120d, 0])
     _skill_ts_10r = db.skill_timeseries_last_n_runs(conn_out, 10)
@@ -4304,13 +4157,15 @@ def generate(
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
     charts = _chart_data(mean_rows)
-    mae_ts = _mae_timeseries_data(timeseries)
     bias_ts = _bias_timeseries_data(bias_ts_rows)
     heatmap = _heatmap_data(all_time_summary)
     diurnal = _diurnal_data(diurnal_rows)
     trajectory = _trajectory_data(trajectory_rows)
     recent_misses_html = _recent_misses_html(misses_rows)
-    acc_lead_times = sorted({r["lead_hours"] for r in acc_rows_14d}) or lead_times
+    # fixed column set regardless of what's scored yet — a lead with no data
+    # shows a dash instead of the column disappearing (e.g. a brand-new lead
+    # that hasn't reached its valid_at time to be scored)
+    acc_lead_times = sorted(_KEY_LEADS)
     _acc_windows = [
         ("14d", acc_rows_14d, acc_count_14d, "14 days"),
         ("120d", acc_rows_120d, acc_count_120d, "120 days"),
@@ -4378,14 +4233,14 @@ def generate(
         obs_staleness_banner = (
             f'<div class="stale-banner">'
             f'<strong>Warning:</strong> latest Tempest observation is {age_str} '
-            f'&mdash; forecasts may be based on stale input regardless of when they were generated.'
+            f'Forecasts may be based on stale input regardless of when they were generated.'
             f'</div>'
         )
 
     learnings = _learnings_data(conn_in, conn_out)
     learnings_section = _learnings_section_html(learnings)
 
-    zambretti = pressure_tendency.zambretti_text(tempest, conn_in, elevation_m) if tempest else None
+    zambretti = pressure_tendency.zambretti_text(conn_in, elevation_m, now)
     zambretti_panel = _zambretti_panel_html(zambretti)
     tempest_card = _conditions_card("Tempest", tempest, elevation_m)
     nws_card = _conditions_card("NWS", nws_filled, fallback_ts=nws_fallback_ts)
@@ -4398,18 +4253,6 @@ def generate(
 
     ext_corrected_html = _external_corrected_source_weights_html(ext_corrected_mae_rows)
     weights_section = _weights_section_html(weight_rows, all_members, ext_corrected_html)
-    filter_btns = "".join(
-        f'<button class="mae-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
-        for i, (v, lbl) in enumerate([
-            ("avg", "Average"), ("temperature", "Temperature"),
-            ("dewpoint", "Dew Point"), ("pressure", "Pressure"),
-        ])
-    )
-    mae_chart_divs = "".join(
-        f'<div class="chart-container"><div id="mae-chart-{lt}"></div></div>'
-        for lt in lead_times
-    )
-
     fcst_filter_btns = "".join(
         f'<button class="fcst-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
@@ -4439,7 +4282,7 @@ def generate(
     )
     bias_chart_divs = "".join(
         f'<div class="chart-container"><div id="bias-chart-{lt}"></div></div>'
-        for lt in lead_times
+        for lt in sorted(_KEY_LEADS)
     )
     heatmap_filter_btns = "".join(
         f'<button class="heatmap-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
@@ -4524,12 +4367,6 @@ def generate(
   <p class="chart-legend-note">Skill score vs. climatological mean at each lead time for the selected variable. Negative = worse than climatology.</p>
   <div class="mae-filter-bar">{acc_filter_btns}</div>
   <div class="table-scroll">{acc_lead_table_html}</div>
-  <h3 class="obs-subhead">Skill over time</h3>
-  <div class="mae-filter-bar">{filter_btns}<button id="smooth-toggle" class="mae-raw-btn">Per-run detail</button></div>
-  <p class="chart-legend-note">Y-axis: MAE ÷ climo MAE per run. 1.0 = same error as climatological mean · below 1.0 = better · above 1.0 = worse. Grey long-dash: climo. Per-run detail: solid with rolling average overlay.</p>
-  <div class="mae-charts-grid">
-    {mae_chart_divs}
-  </div>
 </section>
 
 <section class="section analysis-section" id="analysis">
@@ -4593,7 +4430,6 @@ function plotBg() {{
 }}
 {_chart_js(charts)}
 {_obs_history_js(tempest_rows, nws_rows)}
-{_mae_timeseries_js(mae_ts)}
 {_member_forecast_js(member_forecast_rows, lead_times)}
 {_member_detail_js(members_10)}
 {_bias_timeseries_js(bias_ts)}
