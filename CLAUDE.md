@@ -11,15 +11,24 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 |--------------|------------------------------------------------------|
 | `forecast`   | Run all models, write forecast rows                  |
 | `score`      | Score past forecasts against observations            |
+| `prune`      | Null out raw value/spread/observed past a debugging window (default 30 days) |
 | `tune`       | Compute skill-score member weights from scoring history |
 | `dashboard`  | Regenerate dashboard.html                            |
 | `conditions` | Print latest Tempest and NWS observations            |
 | `query`      | Run a SQL query against barogram.db or wxlog         |
 
 There is no `run` subcommand. `make run` composes the full cycle — `score`, then
-`forecast`, then `dashboard` — as separate steps, and stops if `forecast` exits
-non-zero (it does so only when no forecast rows were written), so a stale or empty
+`forecast`, then `dashboard`, then `prune` — as separate steps, and stops if `forecast`
+exits non-zero (it does so only when no forecast rows were written), so a stale or empty
 forecast never reaches the dashboard or publish step.
+
+`prune` only nulls `value`/`spread`/`observed` on already-scored rows older than the
+cutoff — `error`/`mae`/`scored_at` and everything else stay forever for long-run
+accuracy trends. It never deletes rows and never touches an unscored row. Freed pages
+aren't reclaimed until `auto_vacuum=incremental` is enabled, which needs a one-time
+full `VACUUM` on the existing db (`sqlite3 barogram.db "pragma auto_vacuum=incremental; vacuum;"`,
+needs ~1.5GB free disk headroom and briefly locks the db) — `prune` runs
+`pragma incremental_vacuum` every time regardless, but it's a no-op until that's done.
 
 ### Data investigation with `query`
 

@@ -244,6 +244,34 @@ def cmd_score(args, conf):
     print(f"scored {result['scored']}, skipped {result['skipped']}")
 
 
+def cmd_prune(args, conf):
+    migrations_dir = Path(__file__).parent / "migrations"
+    conn_out = db.open_output_db(conf.output_db)
+    db.run_migrations(conn_out, migrations_dir)
+
+    cutoff = int(time.time()) - args.days * 86400
+
+    if args.dry_run:
+        n = conn_out.execute(
+            """
+            select count(*) from forecasts
+            where valid_at < ? and scored_at is not null
+              and (value is not null or spread is not null or observed is not null)
+            """,
+            (cutoff,),
+        ).fetchone()[0]
+        print(f"would prune {n} rows older than {args.days} days (dry run, no changes written)")
+        return
+
+    n = db.prune_old_forecast_details(conn_out, cutoff)
+    print(f"pruned {n} rows older than {args.days} days")
+
+    db.incremental_vacuum(conn_out)
+    print("ran incremental vacuum")
+
+    db.set_metadata(conn_out, "last_prune", str(int(time.time())))
+
+
 def cmd_query(args, conf):
     import json as json_mod
 
@@ -418,7 +446,7 @@ def cmd_insights(args, conf):
     ensemble_forecast = {"issued_at": ens_issued_at, "leads": leads} if ens_issued_at else None
 
     _TARGET_MODELS = {"nws", "tempest_forecast", "barogram_ensemble"}
-    _ALL_LEADS = [6, 12, 18, 24]
+    _ALL_LEADS = [1, 6, 12, 18, 24]
     _ACCURACY_WINDOW = 10
     summary = db.score_summary_last_n_runs(conn_out, _ACCURACY_WINDOW)
     summary = [r for r in summary if r["member_id"] == 0 and r["model"] in _TARGET_MODELS]
@@ -480,16 +508,19 @@ def cmd_tune(args, conf):
         "dewpoint":    climatological_mean.MODEL_ID,
         "pressure":    persistence.MODEL_ID,
     }
+    _TUNE_WINDOW_DAYS = 400
+    since = int(time.time()) - _TUNE_WINDOW_DAYS * 86400
+    print(f"tuning window: last {_TUNE_WINDOW_DAYS} days (since {time.strftime('%Y-%m-%d', time.localtime(since))})")
 
     weighted_model_ids = {m.MODEL_ID for m in _MODELS if getattr(m, "NEEDS_WEIGHTS", False)}
     model_names = {m.MODEL_ID: m.MODEL_NAME for m in _MODELS if getattr(m, "NEEDS_WEIGHTS", False)}
 
-    huber_deltas = db.huber_delta_per_variable(conn_out, args.huber_percentile)
+    huber_deltas = db.huber_delta_per_variable(conn_out, args.huber_percentile, since=since)
     print(f"Huber deltas ({args.huber_percentile:.0f}th percentile of abs error):")
     for var, d in sorted(huber_deltas.items()):
         print(f"  {var}: {d:.3f}")
 
-    ref_raw = db.reference_errors_by_sector(conn_out, list(set(_REF_BY_VAR.values())))
+    ref_raw = db.reference_errors_by_sector(conn_out, list(set(_REF_BY_VAR.values())), since=since)
     _ref_sect_err: dict = {}
     _ref_pool_err: dict = {}
     for r in ref_raw:
@@ -512,7 +543,7 @@ def cmd_tune(args, conf):
             if h > 0:
                 ref_sect_huber[(mid, variable, lead_hours, sector)] = h
 
-    raw_rows = db.raw_errors_by_sector(conn_out)
+    raw_rows = db.raw_errors_by_sector(conn_out, since=since)
 
     # group raw errors by cell
     _sector_error_lists: dict = {}
@@ -673,6 +704,17 @@ def main():
         "score", help="score past forecasts against observations"
     )
     p = subparsers.add_parser(
+        "prune", help="drop raw forecast value/observed past their debugging window"
+    )
+    p.add_argument(
+        "--days", type=int, default=30, metavar="N",
+        help="keep raw value/spread/observed for this many days (default: 30)",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="print how many rows would be pruned without writing",
+    )
+    p = subparsers.add_parser(
         "query", help="run a SQL query against the output or input database"
     )
     p.add_argument("sql", help="SQL query to execute")
@@ -737,6 +779,8 @@ def main():
         cmd_dashboard(args, conf)
     elif args.command == "score":
         cmd_score(args, conf)
+    elif args.command == "prune":
+        cmd_prune(args, conf)
     elif args.command == "query":
         cmd_query(args, conf)
     elif args.command == "insights":

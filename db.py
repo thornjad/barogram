@@ -299,21 +299,27 @@ def score_summary(conn: sqlite3.Connection) -> list:
 
 
 
-def huber_delta_per_variable(conn: sqlite3.Connection, percentile: float = 80.0) -> dict:
+def huber_delta_per_variable(conn: sqlite3.Connection, percentile: float = 80.0,
+                              since: int | None = None) -> dict:
     """Compute per-variable Huber delta from scored non-external forecasts.
 
     Returns {variable: delta} where delta is the given percentile of abs(error).
     Errors below delta are penalized quadratically; above delta, linearly.
+    since: if given, a unix epoch cutoff — only forecasts with valid_at >= since
+    are considered. None means no cutoff (all-time).
     """
+    since_clause = "and f.valid_at >= ?" if since is not None else ""
     rows = conn.execute(
-        """
+        f"""
         select f.variable, abs(f.error) as abs_error
         from forecasts f
         join models m on m.id = f.model_id
         where m.type != 'external'
           and f.scored_at is not null
           and f.error is not null
-        """
+          {since_clause}
+        """,
+        (since,) if since is not None else (),
     ).fetchall()
     by_var: dict = {}
     for r in rows:
@@ -326,16 +332,19 @@ def huber_delta_per_variable(conn: sqlite3.Connection, percentile: float = 80.0)
     return deltas
 
 
-def raw_errors_by_sector(conn: sqlite3.Connection) -> list:
+def raw_errors_by_sector(conn: sqlite3.Connection, since: int | None = None) -> list:
     """Raw signed errors per (model_id, member_id, variable, lead_hours, sector).
 
     Excludes external models. Includes member_id=0 rows; callers filter as needed.
     Sector is derived from valid_at local hour:
     0=night(00-05), 1=morning(06-11), 2=afternoon(12-17), 3=evening(18-23).
     Used by cmd_tune for Huber loss aggregation.
+    since: if given, a unix epoch cutoff — only forecasts with valid_at >= since
+    are considered. None means no cutoff (all-time).
     """
+    since_clause = "and f.valid_at >= ?" if since is not None else ""
     return conn.execute(
-        """
+        f"""
         select
             f.model_id, f.member_id, f.variable, f.lead_hours,
             case
@@ -350,18 +359,25 @@ def raw_errors_by_sector(conn: sqlite3.Connection) -> list:
         where m.type != 'external'
           and f.scored_at is not null
           and f.error is not null
+          {since_clause}
         order by f.model_id, f.member_id, f.variable, f.lead_hours, sector
-        """
+        """,
+        (since,) if since is not None else (),
     ).fetchall()
 
 
-def reference_errors_by_sector(conn: sqlite3.Connection, model_ids: list) -> list:
+def reference_errors_by_sector(conn: sqlite3.Connection, model_ids: list,
+                                since: int | None = None) -> list:
     """Raw signed errors for member_id=0 rows of the given reference model IDs.
 
     Used by cmd_tune to compute independent reference Huber losses for BSS
     weighting. Sector derivation matches raw_errors_by_sector.
+    since: if given, a unix epoch cutoff — only forecasts with valid_at >= since
+    are considered. None means no cutoff (all-time).
     """
     placeholders = ",".join("?" * len(model_ids))
+    since_clause = "and f.valid_at >= ?" if since is not None else ""
+    params = list(model_ids) + ([since] if since is not None else [])
     return conn.execute(
         f"""
         select
@@ -378,9 +394,10 @@ def reference_errors_by_sector(conn: sqlite3.Connection, model_ids: list) -> lis
           and f.member_id = 0
           and f.scored_at is not null
           and f.error is not null
+          {since_clause}
         order by f.model_id, f.variable, f.lead_hours, sector
         """,
-        model_ids,
+        params,
     ).fetchall()
 
 
@@ -1043,6 +1060,40 @@ def open_output_db(path: str) -> sqlite3.Connection:
     return conn
 
 
+def prune_old_forecast_details(conn: sqlite3.Connection, cutoff_ts: int) -> int:
+    """Null out value/spread/observed on scored rows older than cutoff_ts.
+
+    Keeps error/mae/scored_at forever for long-run accuracy trends; drops the
+    raw forecast/observed pair once it's past its debugging usefulness (the
+    longest actual consumer, recent_misses, only looks back 14 days).
+    Never touches an unscored row — the scorer still needs value to compute
+    error, and an unscored row this old is presumed still pending, not dead.
+    """
+    cur = conn.execute(
+        """
+        update forecasts
+        set value = null, spread = null, observed = null
+        where valid_at < ?
+          and scored_at is not null
+          and (value is not null or spread is not null or observed is not null)
+        """,
+        (cutoff_ts,),
+    )
+    return cur.rowcount
+
+
+def incremental_vacuum(conn: sqlite3.Connection, pages: int | None = None) -> None:
+    """Reclaim freed pages left behind by prune_old_forecast_details.
+
+    Requires auto_vacuum=incremental, set once via a one-time full VACUUM on
+    the existing db (see docs/README.md) — this is a no-op otherwise.
+    """
+    if pages is None:
+        conn.execute("pragma incremental_vacuum")
+    else:
+        conn.execute(f"pragma incremental_vacuum({int(pages)})")
+
+
 def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
     # bootstrap metadata table before checking schema_version
     conn.execute(
@@ -1141,9 +1192,10 @@ def recent_misses(
 
     raw = conn.execute(
         """
-        select f.model_id, f.model, f.variable, f.lead_hours,
+        select f.model_id, f.model, m.type, f.variable, f.lead_hours,
                f.valid_at, f.value, f.observed, f.error, f.mae
         from forecasts f
+        join models m on m.id = f.model_id
         where f.scored_at is not null
           and f.member_id = 0
           and f.valid_at >= ?
@@ -1157,11 +1209,23 @@ def recent_misses(
         return row["mae"] / c if c and c > 0 else row["mae"]
 
     by_model: dict[int, list] = {}
+    model_type: dict[int, str] = {}
     for r in raw:
         by_model.setdefault(r["model_id"], []).append(r)
+        model_type[r["model_id"]] = r["type"]
+
+    # same ordering as the overall forecast skill table: ensemble first,
+    # then external (newest model_id first), then base models by model_id
+    def group_key(mid: int) -> tuple:
+        t = model_type[mid]
+        if t == "ensemble":
+            return (0, mid)
+        if t == "external":
+            return (1, -mid)
+        return (2, mid)
 
     out: list = []
-    for mid in sorted(by_model):
+    for mid in sorted(by_model, key=group_key):
         rows = sorted(by_model[mid], key=rank_key, reverse=True)[:per_model]
         rows.sort(key=lambda r: r["mae"], reverse=True)
         out.extend(rows)
