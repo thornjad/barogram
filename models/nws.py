@@ -19,7 +19,7 @@ MODEL_NAME = "nws"
 NEEDS_CONN_IN = True
 NEEDS_LOCATION = True
 
-LEAD_HOURS = [6, 12, 18, 24]
+from models._climo_weights import LEAD_HOURS
 # hourly NWS data — snap to nearest within ±90 min
 _SNAP_WINDOW = 5400
 

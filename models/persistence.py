@@ -4,7 +4,7 @@
 MODEL_ID = 1
 MODEL_NAME = "persistence"
 
-LEAD_HOURS = [6, 12, 18, 24]
+from models._climo_weights import LEAD_HOURS
 
 # barogram variable name -> tempest_obs column name
 VARIABLES = {

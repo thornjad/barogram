@@ -24,7 +24,7 @@ MODEL_NAME = "dry_airmass_diurnal"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
 
-LEAD_HOURS = [6, 12, 18, 24]
+from models._climo_weights import LEAD_HOURS
 
 VAR_COL = {
     "temperature": "air_temp",

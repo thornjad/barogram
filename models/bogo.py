@@ -13,7 +13,7 @@ MODEL_ID = 12
 MODEL_NAME = "bogo"
 NEEDS_CONN_IN = True
 
-LEAD_HOURS = [6, 12, 18, 24]
+from models._climo_weights import LEAD_HOURS
 MIN_OBS = 30
 
 _STEP = {

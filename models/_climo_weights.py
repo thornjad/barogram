@@ -1,6 +1,6 @@
 import math
 
-LEAD_HOURS = [6, 12, 18, 24]
+LEAD_HOURS = list(range(1, 25))
 
 VARIABLES = {
     "temperature": "air_temp",

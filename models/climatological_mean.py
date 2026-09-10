@@ -9,7 +9,7 @@ MODEL_ID = 2
 MODEL_NAME = "climatological_mean"
 NEEDS_CONN_IN = True
 
-LEAD_HOURS = [6, 12, 18, 24]
+from models._climo_weights import LEAD_HOURS
 MIN_OBS = 30
 
 # barogram variable name -> tempest_obs column name

@@ -23,7 +23,7 @@ NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
 NEEDS_LOCATION = True
 
-LEAD_HOURS = [6, 12, 18, 24]
+from models._climo_weights import LEAD_HOURS
 
 # pressure intentionally omitted
 VAR_COL = {

@@ -61,7 +61,7 @@ NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
 
-LEAD_HOURS = [6, 12, 18, 24]
+from models._climo_weights import LEAD_HOURS
 VARIABLES = {
     "temperature": "air_temp",
     "dewpoint":    "dew_point",

@@ -18,7 +18,7 @@ MODEL_ID = 201
 MODEL_NAME = "tempest_forecast"
 NEEDS_CONF = True
 
-LEAD_HOURS = [6, 12, 18, 24]
+from models._climo_weights import LEAD_HOURS
 # hourly data — snap to nearest within ±90 min
 _SNAP_WINDOW = 5400
 

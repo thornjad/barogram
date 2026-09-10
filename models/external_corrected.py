@@ -24,7 +24,7 @@ NEEDS_CONN_IN = True
 NEEDS_CONN_OUT = True
 NEEDS_CONF = True
 
-LEAD_HOURS = [6, 12, 18, 24]
+from models._climo_weights import LEAD_HOURS
 _VARIABLES = ["temperature", "dewpoint"]
 _MIN_SAMPLES = 3
 _OBS_WINDOW = 600  # ±10 min for matching historical obs to issued_at

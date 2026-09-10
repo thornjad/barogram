@@ -6,7 +6,7 @@ import barogram
 from tests.conftest import make_input_db, make_obs, make_output_db
 
 _VALID_VARIABLES = {"temperature", "dewpoint", "pressure"}
-_VALID_LEAD_HOURS = {6, 12, 18, 24}
+_VALID_LEAD_HOURS = set(range(1, 25))
 _REQUIRED_KEYS = {"model_id", "model", "issued_at", "valid_at", "lead_hours", "variable", "value"}
 
 _BASE_MODEL_SEED = [
@@ -72,7 +72,7 @@ def test_all_models_satisfy_contract():
                     "temperature": 20.0,
                     "dewpoint": 14.0,
                 }
-                for h in [6, 12, 18, 24]
+                for h in range(1, 25)
             }
             mod = importlib.import_module(f"models.{model.MODEL_NAME}")
             if hasattr(mod, "_fetch"):
