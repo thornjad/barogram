@@ -35,7 +35,7 @@ where `tendency_rate` is the 3h window rate (hPa/h) for training. At forecast ti
 
 Transfer functions are re-fitted from scratch on every `run()` call, so they automatically incorporate new observations as the history grows. No retraining step is needed.
 
-## Zambretti member
+## Zambretti member (ensemble contribution)
 
 The Zambretti member (id=1) classifies the 3h pressure change into one of five tendency categories, then applies historical conditional mean deltas:
 
@@ -47,4 +47,21 @@ The Zambretti member (id=1) classifies the 3h pressure change into one of five t
 | slow_fall | −0.1 to −1.6 hPa |
 | rapid_fall | ≤ −1.6 hPa |
 
-For each `(category, variable, lead_hours)` cell, the model computes the mean observed variable delta across all historical occurrences of that tendency category.
+For each `(category, variable, lead_hours)` cell, the model computes the mean observed variable delta across all historical occurrences of that tendency category. This is a simplified, rules-based contrast piece for the ensemble — not the historical Zambretti algorithm — and is not scored on its own text output.
+
+## Zambretti dashboard display (`zambretti_text()`)
+
+The dashboard's "Zambretti forecast for today" panel uses the actual Zambretti forecaster algorithm (Negretti & Zambra, 1915), not the five-category classifier above. It runs the classic formula documented by beteljuice.com and implemented widely (e.g. `pywws.ZambrettiCore`; every letter/lookup-table constant here has been diffed byte-for-byte against that source):
+
+1. **Sea-level pressure** — station pressure reduced to sea level via the hypsometric formula when elevation is configured.
+2. **Wind direction** — the current wind reading is bucketed into one of 16 compass sectors, each with a fixed pressure adjustment (`+5.2` from due north tapering down to `−11.5` from due south, per the reference table). Skipped when wind is unavailable.
+3. **3h trend** — rising (≥ +0.1 hPa/h), falling (≤ −0.1 hPa/h), or steady, each using its own linear formula and lookup table.
+4. **Season and hemisphere** — April–September counts as the northern-hemisphere growing season, adding or removing 3.2 hPa depending on trend direction. Hemisphere is hardcoded to north — the station is stationary in Central US and will never move.
+
+The adjusted pressure is run through the trend-specific formula (e.g. rising: `F = 0.1740 * (1031.40 - pressure)`) to get an index `F`, which is rounded and clamped into a lookup table of 14 (rising), 10 (falling), or 17 (steady) letter codes (A-Z), each mapping to one of the 26 classic Zambretti forecast texts (e.g. `Z` = "Stormy, much rain", `A` = "Settled fine"). This replaces an earlier implementation that used only the 3h tendency rate with a 5-bucket table — that version ignored absolute pressure entirely, so a rapid but small wobble near a high baseline (e.g. 1035 to 1033 hPa) could read "Stormy, much rain" even though nothing stormy was actually forecast.
+
+There is no single official digital Zambretti formula — the 1915 device was an analog dial, and several people have independently reverse-engineered it into code with different constants (e.g. the `zambretti-py` package uses an entirely different formula/lookup with no season term at all). This implementation follows the beteljuice/pywws variant, the one most widely deployed across weather-station software.
+
+### Daily anchor time
+
+The algorithm's ~90% accuracy claim was historically measured from a single reading taken once daily around 9 AM local solar time, not from continuous recalculation. Rather than compute true solar time, `zambretti_text()` anchors to a fixed clock time approximating it: **9:12 AM CST / 10:12 AM CDT**, expressed internally as a constant 15:12 UTC (America/Chicago is always UTC-6 or UTC-5, so this lands on the right wall-clock time either way with no DST-awareness needed). It always looks back to the most recent occurrence of that anchor — so the panel shows one stable "forecast for today" no matter what time the dashboard itself regenerates, rather than recomputing off whatever the pressure happens to be doing right now.

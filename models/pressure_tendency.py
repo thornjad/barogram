@@ -9,9 +9,23 @@
 # applies historical conditional mean deltas — a categorical, rules-based approach
 # for contrast against the regression members.
 #
-# zambretti_text() is a separate display-only function for the dashboard.
+# zambretti_text() is a separate display-only function for the dashboard. it
+# implements the actual Zambretti forecaster algorithm (Negretti & Zambra, 1915),
+# not the five-bucket classifier above — sea-level pressure, wind direction, and
+# season all feed the forecast letter, per the formula documented at
+# http://www.meteormetrics.com/zambretti.htm and beteljuice.com's derivation
+# (verified against the widely-used pywws.ZambrettiCore implementation).
+#
+# the algorithm's ~90% accuracy claim was historically measured from a reading
+# taken once daily around 9 AM local solar time, not from continuous
+# recalculation. rather than compute true solar time, zambretti_text() anchors
+# to a fixed clock time approximating it (9:12 AM CST / 10:12 AM CDT, i.e.
+# 15:12 UTC year-round) and always looks back to the most recent occurrence of
+# that anchor, so the dashboard shows one stable "forecast for today" no
+# matter what time it happens to regenerate.
 
 import bisect
+import datetime as dt
 import math
 import statistics
 import time
@@ -32,12 +46,71 @@ _RAPID = 1.6
 _SLOW = 0.1
 
 # simplified Zambretti: tendency category -> (letter, description)
+# used only by the ensemble member (id=1) below, for its historical
+# conditional-mean-delta lookup — not the display algorithm.
 _ZAMBRETTI_TABLE = {
     "rapid_rise": ("A", "Settled fine"),
     "slow_rise":  ("B", "Fine weather"),
     "steady":     ("F", "Fair, possible showers"),
     "slow_fall":  ("K", "Unsettled, rain likely"),
     "rapid_fall": ("N", "Stormy, much rain"),
+}
+
+# --- real Zambretti forecaster algorithm (dashboard display only) ---
+#
+# station is fixed in Central US (America/Chicago, see fmt.CENTRAL) and will
+# never move, so hemisphere is hardcoded rather than read from config.
+_ZAMBRETTI_NORTH = True
+
+# daily anchor time: 9:12 AM CST / 10:12 AM CDT, expressed as a fixed UTC
+# time-of-day so no DST-awareness is needed -- America/Chicago is always
+# either UTC-6 (CST) or UTC-5 (CDT), so 15:12 UTC lands on the correct local
+# wall-clock time either way. approximates 9 AM local solar time without a
+# real solar-time calculation.
+_ZAMBRETTI_ANCHOR_UTC_HOUR = 15
+_ZAMBRETTI_ANCHOR_UTC_MINUTE = 12
+_ZAMBRETTI_ANCHOR_LOOKUP_SEC = 1800  # +/- 30 min tolerance when finding the nearest obs
+
+# pressure adjustment (hPa) by 16-point wind sector, starting at N and going
+# clockwise (N, NNE, NE, ENE, E, ESE, SE, SSE, S, SSW, SW, WSW, W, WNW, NW, NNW).
+# southern-hemisphere systems rotate the opposite way, so a south-hemisphere
+# station shifts the sector by 180 degrees (8 positions) before indexing.
+_ZAMBRETTI_WIND_ADJ = (
+    5.2, 4.2, 3.2, 1.05, -1.1, -3.15, -5.2, -8.35,
+    -11.5, -9.4, -7.3, -5.25, -3.2, -1.15, 0.9, 3.05,
+)
+
+_ZAMBRETTI_RISING_LUT = ("A", "B", "B", "C", "F", "G", "I", "J", "L", "M", "M", "Q", "T", "Y")
+_ZAMBRETTI_FALLING_LUT = ("B", "D", "H", "O", "R", "U", "V", "X", "X", "Z")
+_ZAMBRETTI_STEADY_LUT = ("A", "B", "B", "B", "E", "K", "N", "N", "P", "P", "S", "W", "W", "X", "X", "X", "Z")
+
+_ZAMBRETTI_TEXT = {
+    "A": "Settled fine",
+    "B": "Fine weather",
+    "C": "Becoming fine",
+    "D": "Fine, becoming less settled",
+    "E": "Fine, possible showers",
+    "F": "Fairly fine, improving",
+    "G": "Fairly fine, possible showers early",
+    "H": "Fairly fine, showery later",
+    "I": "Showery early, improving",
+    "J": "Changeable, mending",
+    "K": "Fairly fine, showers likely",
+    "L": "Rather unsettled clearing later",
+    "M": "Unsettled, probably improving",
+    "N": "Showery, bright intervals",
+    "O": "Showery, becoming less settled",
+    "P": "Changeable, some rain",
+    "Q": "Unsettled, short fine intervals",
+    "R": "Unsettled, rain later",
+    "S": "Unsettled, some rain",
+    "T": "Mostly very unsettled",
+    "U": "Occasional rain, worsening",
+    "V": "Rain at times, very unsettled",
+    "W": "Rain at frequent intervals",
+    "X": "Rain, very unsettled",
+    "Y": "Stormy, may improve",
+    "Z": "Stormy, much rain",
 }
 
 # (member_id, name, poly_degree, window_hours, half_life_minutes or None)
@@ -258,28 +331,114 @@ def _build_zambretti_conditionals(all_obs, issued_at):
 
     return {k: sum(v) / len(v) for k, v in accum.items() if len(v) >= 3}
 
-def zambretti_text(obs, conn_in, elevation_m: float = 0.0):
+def _wind_sector(degrees: float) -> int:
+    """16-point compass sector for a wind direction in degrees (0=N, clockwise)."""
+    return round(degrees / 22.5) % 16
+
+
+def _zambretti_forecast(pressure_hpa, month, wind_deg, trend_hpa_per_h, north=_ZAMBRETTI_NORTH):
     """
-    Compute the Zambretti weather description for dashboard display.
-    Not scored — display only.
+    Classic Zambretti forecaster: sea-level pressure + 3h trend + wind direction
+    + season/hemisphere -> a letter code (A-Z) and its forecast text.
+
+    pressure_hpa: current sea-level pressure.
+    month: 1-12, local time at the station.
+    wind_deg: current wind direction in degrees, or None if calm/unavailable
+      (wind adjustment is skipped, matching the reference implementation).
+    trend_hpa_per_h: 3h pressure tendency rate.
+    north: hemisphere; hardcoded True at the call site (station never moves).
+
+    returns (letter, description).
+    """
+    p = pressure_hpa
+    if wind_deg is not None:
+        sector = _wind_sector(wind_deg)
+        if not north:
+            sector = (sector + 8) % 16
+        p += _ZAMBRETTI_WIND_ADJ[sector]
+
+    growing_season = 4 <= month <= 9
+    if trend_hpa_per_h >= 0.1:
+        if north == growing_season:
+            p += 3.2
+        f = 0.1740 * (1031.40 - p)
+        lut = _ZAMBRETTI_RISING_LUT
+    elif trend_hpa_per_h <= -0.1:
+        if north == growing_season:
+            p -= 3.2
+        f = 0.1553 * (1029.95 - p)
+        lut = _ZAMBRETTI_FALLING_LUT
+    else:
+        f = 0.2314 * (1030.81 - p)
+        lut = _ZAMBRETTI_STEADY_LUT
+
+    idx = min(max(int(f + 0.5), 0), len(lut) - 1)
+    letter = lut[idx]
+    return letter, _ZAMBRETTI_TEXT[letter]
+
+
+def _zambretti_anchor_ts(now_ts: int) -> int:
+    """Most recent past-or-current occurrence of the daily Zambretti anchor
+    time (15:12 UTC -- see _ZAMBRETTI_ANCHOR_UTC_HOUR/MINUTE above)."""
+    now = dt.datetime.fromtimestamp(now_ts, tz=dt.timezone.utc)
+    anchor = now.replace(
+        hour=_ZAMBRETTI_ANCHOR_UTC_HOUR, minute=_ZAMBRETTI_ANCHOR_UTC_MINUTE,
+        second=0, microsecond=0,
+    )
+    if anchor > now:
+        anchor -= dt.timedelta(days=1)
+    return int(anchor.timestamp())
+
+
+def zambretti_text(conn_in, elevation_m: float = 0.0, now_ts: int | None = None):
+    """
+    Compute today's Zambretti weather forecast for dashboard display, using
+    the real Zambretti forecaster algorithm (sea-level pressure, 3h trend,
+    wind direction, season). Not scored — display only.
+
+    Anchored to the most recent occurrence of the daily anchor time (9:12 AM
+    CST / 10:12 AM CDT) rather than the live observation, so the result reads
+    as one stable "forecast for today" no matter what time the dashboard
+    itself regenerates -- see the module-level comment on why.
 
     Pressure is reduced to sea level before computing tendency when
     elevation_m > 0; otherwise falls back to station pressure.
-    Tendency classification is the same either way since the altitude
-    correction is nearly constant and cancels in the difference.
 
-    returns dict with keys: category, rate_hpa_per_h, letter, description.
+    returns dict with keys: category, rate_hpa_per_h, letter, description,
+    wind_dir_text, season_text.
+    `category` is the coarse 3h-tendency bucket (for the "Tendency: ..." line);
+    `letter`/`description` come from the full algorithm, not from `category`.
     """
-    ts = obs["timestamp"]
-    row_past = db.nearest_tempest_obs(
-        conn_in, ts - _TENDENCY_WINDOW_SEC, window_sec=_TENDENCY_LOOKUP_SEC
-    )
-    if row_past is None or obs["station_pressure"] is None or row_past["station_pressure"] is None:
+    if now_ts is None:
+        now_ts = int(time.time())
+    anchor_ts = _zambretti_anchor_ts(now_ts)
+
+    obs = db.nearest_tempest_obs(conn_in, anchor_ts, window_sec=_ZAMBRETTI_ANCHOR_LOOKUP_SEC)
+    if obs is None or obs["station_pressure"] is None:
         return {
             "category": "unknown",
             "rate_hpa_per_h": None,
             "letter": "\u2014",
             "description": "Insufficient pressure history",
+            "wind_dir_text": "\u2014",
+            "season_text": "\u2014",
+        }
+
+    # nearest_tempest_obs doesn't return the matched row's own timestamp, so
+    # the 3h-ago lookup and month are anchored on anchor_ts itself rather than
+    # the actual obs timestamp -- within the lookup window's tolerance either
+    # way, and simpler than adding a timestamp column to that query.
+    row_past = db.nearest_tempest_obs(
+        conn_in, anchor_ts - _TENDENCY_WINDOW_SEC, window_sec=_TENDENCY_LOOKUP_SEC
+    )
+    if row_past is None or row_past["station_pressure"] is None:
+        return {
+            "category": "unknown",
+            "rate_hpa_per_h": None,
+            "letter": "\u2014",
+            "description": "Insufficient pressure history",
+            "wind_dir_text": "\u2014",
+            "season_text": "\u2014",
         }
 
     def _slp(sp, temp_c):
@@ -290,13 +449,21 @@ def zambretti_text(obs, conn_in, elevation_m: float = 0.0):
     p_now = _slp(obs["station_pressure"], obs["air_temp"])
     p_past = _slp(row_past["station_pressure"], row_past["air_temp"])
     delta_p = p_now - p_past
+    rate = delta_p / 3.0
     cat = _zambretti_category(delta_p)
-    letter, desc = _ZAMBRETTI_TABLE[cat]
+
+    month = time.localtime(anchor_ts).tm_mon
+    letter, desc = _zambretti_forecast(p_now, month, obs["wind_direction"], rate)
+
+    season_text = "growing season (Apr–Sep)" if 4 <= month <= 9 else "dormant season (Oct–Mar)"
+
     return {
         "category": cat,
-        "rate_hpa_per_h": round(delta_p / 3.0, 2),
+        "rate_hpa_per_h": round(rate, 2),
         "letter": letter,
         "description": desc,
+        "wind_dir_text": fmt.wind_dir(obs["wind_direction"]),
+        "season_text": season_text,
     }
 
 def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):

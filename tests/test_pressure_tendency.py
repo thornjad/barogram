@@ -1,5 +1,6 @@
 import math
 
+import datetime as dt
 from models.pressure_tendency import (
     _find_nearest_ts,
     _zambretti_category,
@@ -8,6 +9,8 @@ from models.pressure_tendency import (
     _poly_eval,
     _poly_tendency_rate,
     _exp_weights,
+    _wind_sector,
+    _zambretti_forecast,
 )
 
 
@@ -185,3 +188,101 @@ def test_apply_mean_reversion_short_lead_retains_more():
     r6 = _apply_mean_reversion(raw, mean, 6)
     r24 = _apply_mean_reversion(raw, mean, 24)
     assert r6 > r24
+
+
+# --- _wind_sector ---
+
+def test_wind_sector_due_north():
+    assert _wind_sector(0) == 0
+
+
+def test_wind_sector_due_south():
+    assert _wind_sector(180) == 8
+
+
+def test_wind_sector_wraps_past_360():
+    assert _wind_sector(350) == 0
+
+
+# --- _zambretti_forecast (real Zambretti algorithm) ---
+
+def test_zambretti_forecast_steady_no_wind_settled_fine():
+    letter, desc = _zambretti_forecast(1030.81, 1, None, 0.0)
+    assert letter == "A"
+    assert desc == "Settled fine"
+
+
+def test_zambretti_forecast_extreme_low_falling_is_stormy():
+    # far below the falling-branch reference pressure -> Z, "Stormy, much rain".
+    # this is the exact failure mode of the old 5-bucket classifier: a rapid 3h
+    # drop from a normal/high baseline used to hit this same letter regardless
+    # of the absolute pressure level.
+    letter, desc = _zambretti_forecast(970.0, 1, None, -2.0)
+    assert letter == "Z"
+    assert desc == "Stormy, much rain"
+
+
+def test_zambretti_forecast_high_pressure_rapid_fall_is_not_stormy():
+    # a fast wobble near a high baseline (1035 -> 1033 hPa in 3h, rate -0.67 hPa/h)
+    # must NOT read "stormy" -- this is the bug the real algorithm fixes.
+    letter, desc = _zambretti_forecast(1033.0, 1, None, -0.67)
+    assert letter != "Z"
+    assert desc != "Stormy, much rain"
+
+
+def test_zambretti_forecast_wind_direction_changes_letter():
+    # same pressure/trend, only wind direction differs
+    north_letter, _ = _zambretti_forecast(1030.5, 1, 0, 0.0)    # wind from due north
+    south_letter, _ = _zambretti_forecast(1030.5, 1, 180, 0.0)  # wind from due south
+    assert north_letter != south_letter
+
+
+def test_zambretti_forecast_growing_season_changes_letter():
+    winter_letter, _ = _zambretti_forecast(1027.7, 1, None, 0.5)  # January
+    summer_letter, _ = _zambretti_forecast(1027.7, 7, None, 0.5)  # July, growing season
+    assert winter_letter != summer_letter
+
+
+def test_zambretti_forecast_south_hemisphere_flips_wind_sector():
+    # north=False shifts the wind sector by 180 degrees before indexing
+    north_letter, _ = _zambretti_forecast(1030.5, 1, 0, 0.0, north=True)
+    south_letter, _ = _zambretti_forecast(1030.5, 1, 0, 0.0, north=False)
+    assert north_letter != south_letter
+
+
+def test_zambretti_forecast_clamps_to_lut_range():
+    # absurdly high pressure on the rising branch must clamp to index 0, not error
+    letter, _ = _zambretti_forecast(1200.0, 1, None, 5.0)
+    assert letter == "A"
+
+
+# --- _zambretti_anchor_ts ---
+
+from models.pressure_tendency import _zambretti_anchor_ts
+
+
+def test_zambretti_anchor_before_today_anchor_uses_yesterday():
+    # 09:00 UTC is before today's 15:12 UTC anchor -> falls back to yesterday's
+    now_ts = int(dt.datetime(2026, 9, 10, 9, 0, tzinfo=dt.timezone.utc).timestamp())
+    anchor = _zambretti_anchor_ts(now_ts)
+    expected = int(dt.datetime(2026, 9, 9, 15, 12, tzinfo=dt.timezone.utc).timestamp())
+    assert anchor == expected
+
+
+def test_zambretti_anchor_after_today_anchor_uses_today():
+    # 16:00 UTC is after today's 15:12 UTC anchor -> uses today's
+    now_ts = int(dt.datetime(2026, 9, 10, 16, 0, tzinfo=dt.timezone.utc).timestamp())
+    anchor = _zambretti_anchor_ts(now_ts)
+    expected = int(dt.datetime(2026, 9, 10, 15, 12, tzinfo=dt.timezone.utc).timestamp())
+    assert anchor == expected
+
+
+def test_zambretti_anchor_exactly_at_anchor_uses_today():
+    now_ts = int(dt.datetime(2026, 9, 10, 15, 12, tzinfo=dt.timezone.utc).timestamp())
+    assert _zambretti_anchor_ts(now_ts) == now_ts
+
+
+def test_zambretti_anchor_is_always_within_24h_in_the_past():
+    now_ts = int(dt.datetime(2026, 1, 15, 12, 34, tzinfo=dt.timezone.utc).timestamp())
+    anchor = _zambretti_anchor_ts(now_ts)
+    assert 0 <= now_ts - anchor < 24 * 3600
