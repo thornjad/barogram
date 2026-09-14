@@ -16,7 +16,9 @@ import db
 import fmt
 import sync as _sync
 import models.analog as analog
+import models.dewpoint_tendency as dewpoint_tendency
 import models.dry_airmass_diurnal as dry_airmass_diurnal
+import models.frontal_trigger as frontal_trigger
 import models.full_state_analog as full_state_analog
 import models.multivariate_trend as multivariate_trend
 import models.airmass_diurnal as airmass_diurnal
@@ -37,6 +39,8 @@ import models.surface_signs as surface_signs
 import models.synoptic_state_machine as synoptic_state_machine
 import models.tempest_forecast as tempest_forecast_model
 import models.weighted_climatological_mean as weighted_climatological_mean
+import models.wind_veer_detector as wind_veer_detector
+import models._confidence as _confidence
 
 def _huber(e: float, delta: float) -> float:
     ae = abs(e)
@@ -65,6 +69,9 @@ _MODELS = [
     bogo,
     pressure_trend_cascade,
     pressure_damped_diurnal,
+    wind_veer_detector,
+    frontal_trigger,
+    dewpoint_tendency,
     pressure_consensus_transfer,  # reads pressure predictions written above, this run
     inverse_pressure_transfer,    # reads temp/dewpoint predictions written above, this run
     nws_model,
@@ -163,24 +170,37 @@ def cmd_forecast(args, conf):
         if any(getattr(m, "NEEDS_LOCATION", False) for m in _MODELS)
         else None
     )
+    shared_default_matches = (
+        _confidence.find_default_matches(conn_in, obs["timestamp"])
+        if any(getattr(m, "NEEDS_MATCH_HISTORY", False) for m in _MODELS)
+        else None
+    )
 
     total_rows = 0
     failed = []
     for model in _MODELS:
-        kwargs = {}
-        if getattr(model, "NEEDS_CONF", False):
-            kwargs["conf"] = conf
-        if getattr(model, "NEEDS_CONN_IN", False):
-            kwargs["conn_in"] = conn_in
-        if getattr(model, "NEEDS_CONN_OUT", False):
-            kwargs["conn_out"] = conn_out
-        if getattr(model, "NEEDS_WEIGHTS", False):
-            kwargs["weights"] = db.load_weights(conn_out, model.MODEL_ID)
-        if getattr(model, "NEEDS_ALL_OBS", False):
-            kwargs["all_obs"] = shared_all_obs
-        if getattr(model, "NEEDS_LOCATION", False):
-            kwargs["location"] = shared_location
         try:
+            kwargs = {}
+            if getattr(model, "NEEDS_CONF", False):
+                kwargs["conf"] = conf
+            if getattr(model, "NEEDS_CONN_IN", False):
+                kwargs["conn_in"] = conn_in
+            if getattr(model, "NEEDS_CONN_OUT", False):
+                kwargs["conn_out"] = conn_out
+            if getattr(model, "NEEDS_WEIGHTS", False):
+                kwargs["weights"] = db.load_weights(conn_out, model.MODEL_ID)
+            if getattr(model, "NEEDS_ALL_OBS", False):
+                kwargs["all_obs"] = shared_all_obs
+            if getattr(model, "NEEDS_LOCATION", False):
+                kwargs["location"] = shared_location
+            if getattr(model, "NEEDS_MATCH_HISTORY", False):
+                since = issued_at - _confidence._CONFIDENCE_WINDOW_DAYS * 86400
+                member_ids = db.member_ids_for_model(conn_out, model.MODEL_ID)
+                kwargs["member_history"] = {
+                    mid: db.model_error_history(conn_out, model.MODEL_ID, mid, since)
+                    for mid in member_ids
+                }
+                kwargs["default_matches"] = shared_default_matches
             rows = model.run(obs, issued_at, **kwargs)
             db.insert_forecasts(conn_out, rows)
             total_rows += len(rows)
