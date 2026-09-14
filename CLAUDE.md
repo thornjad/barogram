@@ -124,6 +124,9 @@ lowercase as well.
 | 17  | pressure_damped_diurnal      | base     | done   |
 | 18  | pressure_consensus_transfer  | base     | done   |
 | 19  | inverse_pressure_transfer    | base     | done   |
+| 20  | wind_veer_detector           | base     | done   |
+| 21  | frontal_trigger              | base     | done   |
+| 22  | dewpoint_tendency            | base     | done   |
 | 100 | barogram_ensemble            | ensemble | done   |
 | 200 | nws                          | external | done   |
 | 201 | tempest_forecast             | external | done   |

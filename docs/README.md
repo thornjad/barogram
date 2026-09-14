@@ -20,6 +20,9 @@
 | 17 | pressure_damped_diurnal | [017_pressure_damped_diurnal.md](017_pressure_damped_diurnal.md) |
 | 18 | pressure_consensus_transfer | [018_pressure_consensus_transfer.md](018_pressure_consensus_transfer.md) |
 | 19 | inverse_pressure_transfer | [019_inverse_pressure_transfer.md](019_inverse_pressure_transfer.md) |
+| 20 | wind_veer_detector | [020_wind_veer_detector.md](020_wind_veer_detector.md) |
+| 21 | frontal_trigger | [021_frontal_trigger.md](021_frontal_trigger.md) |
+| 22 | dewpoint_tendency | [022_dewpoint_tendency.md](022_dewpoint_tendency.md) |
 | 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
 | 200 | nws | — |
 | 201 | tempest_forecast | — |
@@ -30,4 +33,5 @@
 | Topic | Documentation |
 |-------|---------------|
 | Ensemble member weighting | [tune.md](tune.md) |
+| Per-member confidence | [confidence.md](confidence.md) |
 | Database schema and migrations | [database.md](database.md) |
