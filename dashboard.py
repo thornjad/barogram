@@ -1865,6 +1865,18 @@ document.querySelectorAll('.bias-filter-btn').forEach(function(btn) {{
 }});
 
 drawBiasCharts();
+
+const biasSection = document.querySelector('#analysis > details.collapsible-section');
+if (biasSection) {{
+    biasSection.addEventListener('toggle', function() {{
+        if (biasSection.open) {{
+            biasLeads.forEach(function(lead) {{
+                const c = document.getElementById('bias-chart-' + lead);
+                if (c) Plotly.Plots.resize(c);
+            }});
+        }}
+    }});
+}}
 """
 def _heatmap_js(heatmap_data: dict) -> str:
     data_json = json.dumps(heatmap_data)
@@ -3800,7 +3812,8 @@ def _skill_timeseries_html() -> str:
         ("10r", ' style="display:none"'),
     ]
     parts = [
-        '<h3 class="obs-subhead">Skill Over Time</h3>',
+        '<details class="collapsible-section" id="skill-timeseries-section">',
+        '<summary class="obs-subhead">Skill Over Time</summary>',
         '<div class="mae-filter-bar"><button id="skill-all-models-toggle" class="mae-raw-btn">All models</button></div>',
         '<p class="chart-legend-note">Per-run forecast skill vs. climatological mean (0% line). '
         'Averaged across all variables. Default: ensemble, NWS, Tempest Forecast.</p>',
@@ -3811,6 +3824,7 @@ def _skill_timeseries_html() -> str:
             f'<div class="chart-container"><div id="skill-timeseries-chart-{wid}"></div></div>'
             f'</div>'
         )
+    parts.append('</details>')
     return "\n".join(parts)
 
 
@@ -3873,6 +3887,18 @@ document.getElementById('skill-all-models-toggle').addEventListener('click', fun
     this.classList.toggle('active', skillShowAll);
     ['14d', '120d', 'alltime', '10r'].forEach(function(wid) {{ renderSkillTimeseries(wid); }});
 }});
+
+const skillSection = document.getElementById('skill-timeseries-section');
+if (skillSection) {{
+    skillSection.addEventListener('toggle', function() {{
+        if (skillSection.open) {{
+            ['14d', '120d', 'alltime', '10r'].forEach(function(wid) {{
+                const c = document.getElementById('skill-timeseries-chart-' + wid);
+                if (c) Plotly.Plots.resize(c);
+            }});
+        }}
+    }});
+}}
 """
 
 
@@ -4357,11 +4383,13 @@ def generate(
 <section class="section analysis-section" id="analysis">
   <h2>Model Analysis</h2>
 
-  <h3 class="obs-subhead">Bias Over Time</h3>
-  <div class="mae-filter-bar">{bias_filter_btns}</div>
-  <div class="mae-charts-grid">
-    {bias_chart_divs}
-  </div>
+  <details class="collapsible-section">
+    <summary class="obs-subhead">Bias Over Time</summary>
+    <div class="mae-filter-bar">{bias_filter_btns}</div>
+    <div class="mae-charts-grid">
+      {bias_chart_divs}
+    </div>
+  </details>
 
   <h3 class="obs-subhead">Score Heatmap</h3>
   <div class="mae-filter-bar">{heatmap_filter_btns}</div>
