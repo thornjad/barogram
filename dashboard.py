@@ -1877,20 +1877,6 @@ function drawHeatmapChart() {{
     const models = d.models || [];
     const leads = d.leads || [];
     const z = d.z || [];
-    const annotations = [];
-    models.forEach(function(model, i) {{
-        leads.forEach(function(lead, j) {{
-            const val = (z[i] || [])[j];
-            if (val !== null && val !== undefined) {{
-                annotations.push({{
-                    x: lead, y: model,
-                    text: val.toFixed(2),
-                    showarrow: false,
-                    font: {{ size: 11, color: '#333' }}
-                }});
-            }}
-        }});
-    }});
     Plotly.react('heatmap-chart', [{{
         type: 'heatmap',
         x: leads,
@@ -1905,10 +1891,9 @@ function drawHeatmapChart() {{
                   font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
         margin: {{ t: 40, b: 60, l: 180, r: 16 }},
         xaxis: {{ title: 'Lead hours', tickvals: leads, tickfont: {{ size: 11 }} }},
-        yaxis: {{ tickfont: {{ size: 11 }} }},
-        height: 300,
+        yaxis: {{ tickmode: 'array', tickvals: models, ticktext: models, tickfont: {{ size: 11 }}, automargin: true }},
+        height: Math.max(300, models.length * 28 + 120),
         showlegend: false,
-        annotations: annotations,
         font: {{ color: plotBg().font }},
         paper_bgcolor: plotBg().paper,
         plot_bgcolor: plotBg().plot
