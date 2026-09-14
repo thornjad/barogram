@@ -13,7 +13,13 @@ _MATCH_K = 20                    # analog days searched
 _LOOKBACK_DAYS = 365             # how far back full_analog_candidates searches
 _CONFIDENCE_FLOOR = 0.1          # no member's influence is ever driven to exactly zero
 
-_DEFAULT_FEATURES = ["air_temp", "dew_point", "station_pressure", "wind_avg"]
+_DEFAULT_FEATURES = [
+    "air_temp", "dew_point", "station_pressure", "wind_avg",
+    "wind_direction", "wind_gust", "solar_radiation", "uv_index",
+    "precip_accum_day", "lightning_count",
+]  # every column full_analog_candidates already fetches; find_default_matches
+   # was previously only using the first 4, leaving the other 6 unread on
+   # every candidate row it had already pulled
 
 
 def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
