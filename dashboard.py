@@ -28,6 +28,9 @@ _MODEL_TOOLTIPS: dict[str, str] = {
     "nws": "NWS hourly forecast from api.weather.gov, snapped to the standard 6/12/18/24h lead times. Not included in the barogram ensemble.",
     "tempest_forecast": "Tempest station's built-in forecast from the Tempest API, snapped to the standard lead times. Not included in the barogram ensemble.",
     "external_corrected": "NWS and Tempest forecasts with bias corrections learned from historical scoring, conditioned on time of day, season, and airmass state. Not included in the barogram ensemble.",
+    "wind_veer_detector": "Classifies wind-direction change over a trailing 3h window with no (or a much lower) minimum wind-speed floor than surface_signs uses, to test whether light-wind veers are still informative.",
+    "frontal_trigger": "Joint pressure-tendency + wind-veer trigger, combined with strict/loose/weighted variants, kept separate from synoptic_state_machine since wind rotation hurts that model as a joint dimension.",
+    "dewpoint_tendency": "Extrapolates dewpoint's own recent linear trend forward with OU mean reversion, mirroring pressure_tendency's regression members but for moisture instead of pressure.",
 }
 
 _VARIABLE_LABEL = {
@@ -616,7 +619,7 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .fcst-row-refs { display: flex; flex-direction: column; gap: 20px; }
 .fcst-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#888; margin-bottom:6px; }
 .fcst-temp { font-size:26px; font-weight:700; color:#1a1a1a; line-height:1; }
-.fcst-temp-spread { font-size:11px; color:#aaa; margin-top:2px; margin-bottom:8px; }
+.fcst-confidence { font-size:11px; color:#aaa; margin-top:2px; margin-bottom:8px; }
 .fcst-details { font-size:12px; color:#555; line-height:1.8; }
 .fcst-details .detail-label { color:#999; }
 .fcst-no-data { color:#bbb; font-size:13px; }
@@ -1673,6 +1676,7 @@ def _member_detail_js(member_rows: list) -> str:
             "variable": row["variable"],
             "lead_hours": row["lead_hours"],
             "avg_mae": mae,
+            "avg_confidence": row["avg_confidence"],
             "n": row["n"],
         })
 
@@ -1692,10 +1696,16 @@ function buildMemberTable(rows) {{
     rows.forEach(function(r) {{
         const key = r.member_id + ':' + (r.member_name || r.member_id);
         if (!members[key]) members[key] = {{}};
-        if (!members[key][r.variable]) members[key][r.variable] = {{sum: 0, n: 0}};
+        if (!members[key][r.variable]) {{
+            members[key][r.variable] = {{sum: 0, n: 0, confSum: 0, confN: 0}};
+        }}
         if (r.avg_mae !== null) {{
             members[key][r.variable].sum += r.avg_mae * r.n;
             members[key][r.variable].n += r.n;
+        }}
+        if (r.avg_confidence !== null && r.avg_confidence !== undefined) {{
+            members[key][r.variable].confSum += r.avg_confidence * r.n;
+            members[key][r.variable].confN += r.n;
         }}
     }});
     const varCols = memberVariables.filter(function(v) {{
@@ -1703,14 +1713,15 @@ function buildMemberTable(rows) {{
     }});
     const headerCells = varCols.map(function(v) {{
         const unit = memberUnits[v] ? ' (' + memberUnits[v] + ')' : '';
-        return '<th>Avg MAE' + unit + '</th>';
+        return '<th>Avg MAE' + unit + '</th><th>Avg Confidence</th>';
     }}).join('');
     const bodyRows = Object.entries(members).map(function([key, varData]) {{
         const label = key.split(':')[1];
         const cells = varCols.map(function(v) {{
             const d = varData[v];
-            if (!d || d.n === 0) return '<td>\u2014</td>';
-            return '<td>' + (d.sum / d.n).toFixed(2) + '</td>';
+            const maeCell = (!d || d.n === 0) ? '<td>\u2014</td>' : '<td>' + (d.sum / d.n).toFixed(2) + '</td>';
+            const confCell = (!d || d.confN === 0) ? '<td>\u2014</td>' : '<td>' + Math.round((d.confSum / d.confN) * 100) + '%</td>';
+            return maeCell + confCell;
         }}).join('');
         return '<tr><th>' + label + '</th>' + cells + '</tr>';
     }}).join('');
@@ -2044,7 +2055,7 @@ def _ensemble_forecast_section(
         "Generated at %H:%M on %B %-d, %Y"
     )
 
-    # {variable: {lead_hours: (value, spread)}} for barogram ensemble
+    # {variable: {lead_hours: (value, spread, confidence)}} for barogram ensemble
     # pressure excluded: the ensemble no longer combines or outputs it
     ens_table: dict[str, dict[int, tuple]] = {
         v: {} for v in VARIABLES if v != "pressure"
@@ -2052,7 +2063,7 @@ def _ensemble_forecast_section(
     lead_valid_at: dict[int, int] = {}
     for row in ens_rows:
         if row["variable"] in ens_table:
-            ens_table[row["variable"]][row["lead_hours"]] = (row["value"], row["spread"])
+            ens_table[row["variable"]][row["lead_hours"]] = (row["value"], row["spread"], row["confidence"])
         lead_valid_at.setdefault(row["lead_hours"], row["valid_at"])
 
     # {lead_hours: {variable: value}} and {lead_hours: valid_at} for reference models
@@ -2135,24 +2146,29 @@ def _ensemble_forecast_section(
 
     def _card(label: str, is_now: bool,
               temp_val, dew_val, wind_val,
-              temp_spread=None,
+              temp_confidence=None,
               tempest_ref=None, nws_ref=None, corrected_ref=None,
               tempest_time_str: str | None = None,
               nws_time_str: str | None = None,
               corrected_time_str: str | None = None) -> str:
         cls = 'fcst-row now-row' if is_now else 'fcst-row'
         if temp_val is not None:
-            if temp_spread is not None and temp_spread > 0:
-                spread_disp = _diff_to_f(temp_spread)
-                spread_html = f'<div class="fcst-temp-spread">&pm;{spread_disp:.1f}\u00b0</div>'
+            if temp_confidence is not None:
+                conf_html = (
+                    f'<div class="fcst-confidence" title="Ensemble confidence">'
+                    f'{round(temp_confidence * 100)}%</div>'
+                )
             else:
-                spread_html = '<div class="fcst-temp-spread"></div>'
+                conf_html = '<div class="fcst-confidence"></div>'
             temp_html = (
                 f'<div class="fcst-temp">{_to_f(temp_val):.0f}\u00b0F</div>'
-                f'{spread_html}'
+                f'{conf_html}'
             )
         else:
-            temp_html = '<div class="fcst-no-data">&mdash;</div><div class="fcst-temp-spread"></div>'
+            temp_html = (
+                '<div class="fcst-no-data">&mdash;</div>'
+                '<div class="fcst-confidence"></div>'
+            )
         details = []
         if dew_val is not None:
             details.append(f'<span class="detail-label">Dew</span> {_to_f(dew_val):.0f}\u00b0F')
@@ -2209,7 +2225,7 @@ def _ensemble_forecast_section(
             t_cell[0] if t_cell else None,
             d_cell[0] if d_cell else None,
             None,
-            t_cell[1] if t_cell else None,
+            t_cell[2] if t_cell else None,
             tempest_by_lead.get(lead) or None,
             nws_entry,
             corrected_by_lead.get(lead) or None,
@@ -3948,10 +3964,15 @@ def _run_browser_data(forecast_rows: list, obs_rows: list) -> dict:
         if not 1 <= lead <= 24:
             continue
         by_model = run["forecasts"].setdefault(
-            str(r["model_id"]), {"temperature": [None] * 24, "dewpoint": [None] * 24}
+            str(r["model_id"]), {
+                "temperature": [None] * 24, "dewpoint": [None] * 24,
+                "temperature_conf": [None] * 24, "dewpoint_conf": [None] * 24,
+            }
         )
         val = _to_f(r["value"])
         by_model[r["variable"]][lead - 1] = round(val, 1) if val is not None else None
+        conf = r["confidence"]
+        by_model[r["variable"] + "_conf"][lead - 1] = round(conf, 3) if conf is not None else None
 
     run_list = sorted(runs.values(), key=lambda x: x["issued_at"])
     for run in run_list:
@@ -4006,6 +4027,10 @@ def _run_browser_html(models: list) -> str:
     {checkboxes_html}
   </div>
   <div class="chart-container"><div id="run-browser-chart"></div></div>
+  <h3 class="obs-subhead">Confidence by Lead Time</h3>
+  <p class="chart-legend-note">Same run and model selection as above: how much each
+  model's own scored history says to trust its forecast at each lead hour.</p>
+  <div class="chart-container"><div id="run-browser-confidence-chart"></div></div>
 </div>
 """
 
@@ -4088,9 +4113,18 @@ function renderRunBrowser() {{
     // already have the continuous obs series, so pull the same anchor back out and
     // prepend it to each model's series. Gives every forecast line a shared starting
     // point that connects straight back to the observed line instead of floating loose.
+    // station outages (Tempest offline for hours) leave "latest obs" far older than
+    // issued_at — anchoring to it would stretch every forecast line (and the plot's
+    // autoranged x-axis) back across the whole outage. Drop the anchor once it's
+    // stale beyond one obs cadence's worth of slack (5 min cadence, so 30 min is
+    // already several missed reports, not just normal lag).
+    const ANCHOR_STALENESS_LIMIT_SEC = 30 * 60;
     let anchorIdx = -1;
     for (let i = 0; i < obs.times.length; i++) {{
         if (obs.times[i] <= run.issued_at) anchorIdx = i; else break;
+    }}
+    if (anchorIdx >= 0 && run.issued_at - obs.times[anchorIdx] > ANCHOR_STALENESS_LIMIT_SEC) {{
+        anchorIdx = -1;
     }}
     const anchorTime = anchorIdx >= 0 ? obs.times[anchorIdx] * 1000 : null;
     const anchorTemp = anchorIdx >= 0 ? obs.temp[anchorIdx] : null;
@@ -4147,23 +4181,82 @@ function renderRunBrowser() {{
     }}, {{responsive: true}});
 }}
 
+function renderRunBrowserConfidence() {{
+    const run = _runBrowserData.runs[runBrowserIndex];
+    if (!run) return;
+
+    const showTemp = document.getElementById('run-browser-temp-cb').checked;
+    const showDew = document.getElementById('run-browser-dew-cb').checked;
+    const leadTimes = [];
+    for (let lead = 1; lead <= 24; lead++) leadTimes.push((run.issued_at + lead * 3600) * 1000);
+
+    function compactConf(values) {{
+        const xs = [], ys = [];
+        for (let i = 0; i < values.length; i++) {{
+            if (values[i] !== null) {{ xs.push(leadTimes[i]); ys.push(values[i] * 100); }}
+        }}
+        return {{x: xs, y: ys}};
+    }}
+
+    const traces = [];
+    document.querySelectorAll('.run-browser-model-cb:checked').forEach(function(cb) {{
+        const mid = cb.dataset.model;
+        const fc = run.forecasts[mid];
+        if (!fc) return;
+        const color = runBrowserModelColor(mid);
+        if (showTemp) {{
+            const s = compactConf(fc.temperature_conf);
+            traces.push({{
+                x: s.x, y: s.y, name: mid + ' (temp)', type: 'scatter',
+                mode: 'lines+markers', line: {{color: color, shape: 'spline', smoothing: 0.3}},
+                marker: {{size: 5, color: color}},
+            }});
+        }}
+        if (showDew) {{
+            const s = compactConf(fc.dewpoint_conf);
+            traces.push({{
+                x: s.x, y: s.y, name: mid + ' (dew)', type: 'scatter',
+                mode: 'lines+markers', line: {{color: color, shape: 'spline', smoothing: 0.3}},
+                marker: {{size: 5, color: color, symbol: 'diamond'}},
+            }});
+        }}
+    }});
+
+    Plotly.react('run-browser-confidence-chart', traces, {{
+        height: 300, margin: {{t: 20, b: 40, l: 50, r: 16}},
+        font: {{color: plotBg().font}}, paper_bgcolor: plotBg().paper, plot_bgcolor: plotBg().plot,
+        yaxis: {{title: 'confidence %', range: [0, 100]}},
+        xaxis: {{
+            type: 'date', showspikes: true, spikemode: 'across', spikesnap: 'cursor',
+            spikethickness: 1, spikedash: 'solid', spikecolor: '#888',
+        }},
+        hovermode: 'x',
+        showlegend: false,
+    }}, {{responsive: true}});
+}}
+
+function renderRunBrowserAll() {{
+    renderRunBrowser();
+    renderRunBrowserConfidence();
+}}
+
 populateRunBrowserSelect();
-renderRunBrowser();
+renderRunBrowserAll();
 
 document.getElementById('run-browser-select').addEventListener('change', function() {{
     runBrowserIndex = parseInt(this.value, 10);
-    renderRunBrowser();
+    renderRunBrowserAll();
 }});
 document.getElementById('run-browser-prev').addEventListener('click', function() {{
-    if (runBrowserIndex > 0) {{ runBrowserIndex--; renderRunBrowser(); }}
+    if (runBrowserIndex > 0) {{ runBrowserIndex--; renderRunBrowserAll(); }}
 }});
 document.getElementById('run-browser-next').addEventListener('click', function() {{
-    if (runBrowserIndex < _runBrowserData.runs.length - 1) {{ runBrowserIndex++; renderRunBrowser(); }}
+    if (runBrowserIndex < _runBrowserData.runs.length - 1) {{ runBrowserIndex++; renderRunBrowserAll(); }}
 }});
 document.querySelectorAll(
     '#run-browser-obs-cb, #run-browser-temp-cb, #run-browser-dew-cb, .run-browser-model-cb'
 ).forEach(function(cb) {{
-    cb.addEventListener('change', renderRunBrowser);
+    cb.addEventListener('change', renderRunBrowserAll);
 }});
 """
 

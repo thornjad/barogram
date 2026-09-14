@@ -102,7 +102,7 @@ The foreign key from `forecasts.member_id` to `members` is not enforced at the D
 is responsible for ensuring `(model_id, member_id)` pairs written to `forecasts` exist
 in `members`.
 
-## `forecasts` columns: `member_id` and `spread`
+## `forecasts` columns: `member_id`, `spread`, and `confidence`
 
 `member_id INTEGER NOT NULL DEFAULT 0` — identifies which member produced the row.
 Existing single-member models always write member_id=0.
@@ -110,6 +110,26 @@ Existing single-member models always write member_id=0.
 `spread REAL` — ensemble spread (standard deviation across members) for the given
 (model_id, issued_at, valid_at, variable). Non-NULL only on member_id=0 rows for
 multi-member models. NULL for all other rows.
+
+`confidence REAL` — see [confidence.md](confidence.md) for the full design. Written
+on every row by every model (member rows and the member_id=0 aggregate row alike),
+`None` when a cell doesn't yet have enough scored history to compute one. Nulled out
+by `prune_old_forecast_details` alongside `value`/`spread`/`observed` once a row is
+past its debugging window; `error`/`mae`/`scored_at` are unaffected.
+
+`huber_delta_per_variable` (used by `tune`) filters to `m.type = 'base' and
+f.member_id > 0`, excluding every model's own aggregate row and `barogram_ensemble`
+entirely, since both would otherwise pool rows whose value already reflects
+confidence's own effect back into the pool that measures it. This shifted the
+computed delta by +1.04% (temperature), +1.28% (dewpoint), +1.85% (pressure) measured
+against the database as of 2026-09-14; the actual invariant to check after a `tune`
+run is that this shift doesn't grow across two consecutive runs, not a match against
+these specific historical figures, since the underlying scoring pool grows every day.
+A smaller, ongoing residual (0.37% of the pool) flows through
+`pressure_consensus_transfer`/`inverse_pressure_transfer`, which build their own
+member rows from other models' confidence-adjusted outputs; this is accepted and
+documented in [confidence.md](confidence.md), not filtered, since those rows are
+those two models' own genuine predictions.
 
 ## Fresh install
 

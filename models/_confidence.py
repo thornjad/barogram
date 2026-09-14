@@ -1,0 +1,191 @@
+# models/_confidence.py
+
+import db
+import models._similarity as _similarity
+
+_CONFIDENCE_WINDOW_DAYS = 400    # independent of tune's own lookback window
+_MIN_MATCHES_CAP = 20            # matched-error sample count at which the blend-to-
+                                 # full-trust ramp reaches 1.0; below this, confidence
+                                 # blends toward the overall-average-error baseline in
+                                 # proportion to how much matched evidence exists
+_MIN_HISTORY_DAYS = 5            # a cell's history must span MORE than this many distinct days
+_MATCH_K = 20                    # analog days searched
+_LOOKBACK_DAYS = 365             # how far back full_analog_candidates searches
+_CONFIDENCE_FLOOR = 0.1          # no member's influence is ever driven to exactly zero
+
+_DEFAULT_FEATURES = ["air_temp", "dew_point", "station_pressure", "wind_avg"]
+
+
+def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
+                         matched_ts: list[int]) -> float | None:
+    """
+    history is every scored row for one (model_id, member_id) pair (dicts
+    with variable/lead_hours/issued_at/mae; see db.model_error_history).
+
+    Filters history to this (variable, lead_hours) cell. Returns None if
+    the cell has no scored history, or if its history spans
+    _MIN_HISTORY_DAYS distinct calendar days OR FEWER.
+
+    Otherwise, the plain average of every row's mae in that cell is the
+    overall baseline. Every row is bucketed once by its own calendar day
+    (issued_at // 86400). For each timestamp in matched_ts, its calendar
+    day's ENTIRE bucket is added to the matched-error pool, not just the
+    single nearest run -- a matched day this model ran 6 times that day
+    contributes 6 error samples, not 1. Each matched calendar day is
+    counted at most once even if matched_ts repeats a day.
+
+    IMPORTANT for every caller: this function's result is specific to one
+    (variable, lead_hours) cell. Any caller storing results across
+    multiple cells must key that storage by (variable, lead_hours)
+    together, never by variable alone.
+    """
+    cell_rows = [r for r in history if r["variable"] == variable and r["lead_hours"] == lead_hours]
+    if not cell_rows:
+        return None
+    distinct_days = len({r["issued_at"] // 86400 for r in cell_rows})
+    if distinct_days <= _MIN_HISTORY_DAYS:
+        return None
+    overall_avg_error = sum(r["mae"] for r in cell_rows) / len(cell_rows)
+    by_day: dict[int, list[float]] = {}
+    for r in cell_rows:
+        by_day.setdefault(r["issued_at"] // 86400, []).append(r["mae"])
+    seen_days: set[int] = set()
+    matched_errors: list[float] = []
+    for ts in matched_ts:
+        day = ts // 86400
+        if day in seen_days:
+            continue
+        seen_days.add(day)
+        matched_errors.extend(by_day.get(day, []))
+    return blended_confidence(matched_errors, overall_avg_error, _MIN_MATCHES_CAP)
+
+
+def blended_confidence(matched_errors: list[float], overall_avg_error: float | None,
+                        min_matches: int) -> float | None:
+    """
+    Returns None when overall_avg_error is None or <= 0. Returns exactly
+    0.5 when matched_errors is empty. Otherwise:
+
+        matched_avg = sum(matched_errors) / len(matched_errors)
+        blend_frac = min(1.0, len(matched_errors) / min_matches)
+        r = (1 - blend_frac) * 1.0 + blend_frac * (matched_avg / overall_avg_error)
+        return 1.0 / (1.0 + r)
+
+    min_matches is a fixed constant (_MIN_MATCHES_CAP), not derived from
+    len(matched_errors) -- blend_frac only reaches 1.0 once matched_errors
+    actually has that many samples; a cell with fewer samples blends
+    partway toward the neutral overall-average baseline in proportion to
+    how much evidence it has. r is always > 0, so the result is always in
+    (0, 1]. A GROUP where every member reports the same confidence value
+    reproduces today's exact combination regardless of what that value is.
+    """
+    if overall_avg_error is None or overall_avg_error <= 0:
+        return None
+    if not matched_errors:
+        return 0.5
+    matched_avg = sum(matched_errors) / len(matched_errors)
+    blend_frac = min(1.0, len(matched_errors) / min_matches)
+    r = (1 - blend_frac) * 1.0 + blend_frac * (matched_avg / overall_avg_error)
+    return 1.0 / (1.0 + r)
+
+
+def find_default_matches(conn_in, current_ts: int) -> list[int]:
+    """The shared fingerprint search used by every model. Computed once
+    per forecast run by cmd_forecast. Returns [] on a fresh database."""
+    current = db.nearest_tempest_obs(conn_in, current_ts, window_sec=1800)
+    candidates = db.full_analog_candidates(conn_in, current_ts, lookback_sec=_LOOKBACK_DAYS * 86400)
+    if current is None or not candidates:
+        return []
+    current = {**dict(current), "timestamp": current_ts}
+    candidates = [dict(c) for c in candidates]
+    sigmas = _similarity.norm_sigmas(candidates, _DEFAULT_FEATURES)
+    cands_with_dist = [(_similarity.distance(current, c, _DEFAULT_FEATURES, sigmas), c)
+                        for c in candidates]
+    nearest = _similarity.select_k_nearest(cands_with_dist, _MATCH_K)
+    return [c["timestamp"] for _, c in nearest]
+
+
+def member_confidences(member_history: dict[int, list[dict]] | None,
+                        default_matches: list[int] | None,
+                        member_ids: list[int], variable: str, lead_hours: int,
+                        matched_ts_by_mid: dict[int, list[int]] | None = None) -> dict[int, float | None]:
+    """
+    Shared per-member confidence computation, called once per (variable,
+    lead_hours) cell. member_history/default_matches being None degrades
+    every member to None, which every combine_pattern function already
+    treats as "not enough data yet, behave as before this plan."
+
+    matched_ts_by_mid, when given, overrides default_matches for specific
+    member_ids -- only analog.py and full_state_analog.py use this, since
+    every other model's members all search the identical shared default
+    fingerprint and would otherwise repeat the same override entry for
+    every one of their members.
+    """
+    result = {}
+    for mid in member_ids:
+        history = (member_history or {}).get(mid, [])
+        matched_ts = (matched_ts_by_mid or {}).get(mid, default_matches or [])
+        result[mid] = confidence_for_cell(history, variable, lead_hours, matched_ts)
+    return result
+
+
+def _equal_mean_fallback(pairs: list[tuple[int, float]],
+                          confidences: dict[int, float | None]) -> tuple[float | None, float | None]:
+    """Today's plain equal-average behavior, paired with a plain average
+    confidence for reporting. Shared by combine_pattern's own missing-weight
+    fallback and by _inject's own zero-influence fallback, so this logic
+    can't drift apart across its call sites under later edits."""
+    vals = [v for _, v in pairs]
+    confs = [c for mid, _ in pairs if (c := confidences.get(mid)) is not None]
+    return (sum(vals) / len(vals) if vals else None, average_confidence(confs))
+
+
+def _inject(pairs: list[tuple[int, float]], member_weights: dict[int, float],
+            confidences: dict[int, float | None]) -> tuple[float | None, float | None]:
+    """
+    Shared core for combine_pattern, given the members that already have a
+    real weight. pairs: [(member_id, value), ...]. Not called directly by
+    models.
+    """
+    if not pairs:
+        return None, None
+    known = [c for mid, _ in pairs if (c := confidences.get(mid)) is not None]
+    group_avg = sum(known) / len(known) if known else 0.5
+    infl = []
+    for mid, v in pairs:
+        w = member_weights[mid]
+        c = confidences.get(mid)
+        eff = max(c if c is not None else group_avg, _CONFIDENCE_FLOOR)
+        infl.append((w * eff, v, c))
+    total_infl = sum(i for i, _, _ in infl)
+    if total_infl <= 0:
+        return _equal_mean_fallback(pairs, confidences)
+    mean = sum(i * v for i, v, _ in infl) / total_infl
+    raw_confs = [(i, c) for i, _, c in infl if c is not None]
+    conf_den = sum(i for i, _ in raw_confs)
+    group_confidence = (sum(i * c for i, c in raw_confs) / conf_den if conf_den > 0
+                         else average_confidence([c for _, c in raw_confs])) if raw_confs else None
+    return mean, group_confidence
+
+
+def combine_pattern(valid_pairs: list[tuple[int, float]], member_weights: dict[int, float | None],
+                     confidences: dict[int, float | None]) -> tuple[float | None, float | None]:
+    """
+    The one combination shape every weighted model in this plan uses:
+    drop only the members missing a weight, keep a weighted (and now
+    confidence-adjusted) mean of the rest. member_weights: {member_id:
+    weight or None}, built by the caller against its own weights dict and
+    key shape. If every member in valid_pairs lacks a weight, falls back
+    to a plain equal average (paired with a plain average confidence).
+    """
+    weighted_pairs = [(mid, v) for mid, v in valid_pairs if member_weights.get(mid) is not None]
+    if not weighted_pairs:
+        return _equal_mean_fallback(valid_pairs, confidences)
+    return _inject(weighted_pairs, member_weights, confidences)
+
+
+def average_confidence(confidences: list[float | None]) -> float | None:
+    """Plain, unweighted average of the non-None values, or None if every
+    value is None."""
+    vals = [c for c in confidences if c is not None]
+    return sum(vals) / len(vals) if vals else None

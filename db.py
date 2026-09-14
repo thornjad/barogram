@@ -308,13 +308,18 @@ def huber_delta_per_variable(conn: sqlite3.Connection, percentile: float = 80.0,
     since: if given, a unix epoch cutoff — only forecasts with valid_at >= since
     are considered. None means no cutoff (all-time).
     """
+    # member_id > 0 excludes every model's own aggregate row; type = 'base' additionally
+    # excludes barogram_ensemble, whose member_id > 0 rows mirror base models' own
+    # already confidence-adjusted member_id=0 values onto its own rows. Without both,
+    # this pool would partly reflect confidence's own effect back onto itself.
     since_clause = "and f.valid_at >= ?" if since is not None else ""
     rows = conn.execute(
         f"""
         select f.variable, abs(f.error) as abs_error
         from forecasts f
         join models m on m.id = f.model_id
-        where m.type != 'external'
+        where m.type = 'base'
+          and f.member_id > 0
           and f.scored_at is not null
           and f.error is not null
           {since_clause}
@@ -364,6 +369,34 @@ def raw_errors_by_sector(conn: sqlite3.Connection, since: int | None = None) -> 
         """,
         (since,) if since is not None else (),
     ).fetchall()
+
+
+def model_error_history(conn: sqlite3.Connection, model_id: int, member_id: int,
+                         since: int) -> list:
+    """Every scored row for one (model_id, member_id) pair, since a cutoff.
+
+    Feeds models/_confidence.py's confidence_for_cell: variable/lead_hours to
+    filter to one cell, issued_at to bucket by calendar day, mae as the error.
+    """
+    return conn.execute(
+        """
+        select variable, lead_hours, issued_at, mae
+        from forecasts
+        where model_id = ? and member_id = ? and issued_at >= ?
+          and mae is not null and scored_at is not null
+        """,
+        (model_id, member_id, since),
+    ).fetchall()
+
+
+def member_ids_for_model(conn: sqlite3.Connection, model_id: int) -> list[int]:
+    """Every registered member_id for a model, including 0."""
+    return [
+        r["member_id"] for r in conn.execute(
+            "select member_id from members where model_id = ? order by member_id",
+            (model_id,),
+        ).fetchall()
+    ]
 
 
 def reference_errors_by_sector(conn: sqlite3.Connection, model_ids: list,
@@ -522,7 +555,8 @@ def score_summary_last_n_runs_multi(conn: sqlite3.Connection, ns: list[int]) -> 
             f"select {n} as n_runs, f.model_id as model_id, f.model as model, "
             f"m.type as type, f.member_id as member_id, mem.name as member_name, "
             f"f.variable as variable, f.lead_hours as lead_hours, "
-            f"count(*) as n, avg(f.mae) as avg_mae, avg(f.error) as avg_bias "
+            f"count(*) as n, avg(f.mae) as avg_mae, avg(f.error) as avg_bias, "
+            f"avg(f.confidence) as avg_confidence "
             f"from forecasts f "
             f"join models m on m.id = f.model_id "
             f"left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id "
@@ -807,7 +841,8 @@ def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
     return conn.execute(
         """
         select f.model_id, f.model, f.member_id, mem.name as member_name,
-               m.type, f.issued_at, f.variable, f.lead_hours, f.value, f.spread, f.valid_at
+               m.type, f.issued_at, f.variable, f.lead_hours, f.value, f.spread, f.valid_at,
+               f.confidence
         from forecasts f
         join models m on m.id = f.model_id
         left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
@@ -845,7 +880,7 @@ def ensemble_inputs(conn: sqlite3.Connection, issued_at: int) -> list:
     """
     return conn.execute(
         """
-        select f.model_id, f.variable, f.lead_hours, f.value, f.valid_at
+        select f.model_id, f.variable, f.lead_hours, f.value, f.valid_at, f.confidence
         from forecasts f
         join models m on m.id = f.model_id
         where f.issued_at = ? and f.member_id = 0 and m.type = 'base'
@@ -1061,21 +1096,23 @@ def open_output_db(path: str) -> sqlite3.Connection:
 
 
 def prune_old_forecast_details(conn: sqlite3.Connection, cutoff_ts: int) -> int:
-    """Null out value/spread/observed on scored rows older than cutoff_ts.
+    """Null out value/spread/observed/confidence on scored rows older than cutoff_ts.
 
     Keeps error/mae/scored_at forever for long-run accuracy trends; drops the
-    raw forecast/observed pair once it's past its debugging usefulness (the
-    longest actual consumer, recent_misses, only looks back 14 days).
-    Never touches an unscored row — the scorer still needs value to compute
-    error, and an unscored row this old is presumed still pending, not dead.
+    raw forecast/observed pair, and the raw confidence value alongside them,
+    once it's past its debugging usefulness (the longest actual consumer,
+    recent_misses, only looks back 14 days). Never touches an unscored row —
+    the scorer still needs value to compute error, and an unscored row this
+    old is presumed still pending, not dead.
     """
     cur = conn.execute(
         """
         update forecasts
-        set value = null, spread = null, observed = null
+        set value = null, spread = null, observed = null, confidence = null
         where valid_at < ?
           and scored_at is not null
-          and (value is not null or spread is not null or observed is not null)
+          and (value is not null or spread is not null or observed is not null
+               or confidence is not null)
         """,
         (cutoff_ts,),
     )
@@ -1104,7 +1141,10 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
     ).fetchone()
     current = int(row[0]) if row else 0
 
-    migration_files = sorted(migrations_dir.glob("[0-9][0-9][0-9]_*.sql"))
+    migration_files = sorted(
+        f for f in migrations_dir.glob("[0-9][0-9][0-9]_*.sql")
+        if "sync-conflict" not in f.name
+    )
     if not migration_files:
         return
     if current >= int(migration_files[-1].name[:3]):
@@ -1363,7 +1403,7 @@ def run_browser_forecasts(conn: sqlite3.Connection, since_ts: int) -> list[dict]
     return [dict(r) for r in conn.execute(
         """
         select f.issued_at, f.model_id, m.name as model, f.variable, f.lead_hours,
-               f.value, f.scored_at
+               f.value, f.confidence, f.scored_at
         from forecasts f
         join models m on m.id = f.model_id
         where f.member_id = 0
@@ -1415,7 +1455,12 @@ def _clamp_dewpoint(rows: list[dict]) -> None:
 
 def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
     normalized = [
-        {**row, "member_id": row.get("member_id", 0), "spread": row.get("spread")}
+        {
+            **row,
+            "member_id": row.get("member_id", 0),
+            "spread": row.get("spread"),
+            "confidence": row.get("confidence"),
+        }
         for row in rows
     ]
     _clamp_dewpoint(normalized)
@@ -1424,9 +1469,9 @@ def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
         conn.executemany(
             """
             insert or ignore into forecasts
-                (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, spread)
+                (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, spread, confidence)
             values
-                (:model_id, :model, :member_id, :issued_at, :valid_at, :lead_hours, :variable, :value, :spread)
+                (:model_id, :model, :member_id, :issued_at, :valid_at, :lead_hours, :variable, :value, :spread, :confidence)
             """,
             normalized,
         )

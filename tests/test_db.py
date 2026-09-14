@@ -185,6 +185,32 @@ def test_insert_forecasts_default_spread_is_null():
     assert stored["spread"] is None
 
 
+def test_insert_forecasts_default_confidence_is_null():
+    conn = make_output_db()
+    row = {
+        "model_id": 1, "model": "persistence",
+        "issued_at": 1700000000, "valid_at": 1700021600,
+        "lead_hours": 6, "variable": "temperature", "value": 20.0,
+        # confidence intentionally omitted
+    }
+    db.insert_forecasts(conn, [row])
+    stored = conn.execute("select confidence from forecasts").fetchone()
+    assert stored["confidence"] is None
+
+
+def test_insert_forecasts_stores_confidence():
+    conn = make_output_db()
+    row = {
+        "model_id": 1, "model": "persistence",
+        "issued_at": 1700000000, "valid_at": 1700021600,
+        "lead_hours": 6, "variable": "temperature", "value": 20.0,
+        "confidence": 0.73,
+    }
+    db.insert_forecasts(conn, [row])
+    stored = conn.execute("select confidence from forecasts").fetchone()
+    assert abs(stored["confidence"] - 0.73) < 1e-9
+
+
 # --- ensemble_inputs ---
 
 def test_ensemble_inputs_empty_when_no_base_rows():
@@ -247,6 +273,120 @@ def test_ensemble_inputs_excludes_pressure():
     assert rows == []
 
 
+def test_ensemble_inputs_includes_confidence():
+    conn = make_output_db()
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, confidence)
+        values (1, 'persistence', 0, 1700000000, 1700021600, 6, 'temperature', 20.0, 0.62)
+        """
+    )
+    rows = db.ensemble_inputs(conn, 1700000000)
+    assert abs(rows[0]["confidence"] - 0.62) < 1e-9
+
+
+# --- latest_forecast_per_model ---
+
+def test_latest_forecast_per_model_includes_confidence():
+    conn = make_output_db()
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, confidence)
+        values (1, 'persistence', 0, 1700000000, 1700021600, 6, 'temperature', 20.0, 0.81)
+        """
+    )
+    rows = db.latest_forecast_per_model(conn)
+    assert len(rows) == 1
+    assert abs(rows[0]["confidence"] - 0.81) < 1e-9
+
+
+# --- score_summary_last_n_runs_multi ---
+
+def test_score_summary_last_n_runs_multi_includes_avg_confidence():
+    conn = make_output_db()
+    for i, (mae, conf) in enumerate([(1.0, 0.4), (3.0, 0.8)]):
+        conn.execute(
+            """
+            insert into forecasts
+                (model_id, model, member_id, issued_at, valid_at, lead_hours,
+                 variable, value, observed, mae, error, confidence, scored_at)
+            values (1, 'persistence', 0, ?, ?, 24, 'temperature', 20.0, 20.0, ?, 0.0, ?, 1700021700)
+            """,
+            (_BASE_ISSUED + i * 3600, _BASE_VALID + i * 3600, mae, conf),
+        )
+    result = db.score_summary_last_n_runs_multi(conn, [2])
+    rows = result[2]
+    assert len(rows) == 1
+    assert abs(rows[0]["avg_confidence"] - 0.6) < 1e-9
+
+
+# --- model_error_history ---
+
+def test_model_error_history_filters_by_model_and_member():
+    conn = make_output_db()
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours,
+             variable, value, mae, scored_at)
+        values (8, 'analog', 1, 1700000000, 1700021600, 24, 'temperature', 20.0, 1.5, 1700021700)
+        """
+    )
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours,
+             variable, value, mae, scored_at)
+        values (8, 'analog', 2, 1700000000, 1700021600, 24, 'temperature', 20.0, 9.0, 1700021700)
+        """
+    )
+    rows = db.model_error_history(conn, 8, 1, since=0)
+    assert len(rows) == 1
+    assert abs(rows[0]["mae"] - 1.5) < 1e-9
+
+
+def test_model_error_history_excludes_unscored_and_old():
+    conn = make_output_db()
+    # unscored row (no scored_at, no mae) — excluded
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value)
+        values (8, 'analog', 1, 1700000000, 1700021600, 24, 'temperature', 20.0)
+        """
+    )
+    # scored row before the since cutoff — excluded
+    conn.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours,
+             variable, value, mae, scored_at)
+        values (8, 'analog', 1, 100, 21700, 24, 'temperature', 20.0, 1.5, 21800)
+        """
+    )
+    rows = db.model_error_history(conn, 8, 1, since=1000)
+    assert rows == []
+
+
+# --- member_ids_for_model ---
+
+def test_member_ids_for_model_includes_zero_and_sorted():
+    conn = make_output_db()
+    conn.execute("insert or ignore into models (id, name, type) values (500, 'fake_model', 'base')")
+    conn.execute("insert or ignore into members (model_id, member_id, name) values (500, 0, null)")
+    conn.execute("insert or ignore into members (model_id, member_id, name) values (500, 2, 'k5')")
+    conn.execute("insert or ignore into members (model_id, member_id, name) values (500, 1, 'k3')")
+    member_ids = db.member_ids_for_model(conn, 500)
+    assert member_ids == [0, 1, 2]
+
+
+def test_member_ids_for_model_unknown_model_returns_empty():
+    conn = make_output_db()
+    assert db.member_ids_for_model(conn, 99999) == []
+
+
 # --- huber_delta_per_variable ---
 
 _BASE_ISSUED = 1_700_000_000
@@ -254,8 +394,12 @@ _BASE_VALID  = 1_700_021_600
 
 
 def _insert_scored_forecast_with_error(conn, model_id, model_type, variable, error,
-                                       seq: int = 0):
-    """seq offsets issued_at so multiple calls with the same key don't collide."""
+                                       seq: int = 0, member_id: int = 1):
+    """seq offsets issued_at so multiple calls with the same key don't collide.
+
+    member_id defaults to 1 (a real member row), not 0 (each model's own
+    aggregate row), since huber_delta_per_variable excludes member_id=0.
+    """
     conn.execute(
         "insert or ignore into models (id, name, type) values (?, ?, ?)",
         (model_id, f"model_{model_id}", model_type),
@@ -265,9 +409,9 @@ def _insert_scored_forecast_with_error(conn, model_id, model_type, variable, err
         insert into forecasts
             (model_id, model, member_id, issued_at, valid_at, lead_hours,
              variable, value, observed, error, mae, scored_at)
-        values (?, ?, 0, ?, ?, 6, ?, 0.0, 0.0, ?, abs(?), 1700021700)
+        values (?, ?, ?, ?, ?, 6, ?, 0.0, 0.0, ?, abs(?), 1700021700)
         """,
-        (model_id, f"model_{model_id}",
+        (model_id, f"model_{model_id}", member_id,
          _BASE_ISSUED + seq * 3600, _BASE_VALID + seq * 3600,
          variable, error, error),
     )
@@ -299,6 +443,24 @@ def test_huber_delta_per_variable_no_data_returns_empty():
     conn = make_output_db()
     deltas = db.huber_delta_per_variable(conn, percentile=80.0)
     assert deltas == {}
+
+
+def test_huber_delta_per_variable_excludes_member_zero_and_ensemble():
+    """member_id=0 (each model's own aggregate row) and type='ensemble' rows
+    (barogram_ensemble's mirrored member rows) must not influence the pool,
+    now that both are confidence-adjusted rather than independent errors."""
+    conn = make_output_db()
+    # real base-model member errors: 1.0..10.0
+    for i, e in enumerate(range(1, 11)):
+        _insert_scored_forecast_with_error(conn, 1, "base", "temperature", float(e), seq=i, member_id=1)
+    # this base model's own member_id=0 aggregate row — should be excluded
+    _insert_scored_forecast_with_error(conn, 1, "base", "temperature", 1000.0, seq=10, member_id=0)
+    # ensemble model's member_id>0 mirrored row — should be excluded
+    _insert_scored_forecast_with_error(conn, 100, "ensemble", "temperature", 1000.0, seq=11, member_id=1)
+    deltas = db.huber_delta_per_variable(conn, percentile=80.0)
+    # 80th percentile of [1..10] alone = index 7 = 8.0; if either exclusion failed,
+    # the two 1000.0 rows would join the pool and shift the 80th percentile to 10.0
+    assert abs(deltas["temperature"] - 8.0) < 1e-9
 
 
 # --- save_weights / load_weights roundtrip ---
@@ -451,3 +613,19 @@ def test_run_migrations_duplicate_version_second_skipped_on_upgrade(tmp_path):
     rows = [r[0] for r in conn.execute("select x from t").fetchall()]
     assert "model_row" not in rows  # 002_a skipped because version 2 <= current 2
     assert "member_row" in rows     # 003 ran
+
+
+def test_run_migrations_ignores_sync_conflict_files(tmp_path):
+    """A Syncthing conflict copy still matches the version-prefix glob and must
+    not be picked up as a real migration."""
+    (tmp_path / "001_create.sql").write_text(
+        "create table if not exists t (x text);"
+    )
+    (tmp_path / "001_create.sync-conflict-20260910-120000-ABCDEF0.sql").write_text(
+        "insert into t (x) values ('should_not_run');"
+    )
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    db.run_migrations(conn, tmp_path)
+    rows = [r[0] for r in conn.execute("select x from t").fetchall()]
+    assert "should_not_run" not in rows
