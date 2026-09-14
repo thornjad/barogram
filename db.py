@@ -1349,6 +1349,47 @@ def full_analog_candidates(
     ).fetchall()
 
 
+def list_models(conn: sqlite3.Connection) -> list[dict]:
+    """Every registered model (id, name) — the full roster, independent of recent activity."""
+    return [dict(r) for r in conn.execute("select id, name from models order by id")]
+
+
+def run_browser_forecasts(conn: sqlite3.Connection, since_ts: int) -> list[dict]:
+    """Per-run, per-model, per-lead temperature/dewpoint forecasts for the run browser.
+
+    member_id=0 only (ensemble mean / single member) — every model is represented,
+    not every ensemble member.
+    """
+    return [dict(r) for r in conn.execute(
+        """
+        select f.issued_at, f.model_id, m.name as model, f.variable, f.lead_hours,
+               f.value, f.scored_at
+        from forecasts f
+        join models m on m.id = f.model_id
+        where f.member_id = 0
+          and f.variable in ('temperature', 'dewpoint')
+          and f.issued_at >= ?
+        order by f.issued_at, f.model_id, f.variable, f.lead_hours
+        """,
+        (since_ts,),
+    ).fetchall()]
+
+
+def run_browser_obs(conn: sqlite3.Connection, start_ts: int, end_ts: int) -> list[dict]:
+    """Continuous Tempest temperature/dewpoint observations for the run browser's solid line."""
+    return [dict(r) for r in conn.execute(
+        """
+        select t.timestamp, t.air_temp, t.dew_point
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest'
+          and t.timestamp >= ? and t.timestamp <= ?
+        order by t.timestamp asc
+        """,
+        (start_ts, end_ts),
+    ).fetchall()]
+
+
 # nws (200) and tempest_forecast (201) are pure external forecasts we pass through
 # unmodified — no correction applied, so no clamp either.
 _DEWPOINT_CLAMP_EXCLUDED_MODEL_IDS = frozenset({200, 201})

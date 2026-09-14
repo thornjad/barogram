@@ -253,6 +253,15 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .mae-raw-btn { margin-left: auto; padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #666; }
 .mae-raw-btn:hover { background: #f0f0f0; }
 .mae-raw-btn.active { background: #555; color: #fff; border-color: #555; }
+.run-browser-nav { display: flex; justify-content: center; align-items: center; gap: 4px; margin-bottom: 10px; }
+.run-browser-nav-btn { padding: 4px 10px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #666; }
+.run-browser-nav-btn:hover { background: #f0f0f0; }
+#run-browser-select { padding: 4px 8px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; color: #444; }
+.run-browser-var-toggle { display: flex; justify-content: center; gap: 18px; margin-bottom: 10px; font-size: 12px; color: #444; }
+.run-browser-checkboxes { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 4px 10px; margin-bottom: 10px; font-size: 12px; color: #444; }
+.run-browser-checkbox { display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.run-browser-mid { display: inline-block; width: 2em; text-align: right; margin-right: 4px; color: #888; font-variant-numeric: tabular-nums; }
+.run-browser-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px; flex-shrink: 0; border: 1px solid rgba(128,128,128,.4); }
 .chart-container {
     background: #fff;
     border: 1px solid #ddd;
@@ -706,6 +715,12 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     .mae-raw-btn { background: #252525; border-color: #444; color: #aaa; }
     .mae-raw-btn:hover { background: #333; }
     .mae-raw-btn.active { background: #888; color: #fff; border-color: #888; }
+    .run-browser-nav-btn { background: #252525; border-color: #444; color: #aaa; }
+    .run-browser-nav-btn:hover { background: #333; }
+    #run-browser-select { background: #252525; border-color: #444; color: #ccc; }
+    .run-browser-var-toggle { color: #ccc; }
+    .run-browser-checkboxes { color: #ccc; }
+    .run-browser-mid { color: #888; }
     .obs-history-table { background: #252525; border-color: #3a3a3a; }
     .obs-history-table th, .obs-history-table td { border-bottom-color: #333; }
     .obs-history-table thead th { background: #2d2d2d; color: #e0e0e0; }
@@ -3902,6 +3917,257 @@ if (skillSection) {{
 """
 
 
+_RUN_BROWSER_DEFAULT_MODELS = {100, 200, 201, 202}
+
+
+def _run_browser_data(forecast_rows: list, obs_rows: list) -> dict:
+    """Shape run-browser rows into one shared obs series plus a lightweight per-run manifest.
+
+    The 24h obs window is shared and sliced client-side per selected run, rather than
+    duplicated per run — adjacent runs' 24h windows overlap ~87% (3h cadence), so
+    embedding a full copy per run would bloat the page for no reason.
+    """
+    obs_times, obs_temp, obs_dew = [], [], []
+    for r in obs_rows:
+        obs_times.append(r["timestamp"])
+        t = _to_f(r["air_temp"])
+        d = _to_f(r["dew_point"])
+        obs_temp.append(round(t, 1) if t is not None else None)
+        obs_dew.append(round(d, 1) if d is not None else None)
+
+    runs: dict = {}
+    for r in forecast_rows:
+        issued = r["issued_at"]
+        run = runs.setdefault(issued, {
+            "issued_at": issued, "n_rows": 0, "n_scored": 0, "forecasts": {},
+        })
+        run["n_rows"] += 1
+        if r["scored_at"] is not None:
+            run["n_scored"] += 1
+        lead = r["lead_hours"]
+        if not 1 <= lead <= 24:
+            continue
+        by_model = run["forecasts"].setdefault(
+            str(r["model_id"]), {"temperature": [None] * 24, "dewpoint": [None] * 24}
+        )
+        val = _to_f(r["value"])
+        by_model[r["variable"]][lead - 1] = round(val, 1) if val is not None else None
+
+    run_list = sorted(runs.values(), key=lambda x: x["issued_at"])
+    for run in run_list:
+        run["fully_scored"] = run["n_rows"] > 0 and run["n_rows"] == run["n_scored"]
+        del run["n_rows"]
+        del run["n_scored"]
+
+    default_index = next(
+        (i for i in range(len(run_list) - 1, -1, -1) if run_list[i]["fully_scored"]),
+        len(run_list) - 1 if run_list else 0,
+    )
+
+    return {
+        "obs": {"times": obs_times, "temp": obs_temp, "dew": obs_dew},
+        "runs": run_list,
+        "default_index": default_index,
+    }
+
+
+def _run_browser_html(models: list) -> str:
+    """Run picker (dropdown + prev/next) and per-model checkboxes for the forecast-vs-actual browser."""
+    checkbox_items = [
+        '<label class="run-browser-checkbox">'
+        '<input type="checkbox" id="run-browser-obs-cb" checked>'
+        '<span class="run-browser-swatch" style="background:#111"></span>Observed</label>'
+    ]
+    for m in models:
+        checked = " checked" if m["id"] in _RUN_BROWSER_DEFAULT_MODELS else ""
+        checkbox_items.append(
+            f'<label class="run-browser-checkbox">'
+            f'<input type="checkbox" class="run-browser-model-cb" data-model="{m["id"]}"{checked}>'
+            f'<span class="run-browser-swatch" data-swatch-model="{m["id"]}"></span>'
+            f'<span class="run-browser-mid">{m["id"]}</span>{m["name"]}</label>'
+        )
+    checkboxes_html = "\n    ".join(checkbox_items)
+    return f"""
+<div id="run-browser">
+  <h3 class="obs-subhead">Forecast vs. Actual</h3>
+  <p class="chart-legend-note">One forecast run at a time: dashed lines are observed
+  temperature/dewpoint, solid lines are each source's forecast across that run's 24-hour
+  window. Default run is the most recent one fully scored. Last 14 days of runs browsable.</p>
+  <div class="run-browser-nav">
+    <button id="run-browser-prev" class="run-browser-nav-btn" title="previous run">&#9664;</button>
+    <select id="run-browser-select"></select>
+    <button id="run-browser-next" class="run-browser-nav-btn" title="next run">&#9654;</button>
+  </div>
+  <div class="run-browser-var-toggle">
+    <label class="run-browser-checkbox"><input type="checkbox" id="run-browser-temp-cb" checked>Temperature</label>
+    <label class="run-browser-checkbox"><input type="checkbox" id="run-browser-dew-cb" checked>Dew Point</label>
+  </div>
+  <div class="run-browser-checkboxes">
+    {checkboxes_html}
+  </div>
+  <div class="chart-container"><div id="run-browser-chart"></div></div>
+</div>
+"""
+
+
+def _run_browser_js(data: dict, model_names: dict) -> str:
+    """Plotly rendering, checkbox toggling, and run navigation for the forecast-vs-actual browser."""
+    data_j = json.dumps(data)
+    names_j = json.dumps(model_names)
+    return f"""const _runBrowserData = {data_j};
+const _runBrowserModelNames = {names_j};
+const RUN_BROWSER_KNOWN_COLORS = {{'100': '#1f77b4', '200': '#ff7f0e', '201': '#2ca02c', '202': '#9467bd'}};
+const RUN_BROWSER_EXTRA_PALETTE = ['#d62728','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf','#aec7e8','#ffbb78','#98df8a','#ff9896','#c5b0d5','#c49c94','#f7b6d2','#c7c7c7','#dbdb8d','#9edae5'];
+let runBrowserIndex = {data["default_index"]};
+
+function runBrowserModelColor(mid) {{
+    if (RUN_BROWSER_KNOWN_COLORS[mid]) return RUN_BROWSER_KNOWN_COLORS[mid];
+    const idx = Object.keys(_runBrowserModelNames).sort(function(a, b) {{ return a - b; }}).indexOf(mid);
+    return RUN_BROWSER_EXTRA_PALETTE[idx % RUN_BROWSER_EXTRA_PALETTE.length];
+}}
+
+// checkbox row doubles as the legend (color swatch matches its trace color) so the
+// in-plot Plotly legend can be dropped entirely — that legend was competing with the
+// chart for a fixed total height, shrinking the plot area every time more models (and
+// so more legend rows) got checked on.
+document.querySelectorAll('.run-browser-swatch[data-swatch-model]').forEach(function(el) {{
+    el.style.background = runBrowserModelColor(el.dataset.swatchModel);
+}});
+
+function populateRunBrowserSelect() {{
+    const sel = document.getElementById('run-browser-select');
+    sel.innerHTML = '';
+    _runBrowserData.runs.forEach(function(run, i) {{
+        const d = new Date(run.issued_at * 1000);
+        const label = d.toLocaleString('en-US', {{
+            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+        }}) + (run.fully_scored ? '' : ' (scoring)');
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = label;
+        sel.appendChild(opt);
+    }});
+    sel.value = runBrowserIndex;
+}}
+
+function renderRunBrowser() {{
+    const run = _runBrowserData.runs[runBrowserIndex];
+    if (!run) return;
+    document.getElementById('run-browser-select').value = runBrowserIndex;
+
+    const showTemp = document.getElementById('run-browser-temp-cb').checked;
+    const showDew = document.getElementById('run-browser-dew-cb').checked;
+    const traces = [];
+    const winStart = run.issued_at;
+    const winEnd = run.issued_at + 24 * 3600;
+    const obs = _runBrowserData.obs;
+    const obsIdx = [];
+    for (let i = 0; i < obs.times.length; i++) {{
+        if (obs.times[i] >= winStart && obs.times[i] <= winEnd) obsIdx.push(i);
+    }}
+    const obsTimes = obsIdx.map(function(i) {{ return obs.times[i] * 1000; }});
+
+    if (document.getElementById('run-browser-obs-cb').checked) {{
+        if (showTemp) traces.push({{
+            x: obsTimes, y: obsIdx.map(function(i) {{ return obs.temp[i]; }}),
+            name: 'observed (temp)', type: 'scatter', mode: 'lines', connectgaps: false,
+            line: {{color: '#111', width: 2, dash: 'dash', shape: 'spline', smoothing: 0.3}},
+        }});
+        if (showDew) traces.push({{
+            x: obsTimes, y: obsIdx.map(function(i) {{ return obs.dew[i]; }}),
+            name: 'observed (dew)', type: 'scatter', mode: 'lines', connectgaps: false,
+            line: {{color: '#111', width: 2, dash: 'dot', shape: 'spline', smoothing: 0.3}},
+        }});
+    }}
+
+    const leadTimes = [];
+    for (let lead = 1; lead <= 24; lead++) leadTimes.push((run.issued_at + lead * 3600) * 1000);
+
+    // every model's forecast is computed from the same latest-obs snapshot at issued_at
+    // (see cmd_forecast in barogram.py) — it's never persisted as its own row, but we
+    // already have the continuous obs series, so pull the same anchor back out and
+    // prepend it to each model's series. Gives every forecast line a shared starting
+    // point that connects straight back to the observed line instead of floating loose.
+    let anchorIdx = -1;
+    for (let i = 0; i < obs.times.length; i++) {{
+        if (obs.times[i] <= run.issued_at) anchorIdx = i; else break;
+    }}
+    const anchorTime = anchorIdx >= 0 ? obs.times[anchorIdx] * 1000 : null;
+    const anchorTemp = anchorIdx >= 0 ? obs.temp[anchorIdx] : null;
+    const anchorDew = anchorIdx >= 0 ? obs.dew[anchorIdx] : null;
+
+    // drop nulls rather than lean on connectgaps: a legacy run only ever wrote leads
+    // 6/12/18/24, so 20 of 24 slots are null and connectgaps:false leaves every real
+    // point isolated with nothing to connect to. Compacting first connects the real
+    // points directly, sparse-legacy or full-hourly alike.
+    function compact(values, anchorVal) {{
+        const xs = [], ys = [];
+        if (anchorTime !== null && anchorVal !== null && anchorVal !== undefined) {{
+            xs.push(anchorTime); ys.push(anchorVal);
+        }}
+        for (let i = 0; i < values.length; i++) {{
+            if (values[i] !== null) {{ xs.push(leadTimes[i]); ys.push(values[i]); }}
+        }}
+        return {{x: xs, y: ys}};
+    }}
+
+    document.querySelectorAll('.run-browser-model-cb:checked').forEach(function(cb) {{
+        const mid = cb.dataset.model;
+        const fc = run.forecasts[mid];
+        if (!fc) return;
+        const color = runBrowserModelColor(mid);
+        if (showTemp) {{
+            const s = compact(fc.temperature, anchorTemp);
+            traces.push({{
+                x: s.x, y: s.y, name: mid + ' (temp)', type: 'scatter',
+                mode: 'lines+markers', line: {{color: color, shape: 'spline', smoothing: 0.3}},
+                marker: {{size: 5, color: color}},
+            }});
+        }}
+        if (showDew) {{
+            const s = compact(fc.dewpoint, anchorDew);
+            traces.push({{
+                x: s.x, y: s.y, name: mid + ' (dew)', type: 'scatter',
+                mode: 'lines+markers', line: {{color: color, shape: 'spline', smoothing: 0.3}},
+                marker: {{size: 5, color: color, symbol: 'diamond'}},
+            }});
+        }}
+    }});
+
+    Plotly.react('run-browser-chart', traces, {{
+        height: 420, margin: {{t: 20, b: 40, l: 50, r: 16}},
+        font: {{color: plotBg().font}}, paper_bgcolor: plotBg().paper, plot_bgcolor: plotBg().plot,
+        yaxis: {{title: '\\u00b0F'}},
+        xaxis: {{
+            type: 'date', showspikes: true, spikemode: 'across', spikesnap: 'cursor',
+            spikethickness: 1, spikedash: 'solid', spikecolor: '#888',
+        }},
+        hovermode: 'x',
+        showlegend: false,
+    }}, {{responsive: true}});
+}}
+
+populateRunBrowserSelect();
+renderRunBrowser();
+
+document.getElementById('run-browser-select').addEventListener('change', function() {{
+    runBrowserIndex = parseInt(this.value, 10);
+    renderRunBrowser();
+}});
+document.getElementById('run-browser-prev').addEventListener('click', function() {{
+    if (runBrowserIndex > 0) {{ runBrowserIndex--; renderRunBrowser(); }}
+}});
+document.getElementById('run-browser-next').addEventListener('click', function() {{
+    if (runBrowserIndex < _runBrowserData.runs.length - 1) {{ runBrowserIndex++; renderRunBrowser(); }}
+}});
+document.querySelectorAll(
+    '#run-browser-obs-cb, #run-browser-temp-cb, #run-browser-dew-cb, .run-browser-model-cb'
+).forEach(function(cb) {{
+    cb.addEventListener('change', renderRunBrowser);
+}});
+"""
+
+
 def _accuracy_table_js() -> str:
     return """\
 function updateAccTable(varName) {
@@ -4161,6 +4427,14 @@ def generate(
         _skill_timeseries_data(_skill_ts[0]),
         _skill_timeseries_data(_skill_ts_10r),
     )
+    all_models = db.list_models(conn_out)
+    run_browser_forecast_rows = db.run_browser_forecasts(conn_out, _14d)
+    run_browser_obs_rows = db.run_browser_obs(conn_in, _14d, now)
+    run_browser_data = _run_browser_data(run_browser_forecast_rows, run_browser_obs_rows)
+    run_browser_html = _run_browser_html(all_models)
+    run_browser_js = _run_browser_js(
+        run_browser_data, {str(m["id"]): m["name"] for m in all_models}
+    )
     _counts = db.accuracy_run_count_multi(conn_out, [_14d, _120d, 0])
     acc_count_14d = _counts[_14d]
     acc_count_120d = _counts[_120d]
@@ -4369,6 +4643,7 @@ def generate(
   <p class="chart-legend-note">Skill score vs. climatological mean, averaged across temperature, dewpoint, and pressure (plus Precip Prob BSS once enough rain events have been observed). 100% = perfect · 0% = matches climatological mean · negative = worse than climatological mean.</p>
   <div class="table-scroll">{overall_accuracy_html}</div>
   {skill_ts_html}
+  {run_browser_html}
   <details class="collapsible-section">
     <summary class="obs-subhead">Recent Misses (14 days)</summary>
     <p class="chart-legend-note">Largest forecast errors per source over the last 14 days, sorted biggest miss first within each group.</p>
@@ -4452,6 +4727,7 @@ function plotBg() {{
 {_learnings_js(learnings)}
 {_accuracy_table_js()}
 {skill_ts_js}
+{run_browser_js}
 </script>
 </body>
 </html>
