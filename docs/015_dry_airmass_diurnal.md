@@ -26,6 +26,7 @@ and applies it directly to the diurnal deviation from the daily mean.
 | 4 | 24h-amp-ridge | 24h | yes |
 | 5 | 48h-amp-ridge | 48h | yes |
 | 6 | 72h-amp-ridge | 72h | yes |
+| 7 | 24h-amp-damped | 24h | no |
 
 ## Algorithm
 
@@ -62,6 +63,7 @@ forecast = climo_Td_valid + td_anom × exp(−TD_DECAY_K × lead_hours)
 | AMP_SENSITIVITY | 0.07 | diurnal-dev fraction per 1°C of DD anomaly |
 | P_SENSITIVITY | 0.015 | °C per hPa pressure departure (afternoon only) |
 | TD_DECAY_K | 0.04 | dewpoint anomaly e-folding per lead hour |
+| TEMP_DAMP_FACTOR | 0.4 | member 7: fraction of amp_adj applied to temperature |
 
 ## Behavior
 
@@ -69,3 +71,23 @@ forecast = climo_Td_valid + td_anom × exp(−TD_DECAY_K × lead_hours)
 - **Dry airmass** (dd_anom > 0): afternoon highs pushed up, overnight lows pushed down
 - **Humid anomaly** (dd_anom < 0): afternoon highs damped, overnight lows raised
 - **Pressure ridge members** add a daytime-only boost when under a surface high
+
+## member 7: 24h-amp-damped (added 2026-09-14)
+
+During the 2026-09-12 dry-airmass intrusion, this model's dewpoint side scored 3rd-best
+of all internal models, but its temperature side scored worst — it overcorrected the
+diurnal amplitude for a dry regime that didn't actually bring exceptional daytime
+heating. Member 7 keeps the full-strength dewpoint anomaly (`td_anom`, undamped) and
+applies `TEMP_DAMP_FACTOR` only to `amp_adj` on the temperature side, to test whether
+the two halves of this model should be decoupled.
+
+## Confidence
+
+Every member here gets a confidence value computed against the shared default
+fingerprint (`air_temp`, `dew_point`, `station_pressure`, `wind_avg`), matched
+against its own scored history by calendar day. member_id=0's combination now
+multiplies each member's weight by its own confidence (floored, defaulted to the
+group's own average when unknown) via `models/_confidence.py`'s `combine_pattern`,
+which also fixed a pre-existing bug: a member missing a weight used to collapse the
+whole group to a plain average, now only that member is dropped. See
+[confidence.md](confidence.md) for the full design.

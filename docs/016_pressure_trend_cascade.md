@@ -21,8 +21,13 @@ from *that* predicted total delta.
 - **damped_extrap** — 3h tendency rate decayed toward zero over the lead
   (`delta = rate0 * (1 - exp(-λ*lead)) / λ`, λ=0.15/h), rather than extrapolating the
   raw polynomial
+- **fast_damped_extrap** (added 2026-09-14) — same formula as damped_extrap, but
+  λ=0.35/h (~2h half-life vs ~4.6h). damped_extrap scored best of all internal
+  models on dewpoint during the 2026-09-12 dry-airmass intrusion but still lagged
+  the actual crash; this member tests whether decaying the rate faster tracks rapid
+  sub-6h transitions better, at the cost of overreacting to noise on slower days
 
-All three reuse pressure_tendency's polynomial-fit and mean-reversion functions directly
+All four reuse pressure_tendency's polynomial-fit and mean-reversion functions directly
 — the numerics are the same, only what feeds the transfer function differs.
 
 ## Transfer functions
@@ -35,3 +40,14 @@ pressure_tendency's fixed 3h backward rate as predictor.
 
 Weighted mean (skill-score weights when available, else equal) + spread across the three
 members, per variable and lead.
+
+## Confidence
+
+Every member here gets a confidence value computed against the shared default
+fingerprint (`air_temp`, `dew_point`, `station_pressure`, `wind_avg`), matched
+against its own scored history by calendar day. member_id=0's combination now
+multiplies each member's weight by its own confidence (floored, defaulted to the
+group's own average when unknown) via `models/_confidence.py`'s `combine_pattern`,
+which also fixed a pre-existing bug: a member missing a weight used to collapse the
+whole group to a plain average, now only that member is dropped. See
+[confidence.md](confidence.md) for the full design.

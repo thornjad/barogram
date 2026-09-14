@@ -6,10 +6,16 @@
 # predict pressure, then predict everything else off the model's own prediction.
 #
 # members:
-#   1  linear_extrap   linear (degree 1) fit over 3h window, mean-reverted extrapolation
-#   2  quad_extrap     quadratic (degree 2) fit over 6h window, mean-reverted extrapolation
-#   3  damped_extrap   3h tendency rate decayed toward zero over the lead (OU-style rate decay,
-#                      analytically integrated) rather than extrapolating the raw polynomial
+#   1  linear_extrap    linear (degree 1) fit over 3h window, mean-reverted extrapolation
+#   2  quad_extrap      quadratic (degree 2) fit over 6h window, mean-reverted extrapolation
+#   3  damped_extrap    3h tendency rate decayed toward zero over the lead (OU-style rate decay,
+#                       analytically integrated) rather than extrapolating the raw polynomial
+#   4  fast_damped_extrap  same as damped_extrap but with a much shorter decay half-life
+#                       (~2h vs ~4.6h) — member 3 was the best-scoring internal model on
+#                       dewpoint during the 2026-09-12 dry-intrusion event but still lagged
+#                       the actual crash; this member tests whether a faster-decaying rate
+#                       tracks rapid sub-6h transitions better without overreacting to noise
+#                       during slower, more typical drift
 #
 # reuses the polynomial-fit and mean-reversion machinery from pressure_tendency rather
 # than re-deriving it — these are genuinely the same numerics, just fed differently.
@@ -18,6 +24,7 @@ import math
 import statistics
 
 import db
+import models._confidence as _confidence
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 from models.pressure_tendency import (
@@ -35,15 +42,18 @@ MODEL_NAME = "pressure_trend_cascade"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
+NEEDS_MATCH_HISTORY = True
 
 _REVERSION_LAMBDA = 0.10   # per hour, matches pressure_tendency's OU e-folding
 _DAMP_LAMBDA = 0.15        # per hour; e-folding ~6.7h for the damped-rate member
+_FAST_DAMP_LAMBDA = 0.35   # per hour; e-folding ~2.9h for the fast-damped-rate member
 _FUTURE_LOOKUP_SEC = 900   # +-15 min
 
 _MEMBERS = [
     (1, "linear_extrap"),
     (2, "quad_extrap"),
     (3, "damped_extrap"),
+    (4, "fast_damped_extrap"),
 ]
 _ALL_MEMBER_IDS = [mid for mid, _ in _MEMBERS]
 
@@ -92,7 +102,8 @@ def _build_delta_transfer_fns(all_obs):
     return result
 
 
-def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
+def run(obs, issued_at, *, conn_in, weights=None, all_obs=None, member_history=None,
+        default_matches=None):
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
 
@@ -147,8 +158,18 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
             # delta = rate0 * (1 - exp(-lambda*lead)) / lambda
             delta = rate0 * (1.0 - math.exp(-_DAMP_LAMBDA * lead_f)) / _DAMP_LAMBDA
             preds[3] = p_now + delta
+            fast_delta = rate0 * (1.0 - math.exp(-_FAST_DAMP_LAMBDA * lead_f)) / _FAST_DAMP_LAMBDA
+            preds[4] = p_now + fast_delta
         else:
             preds[3] = None
+            preds[4] = None
+
+        variable_confidences = {
+            variable: _confidence.member_confidences(
+                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+            )
+            for variable in VARIABLES
+        }
 
         for mid, _name in _MEMBERS:
             pred_pressure = preds[mid]
@@ -181,27 +202,33 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                     "lead_hours": lead,
                     "variable": variable,
                     "value": member_vals[(mid, variable, lead)],
+                    "confidence": variable_confidences[variable].get(mid),
                 })
 
         # member_id=0: weighted mean + spread
         for variable in VARIABLES:
+            cell_confidences = variable_confidences[variable]
             valid_pairs = [
                 (mid, member_vals[(mid, variable, lead)])
                 for mid in _ALL_MEMBER_IDS
                 if member_vals[(mid, variable, lead)] is not None
             ]
             if not valid_pairs:
-                mean = None
+                mean, group_confidence = None, None
             elif weights:
-                w_pairs = [(weights.get((mid, variable, lead, _sector(valid_at)), None), v)
-                           for mid, v in valid_pairs]
-                if any(w is None for w, _ in w_pairs):
-                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
-                else:
-                    total_w = sum(w for w, _ in w_pairs)
-                    mean = sum(w * v for w, v in w_pairs) / total_w
+                member_weights = {
+                    mid: weights.get((mid, variable, lead, _sector(valid_at)))
+                    for mid, _ in valid_pairs
+                }
+                confidences = {mid: cell_confidences.get(mid) for mid, _ in valid_pairs}
+                mean, group_confidence = _confidence.combine_pattern(
+                    valid_pairs, member_weights, confidences
+                )
             else:
                 mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                group_confidence = _confidence.average_confidence(
+                    [cell_confidences.get(mid) for mid, _ in valid_pairs]
+                )
             spread = (
                 statistics.pstdev([v for _, v in valid_pairs])
                 if len(valid_pairs) > 1 else None
@@ -216,6 +243,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                 "variable": variable,
                 "value": mean,
                 "spread": spread,
+                "confidence": group_confidence,
             })
 
     return rows
