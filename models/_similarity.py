@@ -5,11 +5,29 @@
 import math
 import statistics
 
+_CIRCULAR = {"wind_direction"}
+
+# wind direction sigma fixed at one compass quadrant, ported from
+# full_state_analog.py's own local copy of this logic -- circular std dev
+# doesn't map cleanly onto the z-score framework used for other features
+_WIND_DIR_SIGMA = 90.0
+
+
+def _arc_delta(a: float, b: float) -> float:
+    d = abs(a - b)
+    return min(d, 360.0 - d)
+
 
 def norm_sigmas(candidates: list[dict], features: list[str]) -> dict[str, float | None]:
-    """Per-feature population std dev across candidates; None means skip the feature."""
+    """Per-feature population std dev across candidates; None means skip the
+    feature. Circular features (wind_direction) get a fixed sigma instead of
+    a computed one, since population std dev doesn't map cleanly onto a
+    0-360 wraparound quantity."""
     sigmas = {}
     for col in features:
+        if col in _CIRCULAR:
+            sigmas[col] = _WIND_DIR_SIGMA
+            continue
         vals = [r[col] for r in candidates if r[col] is not None]
         if len(vals) < 2:
             sigmas[col] = None
@@ -22,7 +40,9 @@ def norm_sigmas(candidates: list[dict], features: list[str]) -> dict[str, float 
 def distance(current: dict, candidate: dict, features: list[str],
              sigmas: dict[str, float | None], weights: list[float] | None = None) -> float | None:
     """Weighted Euclidean distance in sigma-normalized feature space.
-    weights defaults to 1.0 per feature when omitted."""
+    weights defaults to 1.0 per feature when omitted. Circular features
+    (wind_direction) use arc distance instead of a plain difference, so a
+    candidate at 359 degrees compares as close to 1 degree, not far."""
     if weights is None:
         weights = [1.0] * len(features)
     total = 0.0
@@ -35,7 +55,8 @@ def distance(current: dict, candidate: dict, features: list[str],
         c = candidate[col]
         if o is None or c is None:
             continue
-        z = (o - c) / sigma
+        delta = _arc_delta(o, c) if col in _CIRCULAR else (o - c)
+        z = delta / sigma
         total += weights[i] * z * z
         used += 1
     if used == 0:
