@@ -1349,11 +1349,35 @@ def full_analog_candidates(
     ).fetchall()
 
 
+# nws (200) and tempest_forecast (201) are pure external forecasts we pass through
+# unmodified — no correction applied, so no clamp either.
+_DEWPOINT_CLAMP_EXCLUDED_MODEL_IDS = frozenset({200, 201})
+
+
+def _clamp_dewpoint(rows: list[dict]) -> None:
+    """dew point can never exceed air temperature; clamp in place."""
+    temps = {}
+    for row in rows:
+        if row["variable"] == "temperature":
+            key = (row["model_id"], row["member_id"], row["valid_at"], row["lead_hours"])
+            temps[key] = row["value"]
+    for row in rows:
+        if row["variable"] != "dewpoint":
+            continue
+        if row["model_id"] in _DEWPOINT_CLAMP_EXCLUDED_MODEL_IDS:
+            continue
+        key = (row["model_id"], row["member_id"], row["valid_at"], row["lead_hours"])
+        temp = temps.get(key)
+        if temp is not None and row["value"] is not None and row["value"] > temp:
+            row["value"] = temp
+
+
 def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
     normalized = [
         {**row, "member_id": row.get("member_id", 0), "spread": row.get("spread")}
         for row in rows
     ]
+    _clamp_dewpoint(normalized)
     conn.execute("begin")
     try:
         conn.executemany(
