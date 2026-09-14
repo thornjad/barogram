@@ -40,3 +40,14 @@ The four constants span roughly an order of magnitude: `exp-steep` nearly ignore
 ### Model ensemble
 
 Member 0 uses skill-score weights from `tune` when available; equal weighting is the fallback before sufficient scoring history exists. The spread is the standard deviation of the member forecasts, showing how much the members disagree in a run.
+
+## Confidence
+
+Every member here gets a confidence value computed against the shared default
+fingerprint (`air_temp`, `dew_point`, `station_pressure`, `wind_avg`), matched
+against its own scored history by calendar day. member_id=0's combination now
+multiplies each member's weight by its own confidence (floored, defaulted to the
+group's own average when unknown) via `models/_confidence.py`'s `combine_pattern`,
+which also fixed a pre-existing bug: a member missing a weight used to collapse the
+whole group to a plain average, now only that member is dropped. See
+[confidence.md](confidence.md) for the full design.

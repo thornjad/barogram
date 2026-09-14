@@ -12,6 +12,7 @@ import statistics
 import time
 
 import db
+import models._confidence as _confidence
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 
@@ -20,6 +21,7 @@ MODEL_NAME = "surface_signs"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
+NEEDS_MATCH_HISTORY = True
 
 _SIGNAL_WINDOW_SEC  = 3 * 3600  # 3h lookback for all signals
 _LOOKUP_SEC         = 600       # ±10 min for historical ts matching
@@ -185,7 +187,8 @@ def _build_signal_conditionals(signal_fn, sorted_ts, by_ts):
                     accum.setdefault((cat, col, lead), []).append(v_fut - v_now)
     return {k: sum(v) / len(v) for k, v in accum.items() if len(v) >= _MIN_SAMPLES}
 
-def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
+def run(obs, issued_at, *, conn_in, weights=None, all_obs=None, member_history=None,
+        default_matches=None):
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
     by_ts = {row["timestamp"]: row for row in all_obs}
@@ -239,6 +242,14 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
     rows = []
     all_member_ids = [1, 2, 3, 4]
 
+    confidence_cache = {
+        (variable, lead): _confidence.member_confidences(
+            member_history, default_matches, all_member_ids, variable, lead
+        )
+        for variable in VARIABLES
+        for lead in LEAD_HOURS
+    }
+
     # member rows
     for mid in all_member_ids:
         cat = live[mid]
@@ -259,11 +270,13 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                     "lead_hours": lead,
                     "variable": variable,
                     "value": value,
+                    "confidence": confidence_cache[(variable, lead)].get(mid),
                 })
 
     # ensemble mean (member_id=0)
     for variable, col in VARIABLES.items():
         for lead in LEAD_HOURS:
+            cell_confidences = confidence_cache[(variable, lead)]
             valid_pairs = []
             for mid in all_member_ids:
                 cat = live[mid]
@@ -278,16 +291,21 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
 
             valid_at = obs["timestamp"] + lead * 3600
             if not valid_pairs:
-                mean = None
+                mean, group_confidence = None, None
             elif weights:
-                w_pairs = [(weights.get((mid, variable, lead, _sector(valid_at)), None), v) for mid, v in valid_pairs]
-                if any(wt is None for wt, _ in w_pairs):
-                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
-                else:
-                    total_w = sum(wt for wt, _ in w_pairs)
-                    mean = sum(wt * v for wt, v in w_pairs) / total_w
+                member_weights = {
+                    mid: weights.get((mid, variable, lead, _sector(valid_at)))
+                    for mid, _ in valid_pairs
+                }
+                confidences = {mid: cell_confidences.get(mid) for mid, _ in valid_pairs}
+                mean, group_confidence = _confidence.combine_pattern(
+                    valid_pairs, member_weights, confidences
+                )
             else:
                 mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                group_confidence = _confidence.average_confidence(
+                    [cell_confidences.get(mid) for mid, _ in valid_pairs]
+                )
             spread = (
                 statistics.pstdev([v for _, v in valid_pairs])
                 if len(valid_pairs) > 1 else None
@@ -302,6 +320,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                 "variable": variable,
                 "value": mean,
                 "spread": spread,
+                "confidence": group_confidence,
             })
 
     return rows

@@ -112,3 +112,14 @@ aggressively. It acts as a conservative anchor in the ensemble when other member
   observation history.
 - The `window_h` for each member is stored in the `members` table to support the
   hypothesis H dashboard chart.
+
+## Confidence
+
+Every member here gets a confidence value computed against the shared default
+fingerprint (`air_temp`, `dew_point`, `station_pressure`, `wind_avg`), matched
+against its own scored history by calendar day. member_id=0's combination now
+multiplies each member's weight by its own confidence (floored, defaulted to the
+group's own average when unknown) via `models/_confidence.py`'s `combine_pattern`,
+which also fixed a pre-existing bug: a member missing a weight used to collapse the
+whole group to a plain average, now only that member is dropped. See
+[confidence.md](confidence.md) for the full design.

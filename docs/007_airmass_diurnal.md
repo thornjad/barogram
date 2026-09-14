@@ -55,3 +55,14 @@ Positive `dev` (afternoon peak): clear sky boosts the forecast upward. Negative 
 - Sector offsets (members 4, 5, 8) are static empirical constants, not derived from local data. They will likely have systematic bias until enough data accumulates for tuning.
 - The veering/backing signal (member 14, 16) uses the net direction change over 3 hours. A single 180° wind shift will appear the same as a gradual 3°/hour drift; rapid synoptic changes may alias the signal.
 - Solar CV (members 15, 16) requires at least 4 daytime observations (> 10 W/m²) in the 3h window; pre-dawn or deeply overcast runs fall back to the raw clearness index.
+
+## Confidence
+
+Every member here gets a confidence value computed against the shared default
+fingerprint (`air_temp`, `dew_point`, `station_pressure`, `wind_avg`), matched
+against its own scored history by calendar day. member_id=0's combination now
+multiplies each member's weight by its own confidence (floored, defaulted to the
+group's own average when unknown) via `models/_confidence.py`'s `combine_pattern`,
+which also fixed a pre-existing bug: a member missing a weight used to collapse the
+whole group to a plain average, now only that member is dropped. See
+[confidence.md](confidence.md) for the full design.

@@ -39,10 +39,23 @@ table. Weights are set by each member's Huber loss relative to a reference model
 the reference earn proportional weight; those that don't are floored or subfloored.
 The ensemble reads these at forecast time, deriving the sector from each cell's
 valid_at hour (0=night 00-05, 1=morning 06-11, 2=afternoon 12-17, 3=evening 18-23).
-If no weight is found for a given sector, the member falls back to equal weighting.
+If no weight is found for that sector for any member, the whole group falls back to a
+plain equal average (`models/_confidence.py`'s `combine_pattern`); if only some
+members lack a weight, only those members are dropped, the rest still combine by
+weight, confidence-adjusted.
 
 The `spread` field on member_id=0 rows is the unweighted population standard deviation
 across all contributing members for that (variable, lead_hours) cell.
+
+## Confidence
+
+barogram_ensemble is treated as just another weighted model here, combining its
+members' confidence via the exact same `combine_pattern` every other multi-member
+model uses, no special case for being the meta-ensemble. Each contributing base
+model's own confidence, already computed by that model against its own scored
+history, flows straight in via `ensemble_inputs`'s `confidence` column; the ensemble
+doesn't compute confidence itself, it only combines what its members already report.
+See [confidence.md](confidence.md) for the full design.
 
 ## Missing values
 
@@ -53,5 +66,5 @@ for that cell. If no base model produces a value, the cell is omitted entirely.
 ## Dashboard
 
 The "Ensemble Forecast" section at the top of the dashboard shows the barogram_ensemble
-member_id=0 forecast as a Now / +6h / +12h / +18h / +24h table. Spread is shown in
-small text beneath each forecast value.
+member_id=0 forecast as a Now / +6h / +12h / +18h / +24h table. Spread and confidence
+(as a percentage) are both shown in small text beneath each forecast value.

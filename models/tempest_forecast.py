@@ -14,9 +14,12 @@ import math
 import sys
 import urllib.request
 
+import models._confidence as _confidence
+
 MODEL_ID = 201
 MODEL_NAME = "tempest_forecast"
 NEEDS_CONF = True
+NEEDS_MATCH_HISTORY = True
 
 from models._climo_weights import LEAD_HOURS
 # hourly data — snap to nearest within ±90 min
@@ -74,7 +77,7 @@ def _nearest(hourly: dict[int, dict], target: int) -> tuple[int, dict] | None:
     return best, hourly[best]
 
 
-def run(obs, issued_at: int, *, conf=None) -> list[dict]:
+def run(obs, issued_at: int, *, conf=None, member_history=None, default_matches=None) -> list[dict]:
     if conf is None or not conf.tempest_token or not conf.tempest_station_id:
         return []
     hourly = _fetch(conf.tempest_station_id, conf.tempest_token)
@@ -93,6 +96,9 @@ def run(obs, issued_at: int, *, conf=None) -> list[dict]:
         ]:
             if entry.get(key) is None:
                 continue
+            confidence = _confidence.confidence_for_cell(
+                (member_history or {}).get(0, []), variable, lead, default_matches or []
+            )
             rows.append({
                 "model_id": MODEL_ID,
                 "model": MODEL_NAME,
@@ -102,5 +108,6 @@ def run(obs, issued_at: int, *, conf=None) -> list[dict]:
                 "lead_hours": lead,
                 "variable": variable,
                 "value": entry[key],
+                "confidence": confidence,
             })
     return rows

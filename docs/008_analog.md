@@ -38,3 +38,11 @@ Sigma is computed from the candidate pool at each forecast issuance. When sigma 
 - **No synoptic context**: The model matches on the current point-in-time observation state. It cannot distinguish a morning reading that will evolve into severe weather from one that will remain benign, unless such evolution is well-represented in the analog pool.
 - **Time-of-day alignment**: Analogs are drawn from the same time of day, so the diurnal phase is implicitly preserved. This is appropriate but means the model has no mechanism to correct for diurnal timing errors.
 - **Seasonal penalty is weak**: The γ=0.2 per-month penalty in the seasonal member is intentionally gentle. With limited history it mostly behaves like the equal-weight members; the benefit emerges after a full annual cycle.
+
+## Confidence
+
+Each member's confidence is computed against the exact same analog days it already
+selected for its own value forecast, not the shared default fingerprint every other
+model uses. Combination is confidence-adjusted the same way as every other model,
+via `models/_confidence.py`'s `combine_pattern`. See [confidence.md](confidence.md)
+for the full design.

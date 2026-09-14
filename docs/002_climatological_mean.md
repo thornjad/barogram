@@ -30,3 +30,11 @@ This particular model does not use official NCEI normals. Instead, for fun and e
 - Currently a single-year diurnal average, not a 30-year climatological normal
 - No synoptic-scale skill, this cannot anticipate fronts, storm systems, or anomalous patterns
 - Cannot forecast variables not measured by the Tempest (sky cover, sea-level pressure)
+
+## Confidence
+
+Confidence is computed and attached to this model's own member_id=0 row against the
+shared default fingerprint, matched by calendar day against scored history. Nothing
+is combined here, so confidence has no effect on the forecast value itself, which
+also remains tune's own temperature/dewpoint skill-score reference, unchanged. See
+[confidence.md](confidence.md) for the full design.

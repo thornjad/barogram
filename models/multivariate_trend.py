@@ -2,6 +2,7 @@ import math
 import statistics
 
 import db
+import models._confidence as _confidence
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 
@@ -10,6 +11,7 @@ MODEL_NAME = "multivariate_trend"
 NEEDS_CONN_IN = True
 NEEDS_ALL_OBS = True
 NEEDS_WEIGHTS = True
+NEEDS_MATCH_HISTORY = True
 
 # (member_id, name, degree, window_h, half_life_min, ridge_alpha, max_lead_h)
 # max_lead_h: skip evaluation for leads > this value. Every member gets one — no
@@ -106,7 +108,8 @@ def _exp_weights(t_vals, half_life_h):
 
 
 
-def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
+def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
+        member_history=None, default_matches=None):
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
 
@@ -147,6 +150,15 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
     for lead in LEAD_HOURS:
         valid_at = obs["timestamp"] + lead * 3600
 
+        # confidence per (variable, lead) cell, shared default fingerprint --
+        # this model has no per-member analog selection of its own to reuse
+        cell_confidences = {
+            variable: _confidence.member_confidences(
+                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+            )
+            for variable in all_variables
+        }
+
         for mid in _ALL_MEMBER_IDS:
             for variable in all_variables:
                 rows.append({
@@ -158,6 +170,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                     "lead_hours": lead,
                     "variable": variable,
                     "value": member_vals.get((mid, variable, lead)),
+                    "confidence": cell_confidences[variable].get(mid),
                 })
 
         for variable in all_variables:
@@ -167,20 +180,19 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                 if member_vals.get((mid, variable, lead)) is not None
             ]
             if not valid_pairs:
-                mean = None
+                mean, group_confidence = None, None
             elif weights:
-                w_pairs = [
-                    (weights.get((mid, variable, lead, _sector(valid_at))), v)
-                    for mid, v in valid_pairs
-                ]
-                weighted = [(wt, v) for wt, v in w_pairs if wt is not None]
-                if weighted:
-                    total_w = sum(wt for wt, _ in weighted)
-                    mean = sum(wt * v for wt, v in weighted) / total_w
-                else:
-                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                member_weights = {
+                    mid: weights.get((mid, variable, lead, _sector(valid_at)))
+                    for mid, _ in valid_pairs
+                }
+                confidences = {mid: cell_confidences[variable].get(mid) for mid, _ in valid_pairs}
+                mean, group_confidence = _confidence.combine_pattern(valid_pairs, member_weights, confidences)
             else:
                 mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                group_confidence = _confidence.average_confidence(
+                    [cell_confidences[variable].get(mid) for mid, _ in valid_pairs]
+                )
 
             spread = (
                 statistics.pstdev([v for _, v in valid_pairs])
@@ -196,6 +208,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None):
                 "variable": variable,
                 "value": mean,
                 "spread": spread,
+                "confidence": group_confidence,
             })
 
     return rows

@@ -65,3 +65,14 @@ There is no single official digital Zambretti formula — the 1915 device was an
 ### Daily anchor time
 
 The algorithm's ~90% accuracy claim was historically measured from a single reading taken once daily around 9 AM local solar time, not from continuous recalculation. Rather than compute true solar time, `zambretti_text()` anchors to a fixed clock time approximating it: **9:12 AM CST / 10:12 AM CDT**, expressed internally as a constant 15:12 UTC (America/Chicago is always UTC-6 or UTC-5, so this lands on the right wall-clock time either way with no DST-awareness needed). It always looks back to the most recent occurrence of that anchor — so the panel shows one stable "forecast for today" no matter what time the dashboard itself regenerates, rather than recomputing off whatever the pressure happens to be doing right now.
+
+## Confidence
+
+Every member here gets a confidence value computed against the shared default
+fingerprint (`air_temp`, `dew_point`, `station_pressure`, `wind_avg`), matched
+against its own scored history by calendar day. member_id=0's combination now
+multiplies each member's weight by its own confidence (floored, defaulted to the
+group's own average when unknown) via `models/_confidence.py`'s `combine_pattern`,
+which also fixed a pre-existing bug: a member missing a weight used to collapse the
+whole group to a plain average, now only that member is dropped. See
+[confidence.md](confidence.md) for the full design.

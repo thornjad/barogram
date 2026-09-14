@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import barogram
+import db
 from tests.conftest import make_input_db, make_obs, make_output_db
 
 _VALID_VARIABLES = {"temperature", "dewpoint", "pressure"}
@@ -60,6 +61,10 @@ def test_all_models_satisfy_contract():
             kwargs["conn_out"] = seeded_conn_out
         if getattr(model, "NEEDS_WEIGHTS", False):
             kwargs["weights"] = {}
+        if getattr(model, "NEEDS_MATCH_HISTORY", False):
+            member_ids = db.member_ids_for_model(seeded_conn_out, model.MODEL_ID)
+            kwargs["member_history"] = {mid: [] for mid in member_ids}
+            kwargs["default_matches"] = []
 
         if getattr(model, "NEEDS_CONF", False):
             # models requiring external API credentials are tested with a

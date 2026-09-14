@@ -3,11 +3,13 @@ import math
 import statistics
 
 import db
+import models._confidence as _confidence
 
 MODEL_ID = 13
 MODEL_NAME = "full_state_analog"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
+NEEDS_MATCH_HISTORY = True
 
 from models._climo_weights import LEAD_HOURS
 
@@ -123,7 +125,8 @@ def _dist_weighted_forecast(dist_val_pairs: list) -> float | None:
     return sum((1.0 / d) * v for d, v in valid) / total_w
 
 
-def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
+def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
+        default_matches=None) -> list[dict]:
     candidates = db.full_analog_candidates(conn_in, obs["timestamp"])
     obs_vec = {col: obs.get(col) for col in _ALL_FEATURES}
 
@@ -143,6 +146,13 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                 for cand in candidates
             ]
         member_analogs[mid] = _select_analogs(cands_with_dist, k)
+
+    # each member's own selected analog days, reused as its confidence match
+    # set too, instead of the shared default fingerprint every other model uses
+    matched_ts_by_mid = {
+        mid: [c["timestamp"] for _, c in member_analogs[mid]]
+        for mid in _ALL_MEMBER_IDS
+    }
 
     needed_ts = {
         cand["timestamp"]
@@ -182,6 +192,13 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                     value = _mean_forecast(futures)
 
                 member_vals[mid][variable] = value
+
+        for variable in VARIABLES:
+            cell_confidences = _confidence.member_confidences(
+                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead,
+                matched_ts_by_mid,
+            )
+            for mid in _ALL_MEMBER_IDS:
                 rows.append({
                     "model_id": MODEL_ID,
                     "model": MODEL_NAME,
@@ -190,29 +207,31 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                     "valid_at": valid_at,
                     "lead_hours": lead,
                     "variable": variable,
-                    "value": value,
+                    "value": member_vals[mid][variable],
+                    "confidence": cell_confidences.get(mid),
                 })
 
-        for variable in VARIABLES:
             valid_pairs = [
                 (mid, member_vals[mid][variable])
                 for mid in _ALL_MEMBER_IDS
                 if member_vals[mid][variable] is not None
             ]
             if not valid_pairs:
-                mean = None
+                mean, group_confidence = None, None
             elif weights:
-                w_pairs = [
-                    (weights.get((mid, variable, lead), None), v)
-                    for mid, v in valid_pairs
-                ]
-                if any(w is None for w, _ in w_pairs):
-                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
-                else:
-                    total_w = sum(w for w, _ in w_pairs)
-                    mean = sum(w * v for w, v in w_pairs) / total_w
+                member_weights = {
+                    mid: weights.get((mid, variable, lead))
+                    for mid, _ in valid_pairs
+                }
+                confidences = {mid: cell_confidences.get(mid) for mid, _ in valid_pairs}
+                mean, group_confidence = _confidence.combine_pattern(
+                    valid_pairs, member_weights, confidences
+                )
             else:
                 mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                group_confidence = _confidence.average_confidence(
+                    [cell_confidences.get(mid) for mid, _ in valid_pairs]
+                )
 
             spread = (
                 statistics.pstdev([v for _, v in valid_pairs])
@@ -228,6 +247,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None) -> list[dict]:
                 "variable": variable,
                 "value": mean,
                 "spread": spread,
+                "confidence": group_confidence,
             })
 
     return rows

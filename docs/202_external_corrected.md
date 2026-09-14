@@ -93,3 +93,12 @@ slowest to accumulate reliable statistics. Falls back through diurnal → flat.
   each historical `issued_at`)
 - Active NWS API access for current forecast fetch
 - Tempest API credentials (`[tempest]` section in barogram.toml) for current forecast
+
+## Confidence
+
+Each of the 10 members gets its own confidence against the shared default
+fingerprint. The final NWS-vs-Tempest blend multiplies each source's inverse-MAE
+weight by that source's own average confidence (floored), on top of the existing
+blend; the three early-return degenerate cases (either source's MAE unknown) are
+unaffected by confidence. member_id=0's confidence is the plain average over all 10
+members. See [confidence.md](confidence.md) for the full design.

@@ -20,6 +20,7 @@
 import statistics
 
 import db
+import models._confidence as _confidence
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 from models.pressure_tendency import _find_nearest_ts, _ols1
@@ -30,6 +31,7 @@ NEEDS_CONN_IN = True
 NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
+NEEDS_MATCH_HISTORY = True
 
 _FUTURE_LOOKUP_SEC = 900  # +-15 min
 
@@ -88,7 +90,8 @@ def _build_inverse_transfer_fns(all_obs):
     return result
 
 
-def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None):
+def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None,
+        member_history=None, default_matches=None):
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
     inv_fns = _build_inverse_transfer_fns(all_obs)
@@ -138,6 +141,10 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None):
         elif pred_dew is not None:
             pred_joint = pred_dew
 
+        cell_confidences = _confidence.member_confidences(
+            member_history, default_matches, _ALL_MEMBER_IDS, "pressure", lead
+        )
+
         preds = {1: pred_temp, 2: pred_dew, 3: pred_joint}
         for mid, _name in _MEMBERS:
             member_vals[(mid, lead)] = preds[mid]
@@ -150,6 +157,7 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None):
                 "lead_hours": lead,
                 "variable": "pressure",
                 "value": preds[mid],
+                "confidence": cell_confidences.get(mid),
             })
 
         valid_pairs = [
@@ -158,17 +166,21 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None):
             if member_vals[(mid, lead)] is not None
         ]
         if not valid_pairs:
-            mean = None
+            mean, group_confidence = None, None
         elif weights:
-            w_pairs = [(weights.get((mid, "pressure", lead, _sector(valid_at)), None), v)
-                       for mid, v in valid_pairs]
-            if any(w is None for w, _ in w_pairs):
-                mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
-            else:
-                total_w = sum(w for w, _ in w_pairs)
-                mean = sum(w * v for w, v in w_pairs) / total_w
+            member_weights = {
+                mid: weights.get((mid, "pressure", lead, _sector(valid_at)))
+                for mid, _ in valid_pairs
+            }
+            confidences = {mid: cell_confidences.get(mid) for mid, _ in valid_pairs}
+            mean, group_confidence = _confidence.combine_pattern(
+                valid_pairs, member_weights, confidences
+            )
         else:
             mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+            group_confidence = _confidence.average_confidence(
+                [cell_confidences.get(mid) for mid, _ in valid_pairs]
+            )
         spread = (
             statistics.pstdev([v for _, v in valid_pairs])
             if len(valid_pairs) > 1 else None
@@ -183,6 +195,7 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None):
             "variable": "pressure",
             "value": mean,
             "spread": spread,
+            "confidence": group_confidence,
         })
 
     return rows

@@ -12,6 +12,7 @@ import statistics
 from collections import defaultdict
 
 import db
+import models._confidence as _confidence
 from models.nws import _fetch as _fetch_nws, _nearest as _snap_nearest
 from models.tempest_forecast import _fetch as _fetch_tempest
 from models.surface_signs import _find_nearest_ts
@@ -22,6 +23,7 @@ NEEDS_CONN_IN = True
 # NEEDS_CONN_OUT used here to read historical scored external forecasts — an exception to
 # the convention that only the ensemble model uses this flag.
 NEEDS_CONN_OUT = True
+NEEDS_MATCH_HISTORY = True
 NEEDS_CONF = True
 
 from models._climo_weights import LEAD_HOURS
@@ -45,6 +47,8 @@ _MEMBERS = [
     (9, "tempest_forecast", "airmass"),
     (10, "tempest_forecast", "joint"),
 ]
+
+_ALL_MEMBERS = [mid for mid, _, _ in _MEMBERS]
 
 
 def _hour_bucket(ts: int) -> int:
@@ -178,7 +182,8 @@ def _load_group_mae(conn_out) -> tuple[dict, dict]:
 
 
 def _source_weights(
-    nws_mae: dict, tempest_mae: dict, variable: str, lead: int, hb: int
+    nws_mae: dict, tempest_mae: dict, variable: str, lead: int, hb: int,
+    nws_confidence: float | None, tempest_confidence: float | None,
 ) -> tuple[float, float]:
     """Return (nws_w, tempest_w) via inverse-MAE weighting with a floor."""
     key = (variable, lead, hb)
@@ -190,8 +195,8 @@ def _source_weights(
         return 0.0, 1.0
     if tm is None:
         return 1.0, 0.0
-    ni = 1.0 / nm if nm > 0 else 1e9
-    ti = 1.0 / tm if tm > 0 else 1e9
+    ni = (1.0 / nm if nm > 0 else 1e9) * max(nws_confidence or 0.5, _confidence._CONFIDENCE_FLOOR)
+    ti = (1.0 / tm if tm > 0 else 1e9) * max(tempest_confidence or 0.5, _confidence._CONFIDENCE_FLOOR)
     total = ni + ti
     nw, tw = ni / total, ti / total
     if nw < _SOURCE_FLOOR:
@@ -204,7 +209,8 @@ def _source_weights(
 
 
 def _make_row(member_id: int, lead: int, valid_at: int, variable: str,
-              value: float | None, issued_at: int) -> dict:
+              value: float | None, issued_at: int,
+              confidence: float | None = None) -> dict:
     return {
         "model_id": MODEL_ID,
         "model": MODEL_NAME,
@@ -214,10 +220,12 @@ def _make_row(member_id: int, lead: int, valid_at: int, variable: str,
         "lead_hours": lead,
         "variable": variable,
         "value": value,
+        "confidence": confidence,
     }
 
 
-def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
+def run(obs, issued_at: int, *, conn_in, conn_out, conf,
+        member_history=None, default_matches=None) -> list[dict]:
     all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
     obs_by_ts = {r["timestamp"]: r for r in all_obs}
     sorted_ts = sorted(obs_by_ts)
@@ -263,6 +271,16 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
         }
 
         for variable in _VARIABLES:
+            member_confidence_by_cell = _confidence.member_confidences(
+                member_history, default_matches, _ALL_MEMBERS, variable, lead
+            )
+            nws_confidence = _confidence.average_confidence(
+                [member_confidence_by_cell.get(mid) for mid in _NWS_MEMBERS]
+            )
+            tempest_confidence = _confidence.average_confidence(
+                [member_confidence_by_cell.get(mid) for mid in _TEMPEST_MEMBERS]
+            )
+
             nws_vals = []
             tempest_vals = []
             for member_id, source, cond in _MEMBERS:
@@ -274,7 +292,10 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
                     tables[source], cond, variable, lead, hb, mon, current_airmass
                 )
                 corrected = raw_val - correction
-                rows.append(_make_row(member_id, lead, valid_at, variable, corrected, issued_at))
+                rows.append(_make_row(
+                    member_id, lead, valid_at, variable, corrected, issued_at,
+                    confidence=member_confidence_by_cell.get(member_id),
+                ))
                 if member_id in _NWS_MEMBERS:
                     nws_vals.append(corrected)
                 else:
@@ -283,7 +304,9 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
             nws_mean = statistics.mean(nws_vals) if nws_vals else None
             tempest_mean = statistics.mean(tempest_vals) if tempest_vals else None
             if nws_mean is not None and tempest_mean is not None:
-                nws_w, tempest_w = _source_weights(nws_mae, tempest_mae, variable, lead, hb)
+                nws_w, tempest_w = _source_weights(
+                    nws_mae, tempest_mae, variable, lead, hb, nws_confidence, tempest_confidence
+                )
                 mean_val = nws_w * nws_mean + tempest_w * tempest_mean
             elif nws_mean is not None:
                 mean_val = nws_mean
@@ -291,6 +314,7 @@ def run(obs, issued_at: int, *, conn_in, conn_out, conf) -> list[dict]:
                 mean_val = tempest_mean
             else:
                 mean_val = None
-            rows.append(_make_row(0, lead, valid_at, variable, mean_val, issued_at))
+            zero_confidence = _confidence.average_confidence(list(member_confidence_by_cell.values()))
+            rows.append(_make_row(0, lead, valid_at, variable, mean_val, issued_at, confidence=zero_confidence))
 
     return rows

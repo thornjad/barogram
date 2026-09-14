@@ -7,14 +7,14 @@ _ISSUED_AT = 1_700_000_000
 _VALID_AT = _ISSUED_AT + 6 * 3600
 
 
-def _seed(conn, model_id, model_name, variable, value, lead_hours=6):
+def _seed(conn, model_id, model_name, variable, value, lead_hours=6, confidence=None):
     conn.execute(
         """
         insert into forecasts
-            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value)
-        values (?, ?, 0, ?, ?, ?, ?, ?)
+            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, confidence)
+        values (?, ?, 0, ?, ?, ?, ?, ?, ?)
         """,
-        (model_id, model_name, _ISSUED_AT, _VALID_AT, lead_hours, variable, value),
+        (model_id, model_name, _ISSUED_AT, _VALID_AT, lead_hours, variable, value, confidence),
     )
 
 
@@ -183,3 +183,30 @@ def test_partial_weights_uses_available():
     mean_row = next(r for r in rows if r["member_id"] == 0)
     # weighted mean of models 1 and 2 only: 0.9*10 + 0.1*20 = 11.0
     assert abs(mean_row["value"] - 11.0) < 1e-9
+
+
+def test_confidence_shifts_value_versus_weights_alone():
+    conn = make_output_db()
+    _seed(conn, 1, "persistence", "temperature", 10.0, confidence=0.9)  # trusted
+    _seed(conn, 2, "climatological_mean", "temperature", 20.0, confidence=0.1)  # distrusted
+    obs = make_obs()
+    s = ens._sector(_VALID_AT)
+    weights = {(1, "temperature", 6, s): 1.0, (2, "temperature", 6, s): 1.0}
+
+    rows = ens.run(obs, _ISSUED_AT, conn_out=conn, weights=weights)
+    mean_row = next(r for r in rows if r["member_id"] == 0)
+
+    # equal weights alone would give 15.0; confidence should pull it toward
+    # model 1's trusted 10.0 instead
+    assert mean_row["value"] < 15.0
+    assert mean_row["confidence"] is not None
+
+
+def test_member_rows_carry_their_own_confidence():
+    conn = make_output_db()
+    _seed(conn, 1, "persistence", "temperature", 10.0, confidence=0.42)
+    obs = make_obs()
+
+    rows = ens.run(obs, _ISSUED_AT, conn_out=conn)
+    member_row = next(r for r in rows if r["member_id"] == 1)
+    assert abs(member_row["confidence"] - 0.42) < 1e-9

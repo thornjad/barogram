@@ -41,6 +41,7 @@
 import statistics
 
 import db
+import models._confidence as _confidence
 from models._utils import _sector
 from models.surface_signs import (
     _FUTURE_LOOKUP_SEC,
@@ -60,6 +61,7 @@ MODEL_NAME = "synoptic_state_machine"
 NEEDS_CONN_IN = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
+NEEDS_MATCH_HISTORY = True
 
 from models._climo_weights import LEAD_HOURS
 VARIABLES = {
@@ -348,7 +350,8 @@ def _build_conditionals(all_obs: list, solar_climo: dict) -> tuple[dict, dict, l
     return conds, by_ts, sorted_ts
 
 
-def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None) -> list[dict]:
+def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None,
+        member_history=None, default_matches=None) -> list[dict]:
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
 
@@ -388,6 +391,15 @@ def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None) -> list[dic
 
     rows = []
 
+    # confidence per (variable, lead) cell, shared default fingerprint --
+    # this model has no per-member analog selection of its own to reuse
+    cell_confidences = {
+        (variable, lead): _confidence.member_confidences(
+            member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+        )
+        for variable in VARIABLES for lead in LEAD_HOURS
+    }
+
     # member rows
     for mid in _ALL_MEMBER_IDS:
         state = live_states[mid]
@@ -409,6 +421,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None) -> list[dic
                     "lead_hours": lead,
                     "variable": variable,
                     "value": value,
+                    "confidence": cell_confidences[(variable, lead)].get(mid),
                 })
 
     # ensemble mean (member_id=0): sector-aware weighted mean + spread
@@ -428,20 +441,19 @@ def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None) -> list[dic
                     valid_pairs.append((mid, obs_val + mean_delta))
 
             if not valid_pairs:
-                mean = None
+                mean, group_confidence = None, None
             elif weights:
-                w_pairs = [
-                    (weights.get((mid, variable, lead, sector)), v)
-                    for mid, v in valid_pairs
-                ]
-                weighted = [(w, v) for w, v in w_pairs if w is not None]
-                if weighted:
-                    total_w = sum(w for w, _ in weighted)
-                    mean = sum(w * v for w, v in weighted) / total_w
-                else:
-                    mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                member_weights = {
+                    mid: weights.get((mid, variable, lead, sector))
+                    for mid, _ in valid_pairs
+                }
+                confidences = {mid: cell_confidences[(variable, lead)].get(mid) for mid, _ in valid_pairs}
+                mean, group_confidence = _confidence.combine_pattern(valid_pairs, member_weights, confidences)
             else:
                 mean = sum(v for _, v in valid_pairs) / len(valid_pairs)
+                group_confidence = _confidence.average_confidence(
+                    [cell_confidences[(variable, lead)].get(mid) for mid, _ in valid_pairs]
+                )
 
             spread = (
                 statistics.pstdev([v for _, v in valid_pairs])
@@ -457,6 +469,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None) -> list[dic
                 "variable": variable,
                 "value": mean,
                 "spread": spread,
+                "confidence": group_confidence,
             })
 
     return rows

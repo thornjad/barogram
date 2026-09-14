@@ -27,3 +27,13 @@ Must run after any base model it reads temperature/dewpoint from, in `barogram.p
 
 Weighted mean (skill-score weights when available, else equal) + spread across the
 three members, per lead.
+
+## Confidence
+
+Every member here gets a confidence value computed against the shared default
+fingerprint, matched against its own scored history by calendar day, and
+member_id=0's combination is confidence-adjusted via `models/_confidence.py`'s
+`combine_pattern`, the same as every other model. This model reads other base
+models' `member_id=0` values, already confidence-adjusted, as its own input, then
+applies its own confidence on top; that compounding is an accepted, documented
+property of "no special case," not an oversight. See [confidence.md](confidence.md).

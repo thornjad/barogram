@@ -13,11 +13,13 @@ import sys
 import urllib.request
 
 import db
+import models._confidence as _confidence
 
 MODEL_ID = 200
 MODEL_NAME = "nws"
 NEEDS_CONN_IN = True
 NEEDS_LOCATION = True
+NEEDS_MATCH_HISTORY = True
 
 from models._climo_weights import LEAD_HOURS
 # hourly NWS data — snap to nearest within ±90 min
@@ -66,7 +68,8 @@ def _nearest(hourly: dict[int, dict], target: int) -> tuple[int, dict] | None:
     return best, hourly[best]
 
 
-def run(obs, issued_at: int, *, conn_in=None, location=None) -> list[dict]:
+def run(obs, issued_at: int, *, conn_in=None, location=None, member_history=None,
+        default_matches=None) -> list[dict]:
     loc = location if location is not None else db.tempest_station_location(conn_in)
     if loc is None:
         return []
@@ -86,6 +89,9 @@ def run(obs, issued_at: int, *, conn_in=None, location=None) -> list[dict]:
         ]:
             if entry.get(key) is None:
                 continue
+            confidence = _confidence.confidence_for_cell(
+                (member_history or {}).get(0, []), variable, lead, default_matches or []
+            )
             rows.append({
                 "model_id": MODEL_ID,
                 "model": MODEL_NAME,
@@ -95,5 +101,6 @@ def run(obs, issued_at: int, *, conn_in=None, location=None) -> list[dict]:
                 "lead_hours": lead,
                 "variable": variable,
                 "value": entry[key],
+                "confidence": confidence,
             })
     return rows

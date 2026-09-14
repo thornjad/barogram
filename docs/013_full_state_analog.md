@@ -66,3 +66,11 @@ lightning is present, while a synoptic member homes in on pressure-flow patterns
 - Members that include correlated features (solar + uv, wind_avg + wind_gust) accept
   some redundancy in exchange for reinforcing those signals.
 - When fewer candidates exist than K, all available analogs are used.
+
+## Confidence
+
+Each member's confidence is computed against the exact same analog days it already
+selected for its own value forecast, not the shared default fingerprint every other
+model uses. Combination is confidence-adjusted the same way as every other model,
+via `models/_confidence.py`'s `combine_pattern`. See [confidence.md](confidence.md)
+for the full design.
