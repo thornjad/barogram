@@ -599,6 +599,30 @@ def accuracy_windows(conn: sqlite3.Connection, since_epochs: list[int]) -> dict[
     return result
 
 
+def confidence_by_lead(conn: sqlite3.Connection, n: int) -> list:
+    """Per-(model, variable, lead_hours) avg confidence from the last n scored runs."""
+    return conn.execute(
+        """
+        with recent as (
+            select distinct issued_at
+            from forecasts
+            where scored_at is not null
+            order by issued_at desc
+            limit ?
+        )
+        select f.model_id, f.model, m.type, f.variable, f.lead_hours,
+               avg(f.confidence) as avg_confidence
+        from forecasts f
+        join models m on m.id = f.model_id
+        join recent r on r.issued_at = f.issued_at
+        where f.scored_at is not null and f.member_id = 0
+        group by f.model_id, f.model, m.type, f.variable, f.lead_hours
+        order by f.model_id, f.variable, f.lead_hours
+        """,
+        (n,),
+    ).fetchall()
+
+
 def accuracy_run_count_last_n(conn: sqlite3.Connection, n: int) -> int:
     """Count of distinct scored runs actually included in accuracy_by_lead(n)."""
     row = conn.execute(
@@ -1163,47 +1187,6 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
             "insert or replace into metadata (key, value) values ('schema_version', ?)",
             (str(version),),
         )
-
-
-def forecast_trajectory(conn: sqlite3.Connection, since_ts: int) -> list:
-    """All scored member_id=0 rows targeting the best-covered recent valid_at.
-
-    Finds the scored barogram_ensemble valid_at (within the lookback window) that
-    has the most distinct issued_at values within ±2 hours — i.e. the valid time
-    for which the most forecast runs have been scored. Tie-breaks to the latest
-    valid_at. The ±2h window accommodates slight valid_at differences between
-    internal models (Tempest obs timestamp) and external models (NWS/Tempest hours).
-    """
-    pivot = conn.execute(
-        """
-        with candidates as (
-            select distinct valid_at from forecasts
-            where model_id = 100 and member_id = 0 and scored_at is not null
-              and valid_at >= ?
-        )
-        select c.valid_at
-        from candidates c
-        join forecasts f on f.member_id = 0 and f.scored_at is not null
-          and f.valid_at between c.valid_at - 7200 and c.valid_at + 7200
-        group by c.valid_at
-        order by count(distinct f.issued_at) desc, c.valid_at desc
-        limit 1
-        """,
-        (since_ts,),
-    ).fetchone()
-    if pivot is None:
-        return []
-    target = pivot["valid_at"]
-    return conn.execute(
-        """
-        select model_id, model, issued_at, lead_hours, valid_at, variable, value, observed
-        from forecasts
-        where member_id = 0 and scored_at is not null
-          and valid_at between ? and ?
-        order by variable, model_id, issued_at
-        """,
-        (target - 7200, target + 7200),
-    ).fetchall()
 
 
 def recent_misses(

@@ -73,29 +73,6 @@ def _to_in(mm):
 
 
 
-def _slp_correction(obs, elevation_m: float = 0.0) -> float:
-    """Derive the station→SLP pressure offset (hPa) from the latest tempest obs.
-
-    Prefers the stored sea_level_pressure if available; otherwise computes
-    from the barometric formula using station pressure, temperature, and
-    the configured station elevation.
-    """
-    if obs is None:
-        return 0.0
-    sp = obs["station_pressure"]
-    if sp is None:
-        return 0.0
-    slp_stored = obs["sea_level_pressure"]
-    if slp_stored is not None:
-        return slp_stored - sp
-    if elevation_m <= 0.0:
-        return 0.0
-    temp = obs["air_temp"]
-    if temp is None:
-        return 0.0
-    return fmt.to_slp(sp, temp, elevation_m) - sp
-
-
 def _fetch_nws_forecast(lat: float, lon: float) -> dict[int, dict]:
     """Fetch NWS hourly forecasts keyed by unix timestamp (SI units). Returns {} on failure."""
     try:
@@ -211,25 +188,6 @@ h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .obs-table td { padding: 2px 0; }
 .run-meta { font-size: 13px; color: #444; background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 12px 16px; }
 .run-meta strong { font-weight: 600; }
-.forecast-table-scroll { overflow-x: auto; }
-table.forecast-table {
-    width: 100%;
-    border-collapse: collapse;
-    background: #fff;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-}
-table.forecast-table th,
-table.forecast-table td {
-    padding: 8px 12px;
-    text-align: right;
-    border-bottom: 1px solid #eee;
-}
-table.forecast-table th { text-align: left; font-weight: 500; color: #555; }
-table.forecast-table thead th { background: #f9f9f9; font-weight: 600; color: #1a1a1a; }
-table.forecast-table thead th:not(:first-child) { text-align: right; }
-table.forecast-table tbody tr:last-child td,
-table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .charts-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -241,18 +199,18 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     gap: 16px;
 }
 .mae-filter-bar { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
-.mae-filter-btn, .fcst-filter-btn,
+.mae-filter-btn,
 .bias-filter-btn, .lead-skill-filter-btn, .heatmap-filter-btn,
 .diurnal-filter-btn, .error-dist-var-btn, .error-dist-lead-btn,
-.trajectory-filter-btn, .acc-filter-btn, .acc-window-btn { padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #444; }
-.mae-filter-btn:hover, .fcst-filter-btn:hover,
+.acc-filter-btn, .acc-window-btn { padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #444; }
+.mae-filter-btn:hover,
 .bias-filter-btn:hover, .lead-skill-filter-btn:hover, .heatmap-filter-btn:hover,
 .diurnal-filter-btn:hover, .error-dist-var-btn:hover, .error-dist-lead-btn:hover,
-.trajectory-filter-btn:hover, .acc-filter-btn:hover, .acc-window-btn:hover { background: #f0f0f0; }
-.mae-filter-btn.active, .fcst-filter-btn.active,
+.acc-filter-btn:hover, .acc-window-btn:hover { background: #f0f0f0; }
+.mae-filter-btn.active,
 .bias-filter-btn.active, .lead-skill-filter-btn.active, .heatmap-filter-btn.active,
 .diurnal-filter-btn.active, .error-dist-var-btn.active, .error-dist-lead-btn.active,
-.trajectory-filter-btn.active, .acc-filter-btn.active, .acc-window-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.acc-filter-btn.active, .acc-window-btn.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
 .mae-raw-btn { margin-left: auto; padding: 4px 12px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #666; }
 .mae-raw-btn:hover { background: #f0f0f0; }
 .mae-raw-btn.active { background: #555; color: #fff; border-color: #555; }
@@ -351,10 +309,6 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .external-header th { background: #fff3e0; font-size: 11px; color: #b34400; padding: 4px 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .ensemble-row th, .ensemble-row td { background: #f8faff; }
 .external-row th, .external-row td { background: #fffbf6; }
-.model-runs { display: flex; flex-direction: column; gap: 20px; }
-.model-run-card { background: #fff; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
-.model-run-header { display: flex; align-items: baseline; gap: 10px; padding: 10px 16px; background: #f9f9f9; border-bottom: 1px solid #eee; }
-.model-run-header strong { font-size: 14px; }
 .base-badge, .ensemble-badge, .baseline-badge, .external-badge, .fun-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .base-badge { background: #e8f4e8; color: #2d6a2d; }
 .ensemble-badge { background: #eff4ff; color: #3b5bdb; }
@@ -365,7 +319,6 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .baseline-row td { color: #bbb; }
 .baseline-row .model-id-cell { color: #888; }
 .member-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 500; background: #f5f0ff; color: #6b3fa0; }
-.run-detail { font-size: 12px; color: #666; margin-left: auto; }
 .mae-summary-table {
     width: 100%;
     border-collapse: collapse;
@@ -432,23 +385,6 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 }
 .member-btn:hover { background: #f0f0f0; }
 .member-detail-row td { padding: 6px 10px; }
-.mf-btn {
-    font-size: 11px;
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-weight: 500;
-    background: #f5f0ff;
-    color: #6b3fa0;
-    border: 1px solid #d4bfff;
-    cursor: pointer;
-    font-family: inherit;
-}
-.mf-btn:hover { background: #ede3ff; }
-.member-forecast-panel {
-    padding: 12px 16px;
-    background: #f8f8ff;
-    border-top: 1px solid #eee;
-}
 .weights-section { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 16px; margin-top: 12px; align-items: start; }
 .weights-model-block { }
 .weights-model-block h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
@@ -485,7 +421,6 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
     .learnings-hyp-grid > *, .weights-section > * { min-width: 0; }
     .section { scroll-margin-top: 70px; }
     .fcst-row-refs { gap: 12px; }
-    .model-run-header { flex-wrap: wrap; gap: 6px; }
     .mae-raw-btn { margin-left: 0; }
     .jump-nav a { font-size: 11px; padding: 3px 8px; }
     table { font-size: 11px; width: 100%; }
@@ -683,143 +618,6 @@ table.forecast-table tbody tr:last-child th { border-bottom: none; }
 .ap-none { color: #bbb; font-style: italic; }
 .zambretti-tendency { font-size: 13px; color: #555; margin-top: 4px; }
 .zambretti-algo { font-size: 11px; color: #888; margin-top: 4px; }
-.mf-member-label { font-size: 11px; font-weight: 600; color: #6b3fa0; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 4px; }
-@media (prefers-color-scheme: dark) {
-    body { color: #e0e0e0; background: #1a1a1a; }
-    header { background: #1a1a1a; border-bottom-color: #e0e0e0; }
-    .generated { color: #888; }
-    .stale-banner { background: #2a2200; border-color: #6a4800; border-left-color: #8a6000; }
-    .stale-banner code { background: #3a3000; }
-    .stale-age-banner { background: #2a1500; border-color: #7a3500; border-left-color: #aa4500; }
-    .stale-age-banner code { background: #3a2000; }
-    .card { background: #252525; border-color: #3a3a3a; }
-    .station-id { color: #888; }
-    .obs-time { color: #888; }
-    .obs-fallback { color: #666; }
-    .obs-table th { color: #888; }
-    .run-meta { color: #ccc; background: #252525; border-color: #3a3a3a; }
-    table.forecast-table { background: #252525; border-color: #3a3a3a; }
-    table.forecast-table th, table.forecast-table td { border-bottom-color: #333; }
-    table.forecast-table th { color: #888; }
-    table.forecast-table thead th { background: #2d2d2d; color: #e0e0e0; }
-    .chart-container { background: #252525; border-color: #3a3a3a; }
-    .mae-filter-btn, .fcst-filter-btn,
-    .bias-filter-btn, .lead-skill-filter-btn, .heatmap-filter-btn,
-    .diurnal-filter-btn, .error-dist-var-btn, .error-dist-lead-btn,
-    .trajectory-filter-btn, .acc-filter-btn, .acc-window-btn { background: #252525; border-color: #444; color: #ccc; }
-    .mae-filter-btn:hover, .fcst-filter-btn:hover,
-    .bias-filter-btn:hover, .lead-skill-filter-btn:hover, .heatmap-filter-btn:hover,
-    .diurnal-filter-btn:hover, .error-dist-var-btn:hover, .error-dist-lead-btn:hover,
-    .trajectory-filter-btn:hover, .acc-filter-btn:hover, .acc-window-btn:hover { background: #333; }
-    .mae-filter-btn.active, .fcst-filter-btn.active,
-    .bias-filter-btn.active, .lead-skill-filter-btn.active, .heatmap-filter-btn.active,
-    .diurnal-filter-btn.active, .error-dist-var-btn.active, .error-dist-lead-btn.active,
-    .trajectory-filter-btn.active, .acc-filter-btn.active, .acc-window-btn.active { background: #e0e0e0; color: #1a1a1a; border-color: #e0e0e0; }
-    .mae-raw-btn { background: #252525; border-color: #444; color: #aaa; }
-    .mae-raw-btn:hover { background: #333; }
-    .mae-raw-btn.active { background: #888; color: #fff; border-color: #888; }
-    .run-browser-nav-btn { background: #252525; border-color: #444; color: #aaa; }
-    .run-browser-nav-btn:hover { background: #333; }
-    #run-browser-select { background: #252525; border-color: #444; color: #ccc; }
-    .run-browser-var-toggle { color: #ccc; }
-    .run-browser-checkboxes { color: #ccc; }
-    .run-browser-mid { color: #888; }
-    .obs-history-table { background: #252525; border-color: #3a3a3a; }
-    .obs-history-table th, .obs-history-table td { border-bottom-color: #333; }
-    .obs-history-table thead th { background: #2d2d2d; color: #e0e0e0; }
-    .more-btn { background: #252525; border-color: #444; color: #ccc; }
-    .more-btn:hover { background: #333; }
-    .score-table { background: #252525; border-color: #3a3a3a; }
-    .score-table th, .score-table td { border-bottom-color: #333; }
-    .score-table th { color: #888; }
-    .score-table thead th { background: #2d2d2d; color: #e0e0e0; }
-    .score-table td small { color: #888; }
-    .window-label { color: #888; }
-    .model-header th { background: #2d2d2d; color: #aaa; }
-    .ensemble-header th { background: #1a2440; color: #7a9be0; }
-    .external-header th { background: #2a1800; color: #cc7040; }
-    .ensemble-row th, .ensemble-row td { background: #1e2440; }
-    .external-row th, .external-row td { background: #221800; }
-    .model-run-card { background: #252525; border-color: #3a3a3a; }
-    .model-run-header { background: #2d2d2d; border-bottom-color: #3a3a3a; }
-    .base-badge { background: #1a3a1a; color: #6db56d; }
-    .ensemble-badge { background: #1a2440; color: #7a9be0; }
-    .baseline-badge { background: #2d2d25; color: #888; }
-    .external-badge { background: #2a1800; color: #cc7040; }
-    .fun-badge { background: #1a3a1a; color: #6db56d; }
-    .member-badge { background: #2a1540; color: #b07de0; }
-    .run-detail { color: #888; }
-    .mae-summary-table { background: #252525; border-color: #3a3a3a; }
-    .mae-summary-table th, .mae-summary-table td { border-bottom-color: #333; }
-    .mae-summary-table th { color: #888; }
-    .mae-summary-table thead th { background: #2d2d2d; color: #e0e0e0; }
-    .model-id-cell { color: #666; }
-    .mae-better { color: #5ab55a; }
-    .mae-worse { color: #cc5555; }
-    .mae-baseline-val { color: #666; }
-    .chart-legend-note { color: #666; }
-    .score-details summary { color: #888; }
-    .score-details summary:hover { color: #e0e0e0; }
-    .member-detail-table { background: #222; border-color: #3a3a3a; }
-    .member-detail-table th, .member-detail-table td { border-bottom-color: #333; }
-    .member-detail-table th { color: #888; }
-    .member-detail-table thead th { background: #2d2d2d; color: #e0e0e0; }
-    .member-btn { background: #252525; border-color: #444; color: #ccc; }
-    .member-btn:hover { background: #333; }
-    .mf-btn { background: #2a1540; color: #b07de0; border-color: #6040a0; }
-    .mf-btn:hover { background: #351a50; }
-    .mf-member-label { color: #b07de0; }
-    .member-forecast-panel { background: #1e1e2a; border-top-color: #3a3a3a; }
-    .weight-table { background: #222; border-color: #3a3a3a; }
-    .weight-table th, .weight-table td { border-bottom-color: #333; }
-    .weight-table thead th { background: #2d2d2d; color: #e0e0e0; }
-    .weight-group-hdr th { background: #252525; color: #777; }
-    .learnings-desc { background: #252525; border-left-color: #555; color: #ccc; }
-    .learnings-status { background: #1a2a1a; border-left-color: #4a9; color: #5ca; }
-    .learnings-intro { color: #888; }
-    .no-data { color: #666; }
-    .filter-label { color: #666; }
-    .collapsible-section > summary::before { color: #666; }
-    .acc-excellent { color: #5abe5a; }
-    .acc-high { color: #4aaa4a; }
-    .acc-mid { color: #90b020; }
-    .acc-ok { color: #aaa; }
-    .acc-low { color: #cc8844; }
-    .acc-poor { color: #cc6666; }
-    .acc-cell.acc-best { background: #1e3a1e; }
-    .acc-cell.acc-worst { background: #3a1e1e; }
-    .acc-lead-table .baseline-row th.model-name-cell { color: #555; }
-    .baseline-row td { color: #555; }
-    .baseline-row .model-id-cell { color: #444; }
-    .fcst-row { background: #252525; border-color: #3a3a3a; }
-    .fcst-row.now-row { border-color: #3a5070; background: #1e2a3a; }
-    .fcst-temp { color: #e0e0e0; }
-    .fcst-details { color: #aaa; }
-    .fcst-details .detail-label { color: #666; }
-    .fcst-ref { color: #666; }
-    .fcst-ref-lbl { color: #555; }
-    .fcst-ref .detail-label { color: #555; }
-    .fcst-delta { color: #666; }
-    .jump-nav a { background: #252525; border-color: #3a3a3a; color: #ccc; }
-    .jump-nav a:hover { background: #333; color: #e0e0e0; }
-    .section-dig-deeper { border-top-color: #3a3a3a; color: #666; }
-    .analysis-section { border-top-color: #3a3a3a; }
-    .analysis-section > h2 { color: #aaa; }
-    .ap-signal-table { background: #252525; border-color: #3a3a3a; }
-    .ap-signal-table th, .ap-signal-table td { border-bottom-color: #333; }
-    .ap-signal-table th { background: #2d2d2d; color: #e0e0e0; }
-    .ap-wet { background: #1a2a40; color: #6090d0; }
-    .ap-dry { background: #2a2000; color: #c09030; }
-    .ap-neutral { background: #252525; color: #aaa; }
-    .zambretti-tendency { color: #aaa; }
-    .zambretti-algo { color: #666; }
-    .tempest-obs tr, .nws-obs tr { background: #252525; border-color: #3a3a3a; }
-    .tempest-obs td:first-child, .nws-obs td:first-child { color: #aaa; border-bottom-color: #333; }
-    .tempest-obs td::before, .nws-obs td::before { color: #666; }
-    .ap-signal-card { background: #252525; border-color: #3a3a3a; }
-    .ap-card-leads { border-top-color: #333; }
-    .ap-card-lead-val { color: #ccc; }
-}
 """
 
 
@@ -1117,37 +915,6 @@ def _external_corrected_source_weights_html(rows: list) -> str:
     )
 
 
-def _table_data(rows) -> dict:
-    """variable -> lead_hours -> value"""
-    data: dict = {}
-    for row in rows:
-        var = row["variable"]
-        if var not in data:
-            data[var] = {}
-        data[var][row["lead_hours"]] = row["value"]
-    return data
-
-
-def _chart_data(rows) -> dict:
-    """variable -> model -> {x: [ISO timestamps], y: [values]}"""
-    from datetime import datetime
-    data: dict = {}
-    for row in rows:
-        var = row["variable"]
-        model = row["model"]
-        if var not in data:
-            data[var] = {}
-        if model not in data[var]:
-            data[var][model] = {"x": [], "y": [], "model_id": row["model_id"]}
-        v = row["value"]
-        if var == "temperature" or var == "dewpoint":
-            v = _to_f(v)
-        ts = datetime.fromtimestamp(row["valid_at"], tz=fmt.CENTRAL).strftime("%Y-%m-%d %H:%M:%S")
-        data[var][model]["x"].append(ts)
-        data[var][model]["y"].append(v)
-    return data
-
-
 def _zambretti_panel_html(z: dict | None) -> str:
     if z is None or z.get("letter") == "\u2014":
         return ""
@@ -1259,95 +1026,6 @@ def _conditions_card(label: str, obs, elevation_m: float = 0.0, fallback_ts: dic
         f'<table class="obs-table"><tbody>{rows_html}</tbody></table>'
         f'</div>'
     )
-
-
-def _forecast_table_html(table: dict, lead_times: list, slp_offset: float = 0.0) -> str:
-    header_cells = "".join(f"<th>+{h}h</th>" for h in lead_times)
-    rows = []
-    for var in VARIABLES:
-        if not table.get(var):
-            continue
-        label = _VARIABLE_LABEL.get(var, var)
-        unit = _UNIT.get(var, "")
-        if var == "pressure" and slp_offset != 0.0:
-            label = "Station P"
-        cells = []
-        for h in lead_times:
-            v = table.get(var, {}).get(h)
-            if var in ("temperature", "dewpoint"):
-                v = _to_f(v)
-            fmt_spec = _FMT.get(var, ".1f")
-            cells.append(f"<td>{fmt.val(v, fmt_spec, unit)}</td>")
-        rows.append(f'<tr><th>{label}</th>{"".join(cells)}</tr>')
-        if var == "pressure" and slp_offset != 0.0:
-            slp_cells = []
-            for h in lead_times:
-                v = table.get(var, {}).get(h)
-                slp_cells.append(
-                    f"<td>{fmt.val(v + slp_offset if v is not None else None, '.1f', ' hPa')}</td>"
-                )
-            rows.append(f'<tr><th>SLP</th>{"".join(slp_cells)}</tr>')
-
-    return (
-        '<div class="forecast-table-scroll">'
-        '<table class="forecast-table">'
-        f'<thead><tr><th>Variable</th>{header_cells}</tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody>'
-        '</table>'
-        '</div>'
-    )
-
-
-def _model_runs_html(
-    rows: list,
-    lead_times: list,
-    member_counts: dict | None = None,
-    member_rows: list | None = None,
-    slp_offset: float = 0.0,
-) -> str:
-    by_model: dict = {}
-    for row in rows:
-        key = (row["model_id"], row["model"], row["type"], row["issued_at"])
-        by_model.setdefault(key, []).append(row)
-
-    sorted_keys = sorted(by_model, key=lambda k: k[0])
-    cards = []
-    for (model_id, model, mtype, issued_at) in sorted_keys:
-        model_rows = by_model[(model_id, model, mtype, issued_at)]
-        table = _table_data(model_rows)
-        if model == "bogo":
-            type_badge = '<span class="fun-badge">fun</span>'
-        else:
-            type_badge = {
-                "ensemble": f'<span class="ensemble-badge">ensemble</span>',
-                "external": f'<span class="external-badge">external</span>',
-            }.get(mtype, "")
-        table_html = _forecast_table_html(table, lead_times, slp_offset)
-        n_members = (member_counts or {}).get(model_id, 0)
-        member_toggle = (
-            f'<button class="mf-btn" data-model-id="{model_id}">'
-            f'{n_members} members &#x25be;</button>'
-            if n_members else ""
-        )
-        member_panel = (
-            f'<div class="member-forecast-panel" id="mfp-{model_id}" style="display:none"></div>'
-            if n_members else ""
-        )
-        tooltip = _MODEL_TOOLTIPS.get(model, "")
-        title_attr = f' title="{tooltip}"' if tooltip else ""
-        cards.append(
-            f'<div class="model-run-card">'
-            f'<div class="model-run-header">'
-            f'<strong><span class="model-id-cell">{model_id}</span> <span{title_attr}>{model}</span></strong>'
-            f'{type_badge}'
-            f'{member_toggle}'
-            f'<span class="run-detail">issued {fmt.ts(issued_at)} ({len(model_rows)} rows)</span>'
-            f'</div>'
-            f'{table_html}'
-            f'{member_panel}'
-            f'</div>'
-        )
-    return "\n".join(cards)
 
 
 def _tempest_obs_row(row, elevation_m: float = 0.0) -> str:
@@ -1582,85 +1260,6 @@ def _diurnal_data(rows: list) -> dict:
 
 
 
-def _member_forecast_js(member_rows: list, lead_times: list) -> str:
-    if not member_rows:
-        return ""
-
-    data: dict = {}
-    for row in member_rows:
-        mid = row["model_id"]
-        memid = row["member_id"]
-        data.setdefault(mid, {})
-        if memid not in data[mid]:
-            data[mid][memid] = {"name": row["member_name"] or str(memid), "vars": {}}
-        entry = data[mid][memid]
-        if row["member_name"] and not entry["name"]:
-            entry["name"] = row["member_name"]
-        v = row["value"]
-        if row["variable"] in ("temperature", "dewpoint"):
-            v = _to_f(v)
-        entry["vars"].setdefault(row["variable"], {})[row["lead_hours"]] = v
-
-    data_json = json.dumps(data)
-    vars_json = json.dumps(VARIABLES)
-    var_labels_json = json.dumps(_VARIABLE_LABEL)
-    units_json = json.dumps(_UNIT)
-    leads_json = json.dumps(lead_times)
-
-    return f"""\
-const memberFcstData = {data_json};
-const memberFcstVars = {vars_json};
-const memberFcstVarLabels = {var_labels_json};
-const memberFcstUnits = {units_json};
-const memberFcstLeads = {leads_json};
-
-function buildMemberForecastTables(modelId) {{
-    const members = memberFcstData[modelId] || {{}};
-    const parts = [];
-    Object.entries(members).sort(function(a, b) {{ return +a[0] - +b[0]; }}).forEach(function([mid, m]) {{
-        const headerCells = memberFcstLeads.map(function(h) {{
-            return '<th>+' + h + 'h</th>';
-        }}).join('');
-        const bodyRows = memberFcstVars.map(function(v) {{
-            const varData = (m.vars || {{}})[v] || {{}};
-            const cells = memberFcstLeads.map(function(h) {{
-                const val = varData[h];
-                if (val === null || val === undefined) return '<td>\u2014</td>';
-                return '<td>' + val.toFixed(1) + (memberFcstUnits[v] || '') + '</td>';
-            }}).join('');
-            return '<tr><th>' + (memberFcstVarLabels[v] || v) + '</th>' + cells + '</tr>';
-        }}).join('');
-        parts.push(
-            '<div style="margin-bottom:10px">'
-            + '<div class="mf-member-label">' + m.name + '</div>'
-            + '<table class="forecast-table" style="font-size:12px">'
-            + '<thead><tr><th>Variable</th>' + headerCells + '</tr></thead>'
-            + '<tbody>' + bodyRows + '</tbody>'
-            + '</table>'
-            + '</div>'
-        );
-    }});
-    return parts.join('') || '<p class="muted">no member data</p>';
-}}
-
-document.querySelectorAll('.mf-btn').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-        const modelId = btn.dataset.modelId;
-        const panel = document.getElementById('mfp-' + modelId);
-        if (!panel) return;
-        if (panel.style.display !== 'none') {{
-            panel.style.display = 'none';
-            btn.innerHTML = btn.innerHTML.replace('\u25b4', '\u25be');
-            return;
-        }}
-        panel.innerHTML = buildMemberForecastTables(+modelId);
-        panel.style.display = '';
-        btn.innerHTML = btn.innerHTML.replace('\u25be', '\u25b4');
-    }});
-}});
-"""
-
-
 def _member_detail_js(member_rows: list) -> str:
     if not member_rows:
         return "const memberData = {};"
@@ -1745,76 +1344,6 @@ document.querySelectorAll('.member-btn').forEach(function(btn) {{
         row.style.display = '';
     }});
 }});
-"""
-
-
-def _chart_js(chart_data_dict: dict) -> str:
-    data_json = json.dumps(chart_data_dict)
-    var_labels_json = json.dumps({
-        "temperature": "Temperature (\u00b0F)",
-        "dewpoint": "Dew Point (\u00b0F)",
-        "pressure": "Pressure (hPa)",
-    })
-    vars_json = json.dumps(VARIABLES)
-    return f"""\
-const fcstData = {data_json};
-const fcstVarLabels = {var_labels_json};
-const fcstVariables = {vars_json};
-const FCST_PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2'];
-
-const fcstAllModels = [...new Set(
-    Object.values(fcstData).flatMap(function(d) {{ return Object.keys(d); }})
-)].sort();
-const fcstModelColors = {{}};
-fcstAllModels.filter(function(m) {{ return m !== 'persistence'; }}).forEach(function(m, i) {{
-    fcstModelColors[m] = FCST_PALETTE[i % FCST_PALETTE.length];
-}});
-if (fcstAllModels.includes('persistence')) fcstModelColors['persistence'] = '#aaaaaa';
-if (fcstAllModels.includes('bogo')) fcstModelColors['bogo'] = '#b0d8b0';
-
-let fcstActiveVar = fcstVariables[0];
-
-function drawFcstChart() {{
-    const isMobile = window.innerWidth < 768;
-    const varData = fcstData[fcstActiveVar] || {{}};
-    const entries = Object.entries(varData);
-    const traces = entries.map(function([model, d]) {{
-        const isPersistence = model === 'persistence';
-        const color = fcstModelColors[model] || '#888888';
-        return {{
-            type: 'scatter',
-            mode: 'lines+markers',
-            name: String(d.model_id),
-            x: d.x,
-            y: d.y,
-            line: {{ width: 2, dash: isPersistence ? 'dot' : 'solid', color: color }},
-            marker: {{ size: isPersistence ? 5 : 6, color: color }}
-        }};
-    }});
-    Plotly.react('chart-forecast', traces, {{
-        title: {{ text: fcstVarLabels[fcstActiveVar], font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-        margin: {{ t: 40, b: isMobile ? 120 : 100, l: 50, r: 16 }},
-        xaxis: {{ type: 'date', tickformat: '%b %e', tickangle: 0, tickfont: {{ size: 10 }}, nticks: 4 }},
-        yaxis: {{ tickfont: {{ size: 11 }} }},
-        height: isMobile ? 360 : 420,
-        showlegend: true,
-        legend: {{ orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{ size: 10 }} }},
-        font: {{ color: plotBg().font }},
-        paper_bgcolor: plotBg().paper,
-        plot_bgcolor: plotBg().plot
-    }}, {{responsive: true}});
-}}
-
-document.querySelectorAll('.fcst-filter-btn').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-        document.querySelectorAll('.fcst-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
-        btn.classList.add('active');
-        fcstActiveVar = btn.dataset.var;
-        drawFcstChart();
-    }});
-}});
-
-drawFcstChart();
 """
 
 
@@ -1921,7 +1450,7 @@ function drawHeatmapChart() {{
         y: models,
         z: z,
         colorscale: 'RdYlGn',
-        reversescale: false,
+        reversescale: true,
         showscale: true,
         hovertemplate: '%{{y}}<br>+%{{x}}h<br>MAE: %{{z:.2f}}<extra></extra>'
     }}], {{
@@ -3414,175 +2943,6 @@ def _learnings_js(data: dict) -> str:
     return "\n".join(lines)
 
 
-def _trajectory_data(rows: list) -> dict:
-    """Build trajectory data structure for _trajectory_js.
-
-    Returns {
-        "valid_at_label": str,
-        "variables": {
-            var: {
-                "observed": float | None,  # display units
-                "unit": str,
-                "models": {model_name: {"x": [lead_hours, ...], "y": [float, ...]}}
-            }
-        }
-    }
-    x values are lead_hours integers, sorted descending (longest lead first).
-    """
-    if not rows:
-        return {"valid_at_label": "", "variables": {}}
-
-    # representative valid_at for title (use median of all valid_at values)
-    all_valid_at = [r["valid_at"] for r in rows]
-    target_ts = sorted(all_valid_at)[len(all_valid_at) // 2]
-    valid_at_label = fmt.ts(target_ts)
-
-    obs_by_var: dict[str, list[float]] = {}
-    # var \u2192 model \u2192 lead_hours \u2192 [raw values] (multiple runs may share a lead bucket)
-    by_var_model_lead: dict[str, dict[str, dict[int, list[float]]]] = {}
-
-    for row in rows:
-        var = row["variable"]
-        model = row["model"]
-        lead_hours = row["lead_hours"]
-        value = row["value"]
-        observed = row["observed"]
-
-        if observed is not None:
-            obs_by_var.setdefault(var, []).append(observed)
-        if value is not None:
-            (by_var_model_lead
-                .setdefault(var, {})
-                .setdefault(model, {})
-                .setdefault(lead_hours, [])
-                .append(value))
-
-    result: dict = {"valid_at_label": valid_at_label, "variables": {}}
-
-    for var in VARIABLES:
-        if var not in by_var_model_lead:
-            continue
-        obs_vals = obs_by_var.get(var, [])
-        obs_mean = sum(obs_vals) / len(obs_vals) if obs_vals else None
-        if var in ("temperature", "dewpoint"):
-            obs_disp = _to_f(obs_mean)
-            unit = "\u00b0F"
-        else:
-            obs_disp = obs_mean
-            unit = "hPa"
-
-        models_data: dict = {}
-        for model, lead_map in by_var_model_lead[var].items():
-            xs, ys = [], []
-            # sort descending so longest lead (earliest forecast) comes first;
-            # average across runs that share the same lead_hours bucket
-            for lead_hours in sorted(lead_map.keys(), reverse=True):
-                raw_vals = lead_map[lead_hours]
-                avg_raw = sum(raw_vals) / len(raw_vals)
-                if var in ("temperature", "dewpoint"):
-                    val_disp = _to_f(avg_raw)
-                else:
-                    val_disp = avg_raw
-                xs.append(lead_hours)
-                ys.append(round(val_disp, 2) if val_disp is not None else None)
-            if xs:
-                models_data[model] = {"x": xs, "y": ys}
-
-        result["variables"][var] = {
-            "observed": round(obs_disp, 2) if obs_disp is not None else None,
-            "unit": unit,
-            "models": models_data,
-        }
-
-    return result
-
-
-def _trajectory_js(data: dict) -> str:
-    if not data.get("variables"):
-        return "/* trajectory: no scored data yet */"
-    data_json = json.dumps(data)
-    return f"""const trajectoryData = {data_json};
-
-const TRAJECTORY_PALETTE = [
-    '#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd',
-    '#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'
-];
-const trajectoryVars = Object.keys(trajectoryData.variables);
-const trajectoryAllModels = [...new Set(
-    Object.values(trajectoryData.variables).flatMap(function(v) {{
-        return Object.keys(v.models);
-    }})
-)].sort();
-const trajectoryModelColors = {{}};
-trajectoryAllModels.forEach(function(m, i) {{
-    trajectoryModelColors[m] = TRAJECTORY_PALETTE[i % TRAJECTORY_PALETTE.length];
-}});
-// override well-known models for consistency
-if (trajectoryModelColors['barogram_ensemble'] !== undefined) trajectoryModelColors['barogram_ensemble'] = '#1a47b8';
-if (trajectoryModelColors['nws'] !== undefined) trajectoryModelColors['nws'] = '#d95f02';
-if (trajectoryModelColors['tempest_forecast'] !== undefined) trajectoryModelColors['tempest_forecast'] = '#7570b3';
-if (trajectoryModelColors['persistence'] !== undefined) trajectoryModelColors['persistence'] = '#aaaaaa';
-if (trajectoryModelColors['bogo'] !== undefined) trajectoryModelColors['bogo'] = '#b0d8b0';
-
-let trajectoryActiveVar = trajectoryVars.includes('temperature') ? 'temperature' : trajectoryVars[0];
-
-function drawTrajectoryChart() {{
-    const vd = trajectoryData.variables[trajectoryActiveVar];
-    if (!vd) {{ Plotly.react('trajectory-chart', [], {{}}); return; }}
-    const unit = vd.unit || '';
-    const traces = Object.entries(vd.models).map(function([model, pts]) {{
-        const color = trajectoryModelColors[model] || '#888888';
-        const isExt = model === 'nws' || model === 'tempest_forecast';
-        return {{
-            type: 'scatter', mode: 'lines+markers',
-            name: model,
-            x: pts.x, y: pts.y,
-            line: {{ width: isExt ? 2.5 : 1.5, dash: isExt ? 'solid' : 'solid', color: color, shape: 'spline' }},
-            marker: {{ size: isExt ? 7 : 5, color: color }},
-            connectgaps: false
-        }};
-    }});
-    if (vd.observed !== null && vd.observed !== undefined) {{
-        const allX = Object.values(vd.models).flatMap(function(m) {{ return m.x; }}).sort(function(a,b){{return a-b;}});
-        if (allX.length >= 2) {{
-            traces.push({{
-                type: 'scatter', mode: 'lines',
-                name: 'observed',
-                x: [allX[0], allX[allX.length - 1]],
-                y: [vd.observed, vd.observed],
-                line: {{ dash: 'dash', width: 2, color: '#000000' }},
-                showlegend: true
-            }});
-        }}
-    }}
-    Plotly.react('trajectory-chart', traces, {{
-        title: {{ text: 'Forecast trajectory \u2014 valid ' + (trajectoryData.valid_at_label || ''),
-                  font: {{ size: 13, family: '-apple-system, sans-serif' }} }},
-        margin: {{ t: 40, b: 100, l: 55, r: 16 }},
-        xaxis: {{ title: 'Lead hours', autorange: 'reversed', tickfont: {{ size: 11 }} }},
-        yaxis: {{ title: unit, tickfont: {{ size: 11 }} }},
-        height: 380,
-        showlegend: true,
-        legend: {{ orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{ size: 10 }} }},
-        font: {{ color: plotBg().font }},
-        paper_bgcolor: plotBg().paper,
-        plot_bgcolor: plotBg().plot
-    }}, {{responsive: true}});
-}}
-
-document.querySelectorAll('.trajectory-filter-btn').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-        document.querySelectorAll('.trajectory-filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
-        btn.classList.add('active');
-        trajectoryActiveVar = btn.dataset.var;
-        drawTrajectoryChart();
-    }});
-}});
-
-drawTrajectoryChart();
-"""
-
-
 _ACC_VARIABLES = ["temperature", "dewpoint", "pressure"]
 
 # lead hours shown in the accuracy-by-lead table and bias-over-time charts —
@@ -3702,6 +3062,85 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
                 f'<td colspan="{n_cols}" id="md-{safe}"></td>'
                 f'</tr>'
             )
+
+    return (
+        f'<table class="obs-history-table acc-lead-table">'
+        f'<thead><tr>{header}</tr></thead>'
+        f'<tbody>{"".join(body_rows)}</tbody>'
+        f'</table>'
+    )
+
+
+def _confidence_lead_table_html(rows: list, lead_times: list) -> str:
+    """Confidence table: rows=models, cols=lead times, filterable by variable."""
+    if not rows:
+        return '<p class="muted">no confidence data</p>'
+
+    model_data: dict = {}
+    model_meta: dict = {}
+    for r in rows:
+        name = r["model"]
+        if name not in model_data:
+            model_data[name] = {v: {} for v in _ACC_VARIABLES}
+            model_meta[name] = {"model_id": r["model_id"], "type": r["type"]}
+        var = r["variable"]
+        if var in _ACC_VARIABLES and r["avg_confidence"] is not None:
+            model_data[name][var][r["lead_hours"]] = r["avg_confidence"] * 100
+
+    def _sort_key(k):
+        t = model_meta[k]["type"]
+        mid = model_meta[k]["model_id"]
+        if t == "ensemble":
+            return (0, mid)
+        if t == "external":
+            return (1, -mid)   # 201 before 200
+        return (2, mid)
+
+    model_order = sorted(model_data.keys(), key=_sort_key)
+    lts = sorted(lead_times)
+
+    header = "<th>#</th><th>Model</th>" + "".join(f"<th>+{lt}h</th>" for lt in lts)
+    body_rows = []
+    for name in model_order:
+        meta = model_meta[name]
+        if name == "climatological_mean":
+            badge = '<span class="baseline-badge">baseline</span>'
+            row_cls = ' class="baseline-row"'
+        elif name == "persistence":
+            badge = ""
+            row_cls = ' class="baseline-row"'
+        elif meta["type"] == "ensemble":
+            badge = '<span class="ensemble-badge">ensemble</span>'
+            row_cls = ""
+        elif meta["type"] == "external":
+            badge = '<span class="external-badge">external</span>'
+            row_cls = ""
+        elif name == "bogo":
+            badge = '<span class="fun-badge">fun</span>'
+            row_cls = ""
+        else:
+            badge = ""
+            row_cls = ""
+        cells = ""
+        for lt in lts:
+            data_attrs = "".join(
+                f' data-{var}="{model_data[name][var].get(lt)!r}"'
+                if model_data[name][var].get(lt) is not None
+                else f' data-{var}=""'
+                for var in _ACC_VARIABLES
+            )
+            def_conf = model_data[name]["temperature"].get(lt)
+            display = f"{def_conf:.0f}%" if def_conf is not None else "—"
+            cls = _acc_cls(def_conf)
+            cells += (
+                f'<td class="acc-cell{cls}" data-lead="{lt}"'
+                f' data-mid="{meta["model_id"]}"{data_attrs}>{display}</td>'
+            )
+        body_rows.append(
+            f'<tr{row_cls}>'
+            f'<td class="model-id-cell">{meta["model_id"]}</td>'
+            f'<th class="model-name-cell">{name} {badge}</th>{cells}</tr>'
+        )
 
     return (
         f'<table class="obs-history-table acc-lead-table">'
@@ -3957,9 +3396,10 @@ def _run_browser_data(forecast_rows: list, obs_rows: list) -> dict:
         run = runs.setdefault(issued, {
             "issued_at": issued, "n_rows": 0, "n_scored": 0, "forecasts": {},
         })
-        run["n_rows"] += 1
-        if r["scored_at"] is not None:
-            run["n_scored"] += 1
+        if r["value"] is not None:
+            run["n_rows"] += 1
+            if r["scored_at"] is not None:
+                run["n_scored"] += 1
         lead = r["lead_hours"]
         if not 1 <= lead <= 24:
             continue
@@ -4075,6 +3515,20 @@ function populateRunBrowserSelect() {{
     sel.value = runBrowserIndex;
 }}
 
+// grey vertical marker at the latest available observation time, shown only when
+// that time falls inside the chart's own window (i.e. the window spans "now").
+function lastObsShapes(winStartSec, winEndSec) {{
+    const obs = _runBrowserData.obs;
+    if (!obs.times.length) return [];
+    const lastObsSec = obs.times[obs.times.length - 1];
+    if (lastObsSec < winStartSec || lastObsSec > winEndSec) return [];
+    const x = lastObsSec * 1000;
+    return [{{
+        type: 'line', xref: 'x', yref: 'paper', x0: x, x1: x, y0: 0, y1: 1,
+        line: {{color: '#888', width: 1, dash: 'dot'}},
+    }}];
+}}
+
 function renderRunBrowser() {{
     const run = _runBrowserData.runs[runBrowserIndex];
     if (!run) return;
@@ -4178,6 +3632,7 @@ function renderRunBrowser() {{
         }},
         hovermode: 'x',
         showlegend: false,
+        shapes: lastObsShapes(winStart, winEnd),
     }}, {{responsive: true}});
 }}
 
@@ -4189,6 +3644,8 @@ function renderRunBrowserConfidence() {{
     const showDew = document.getElementById('run-browser-dew-cb').checked;
     const leadTimes = [];
     for (let lead = 1; lead <= 24; lead++) leadTimes.push((run.issued_at + lead * 3600) * 1000);
+    const confWinStart = run.issued_at + 3600;
+    const confWinEnd = run.issued_at + 24 * 3600;
 
     function compactConf(values) {{
         const xs = [], ys = [];
@@ -4232,6 +3689,7 @@ function renderRunBrowserConfidence() {{
         }},
         hovermode: 'x',
         showlegend: false,
+        shapes: lastObsShapes(confWinStart, confWinEnd),
     }}, {{responsive: true}});
 }}
 
@@ -4419,14 +3877,11 @@ def _write_fragment(html: str, out_dir: Path) -> None:
     css = re.sub(r"(?m)^( *)header \{", r"\1.barogram-header {", css)
     css = re.sub(r"(?m)^( *)h2 \{", r"\1.barogram h2 {", css)
     css = re.sub(r"(?m)^( *)h3 \{", r"\1.barogram h3 {", css)
-    # .barogram inherits host page background; strip hardcoded values in both
-    # light and dark mode so the host site background always shows through
+    # .barogram inherits host page background; strip hardcoded value so the
+    # host site background always shows through
     css = re.sub(r"(?m)^(    color: #1a1a1a;\n)    background: #f5f5f5;\n(    padding:)", r"\1\2", css)
-    css = re.sub(r"(\.barogram \{ color: #e0e0e0;) background: #1a1a1a;( \})", r"\1\2", css)
     # .barogram-header must be opaque (sticky), but should match host page bg
     css = re.sub(r"(?m)^(    z-index: 100;\n)    background: #f5f5f5;\n(    display: flex;)", r"\1    background: var(--bg, #f5f5f5);\n\2", css)
-    # dark mode .barogram-header: use site bg var so sticky header stays opaque
-    css = css.replace(".barogram-header { background: #1a1a1a;", ".barogram-header { background: var(--bg, #1a1a1a);")
 
     body_start = html.index("<body>\n") + len("<body>\n")
     script_anchor = '\n<script src="https://cdn.jsdelivr.net/'
@@ -4465,15 +3920,6 @@ def generate(
     # for multi-member models, use only member_id=0 (ensemble mean) in all displays;
     # for single-member models, member_id=0 is already their only member
     mean_rows = [r for r in all_rows if r["member_id"] == 0]
-    member_forecast_rows = [r for r in all_rows if r["member_id"] > 0]
-
-    # count named members per model for the member toggle button
-    model_member_ids: dict = {}
-    for row in all_rows:
-        if row["member_id"] > 0:
-            model_member_ids.setdefault(row["model_id"], set()).add(row["member_id"])
-    # exclude barogram_ensemble (100) — its members are the base models already shown above
-    member_counts = {mid: len(mids) for mid, mids in model_member_ids.items() if mid != 100}
 
     tempest = db.latest_tempest_obs(conn_in)
     nws = db.latest_nws_obs(conn_in)
@@ -4501,7 +3947,6 @@ def generate(
     weight_rows = db.all_weights_with_members(conn_out)
     all_members = db.all_members_for_ensemble_models(conn_out)
     ext_corrected_mae_rows = db.external_corrected_source_mae(conn_out)
-    trajectory_rows = db.forecast_trajectory(conn_out, now - 72 * 3600)
     misses_rows = db.recent_misses(conn_out, now - 14 * 86400)
     _14d = now - 14 * 86400
     _120d = now - 120 * 86400
@@ -4534,11 +3979,9 @@ def generate(
     acc_count_alltime = _counts[0]
 
     lead_times = sorted({row["lead_hours"] for row in mean_rows})
-    charts = _chart_data(mean_rows)
     bias_ts = _bias_timeseries_data(bias_ts_rows)
     heatmap = _heatmap_data(all_time_summary)
     diurnal = _diurnal_data(diurnal_rows)
-    trajectory = _trajectory_data(trajectory_rows)
     recent_misses_html = _recent_misses_html(misses_rows)
     # fixed column set regardless of what's scored yet — a lead with no data
     # shows a dash instead of the column disappearing (e.g. a brand-new lead
@@ -4571,6 +4014,9 @@ def generate(
         )
     overall_accuracy_html = "".join(overall_parts)
     acc_lead_table_html = "".join(lead_parts)
+    conf_rows = [r for r in db.confidence_by_lead(conn_out, 14) if r["lead_hours"] in _KEY_LEADS]
+    conf_run_count = db.accuracy_run_count_last_n(conn_out, 14)
+    conf_lead_table_html = _confidence_lead_table_html(conf_rows, acc_lead_times)
     generated_at = fmt.ts(now)
     machine_label = f'<span class="machine-id">({machine_id})</span>' if machine_id else ""
     _lf = db.get_metadata(conn_out, "last_forecast")
@@ -4622,22 +4068,13 @@ def generate(
     zambretti_panel = _zambretti_panel_html(zambretti)
     tempest_card = _conditions_card("Tempest", tempest, elevation_m)
     nws_card = _conditions_card("NWS", nws_filled, fallback_ts=nws_fallback_ts)
-    slp_offset = _slp_correction(tempest, elevation_m)
     ensemble_section = _ensemble_forecast_section(mean_rows, tempest, elevation_m, nws_forecast)
-    model_runs = _model_runs_html(mean_rows, lead_times, member_counts, member_forecast_rows, slp_offset)
     obs_section = _obs_history_section(tempest_history, nws_history, elevation_m)
     tempest_rows = [_tempest_obs_row(r, elevation_m) for r in tempest_history]
     nws_rows = [_nws_obs_row(r) for r in nws_history]
 
     ext_corrected_html = _external_corrected_source_weights_html(ext_corrected_mae_rows)
     weights_section = _weights_section_html(weight_rows, all_members, ext_corrected_html)
-    fcst_filter_btns = "".join(
-        f'<button class="fcst-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
-        for i, (v, lbl) in enumerate([
-            ("temperature", "Temperature"), ("dewpoint", "Dew Point"),
-            ("pressure", "Pressure"),
-        ])
-    )
     acc_filter_btns = "".join(
         f'<button class="acc-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate([
@@ -4670,11 +4107,6 @@ def generate(
         f'<button class="diurnal-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
         for i, (v, lbl) in enumerate(_var_btns)
     )
-    trajectory_filter_btns = "".join(
-        f'<button class="trajectory-filter-btn{" active" if i == 0 else ""}" data-var="{v}">{lbl}</button>'
-        for i, (v, lbl) in enumerate(_var_btns)
-    )
-
     html = f"""\
 <!DOCTYPE html>
 <html lang="en">
@@ -4704,7 +4136,6 @@ def generate(
       <a href="#analysis">Analysis</a>
       <a href="#weights">Weights</a>
       <a href="#learnings">Learnings</a>
-      <a href="#latest-run">Latest Run</a>
     </nav>
   </div>
 </header>
@@ -4746,6 +4177,9 @@ def generate(
   <p class="chart-legend-note">Skill score vs. climatological mean at each lead time for the selected variable. Negative = worse than climatology.</p>
   <div class="mae-filter-bar">{acc_filter_btns}</div>
   <div class="table-scroll">{acc_lead_table_html}</div>
+  <h3 class="obs-subhead">Confidence by Lead Time (14-Run Average)</h3>
+  <p class="chart-legend-note">Average forecast confidence at each lead time over the last {conf_run_count} runs, for the selected variable.</p>
+  <div class="table-scroll">{conf_lead_table_html}</div>
 </section>
 
 <section class="section analysis-section" id="analysis">
@@ -4762,11 +4196,6 @@ def generate(
   <h3 class="obs-subhead">Score Heatmap</h3>
   <div class="mae-filter-bar">{heatmap_filter_btns}</div>
   <div class="chart-container"><div id="heatmap-chart"></div></div>
-
-  <h3 class="obs-subhead">Forecast Trajectory</h3>
-  <p class="chart-legend-note">How each source's prediction for the most recently scored valid time evolved. Dashed black line = observed.</p>
-  <div class="mae-filter-bar">{trajectory_filter_btns}</div>
-  <div class="chart-container"><div id="trajectory-chart"></div></div>
 
   <h3 class="obs-subhead">Diurnal Stratification</h3>
   <div class="mae-filter-bar">
@@ -4785,15 +4214,6 @@ def generate(
 
 {learnings_section}
 
-<section class="section" id="latest-run">
-  <h2>Latest Forecast Run</h2>
-  <div class="mae-filter-bar">{fcst_filter_btns}</div>
-  <div class="chart-container"><div id="chart-forecast"></div></div>
-  <div class="model-runs" style="margin-top:16px">
-    {model_runs}
-  </div>
-</section>
-
 {obs_section}
 
 </div>
@@ -4804,18 +4224,12 @@ if (LAST_FORECAST && Date.now() / 1000 - LAST_FORECAST > 6 * 3600) {{
   document.getElementById('stale-age-banner').style.display = '';
 }}
 function plotBg() {{
-    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    return dark
-        ? {{ paper: '#252525', plot: '#252525', font: '#cccccc', zero: '#555555' }}
-        : {{ paper: 'white', plot: '#fafafa', font: '#333333', zero: '#dddddd' }};
+    return {{ paper: 'white', plot: '#fafafa', font: '#333333', zero: '#dddddd' }};
 }}
-{_chart_js(charts)}
 {_obs_history_js(tempest_rows, nws_rows)}
-{_member_forecast_js(member_forecast_rows, lead_times)}
 {_member_detail_js(members_10)}
 {_bias_timeseries_js(bias_ts)}
 {_heatmap_js(heatmap)}
-{_trajectory_js(trajectory)}
 {_diurnal_js(diurnal)}
 {_learnings_js(learnings)}
 {_accuracy_table_js()}
