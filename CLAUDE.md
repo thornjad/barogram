@@ -11,19 +11,22 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 |--------------|------------------------------------------------------|
 | `forecast`   | Run all models, write forecast rows                  |
 | `score`      | Score past forecasts against observations            |
-| `prune`      | Null out raw value/spread/observed past a debugging window (default 30 days) |
+| `prune`      | Null out raw value/spread/observed/confidence past a debugging window (default 30 days) |
 | `tune`       | Compute skill-score member weights from scoring history |
 | `dashboard`  | Regenerate dashboard.html                            |
 | `conditions` | Print latest Tempest and NWS observations            |
 | `query`      | Run a SQL query against barogram.db or wxlog         |
+| `insights`   | Emit forecast + accuracy summary as JSON (or `--format table`) |
 
 There is no `run` subcommand. `make run` composes the full cycle — `score`, then
 `forecast`, then `dashboard`, then `prune` — as separate steps, and stops if `forecast`
 exits non-zero (it does so only when no forecast rows were written), so a stale or empty
-forecast never reaches the dashboard or publish step.
+forecast never reaches the dashboard or publish step. `make tune` runs `score` first
+(its own weighting math needs freshly scored rows), then `tune`. `make full` runs
+`tune` then the full `run` cycle — use it when weights are stale and a forecast is due.
 
-`prune` only nulls `value`/`spread`/`observed` on already-scored rows older than the
-cutoff — `error`/`mae`/`scored_at` and everything else stay forever for long-run
+`prune` only nulls `value`/`spread`/`observed`/`confidence` on already-scored rows older
+than the cutoff — `error`/`mae`/`scored_at` and everything else stay forever for long-run
 accuracy trends. It never deletes rows and never touches an unscored row. Freed pages
 aren't reclaimed until `auto_vacuum=incremental` is enabled, which needs a one-time
 full `VACUUM` on the existing db (`sqlite3 barogram.db "pragma auto_vacuum=incremental; vacuum;"`,
@@ -53,10 +56,13 @@ Flags: `--input` targets wxlog; `--format json` emits JSON instead of a table.
    - `MODEL_ID: int` — next unused ID
    - `MODEL_NAME: str`
    - `NEEDS_CONN_IN = True` if the model needs historical input DB access, else omit
-   - `NEEDS_CONN_OUT = True` if the model needs output DB access (ensemble and external_corrected), else omit
+   - `NEEDS_CONN_OUT = True` if the model needs output DB access (ensemble, external_corrected, pressure_consensus_transfer, inverse_pressure_transfer), else omit
    - `NEEDS_WEIGHTS = True` if the model accepts skill-score member weights, else omit
    - `NEEDS_CONF = True` if the model needs the barogram config (e.g. external API URLs), else omit
-   - `run(obs, issued_at, *, conn_in=None, conn_out=None, weights=None, conf=None) -> list[dict]` returning forecast dicts
+   - `NEEDS_ALL_OBS = True` if the model needs the full Tempest obs history for the run (shared/computed once, not per-model), else omit
+   - `NEEDS_LOCATION = True` if the model needs the Tempest station's lat/lon/elevation, else omit
+   - `NEEDS_MATCH_HISTORY = True` if the model feeds per-cell confidence — nearly every model does. Adds two kwargs: `member_history` (scored error history per member, for `models/_confidence.py`'s `confidence_for_cell`) and `default_matches` (shared analog-day matches computed once via `_confidence.find_default_matches`)
+   - `run(obs, issued_at, *, conn_in=None, conn_out=None, weights=None, conf=None, all_obs=None, location=None, member_history=None, default_matches=None) -> list[dict]` returning forecast dicts — accept only the kwargs your `NEEDS_*` flags request
 
 2. Add an `insert or ignore` for the model row to `migrations/001_baseline.sql` (models
    table) and a row for each member to the members table. Single-member models need one
@@ -76,13 +82,17 @@ Every dict returned by `run()` must have these keys:
     "model": str,
     "issued_at": int,    # unix epoch
     "valid_at": int,     # unix epoch
-    "lead_hours": int,   # one of [6, 12, 18, 24]
+    "lead_hours": int,   # 1 through 24 (hourly); see models/_climo_weights.py's LEAD_HOURS
     "variable": str,     # "temperature" | "dewpoint" | "pressure"
     "value": float | None,
     # optional — single-member models may omit; insert_forecasts applies defaults
     "member_id": int,    # default 0; 1+ for named members of a multi-member model
     "spread": float | None,  # default None; non-None only on member_id=0 rows
                              # for multi-member models (ensemble spread)
+    "confidence": float | None,  # default None; per-cell confidence from
+                                  # models/_confidence.py's confidence_for_cell,
+                                  # written on every row (member rows and the
+                                  # member_id=0 aggregate alike) — see docs/confidence.md
 }
 ```
 
@@ -118,7 +128,10 @@ lowercase as well.
 | 7   | airmass_diurnal              | base     | done   |
 | 8   | analog                       | base     | done   |
 | 9   | surface_signs                | base     | done   |
+| 10  | synoptic_state_machine       | base     | done   |
 | 12  | bogo                         | base     | done   |
+| 13  | full_state_analog            | base     | done   |
+| 14  | multivariate_trend           | base     | done   |
 | 15  | dry_airmass_diurnal          | base     | done   |
 | 16  | pressure_trend_cascade       | base     | done   |
 | 17  | pressure_damped_diurnal      | base     | done   |
@@ -152,10 +165,11 @@ lowercase as well.
 | `member_id` | integer | 0 = single/ensemble mean; 1+ = named members |
 | `issued_at` | integer | Unix epoch of forecast run |
 | `valid_at` | integer | Unix epoch of forecast target time |
-| `lead_hours` | integer | one of 6, 12, 18, 24 |
+| `lead_hours` | integer | 1 through 24, hourly |
 | `variable` | text | `temperature`, `dewpoint`, `pressure` |
 | `value` | real | forecast value (NULL = model abstained) |
 | `spread` | real | std dev across members; non-NULL only on member_id=0 for multi-member models |
+| `confidence` | real | per-cell confidence from `models/_confidence.py`; NULL until enough scored history exists. See [docs/confidence.md](docs/confidence.md) |
 | `observed` | real | filled by scorer; actual observed value |
 | `error` | real | filled by scorer; signed error (forecast − observed) |
 | `mae` | real | filled by scorer; absolute error |
@@ -184,6 +198,7 @@ lowercase as well.
 |-----|-------|
 | `schema_version` | current migration version (integer as string) |
 | `last_forecast` | Unix epoch of most recent `forecast` or `run` |
+| `last_prune` | Unix epoch of most recent `prune` |
 | `last_tune` | Unix epoch of most recent `tune` |
 
 ### wxlog-read-only.db (input DB — read-only)
@@ -253,7 +268,7 @@ node screenshots/capture.js
 - `fmt.py` — shared formatting helpers
 - `sync.py` — Syncthing API integration; polls for idle state before each run
 - `migrations/` — numbered SQL files, run automatically at startup
-- `models/` — one file per model
+- `models/` — one file per model, plus shared helpers `_confidence.py` (per-cell confidence), `_similarity.py` (analog-day matching), `_climo_weights.py`, `_utils.py`
 - `docs/` — one Markdown doc per model plus `README.md` index and `database.md` (schema evolution rules)
 
 ## Config

@@ -19,7 +19,7 @@ Comparing member groups against each other reveals how quickly carrying the anom
 
 ## Members
 
-9 base weighting hypotheses (same as model 003) × 4 deviation groups = 36 members. Member_id=0 is the skill-score weighted mean of all 36 members (equal-weighted when no scoring history exists).
+9 base weighting hypotheses (same as model 003) × 6 deviation groups = 54 members. Member_id=0 is the skill-score weighted mean of all 54 members (equal-weighted when no scoring history exists).
 
 | member_id range | group  |
 |-----------------|--------|
@@ -27,8 +27,19 @@ Comparing member groups against each other reveals how quickly carrying the anom
 | 10–18           | k=0.03 |
 | 19–27           | k=0.05 |
 | 28–36           | k=0.10 |
+| 37–45           | a03 (amplifying, beta=0.30) |
+| 46–54           | a06 (amplifying, beta=0.60) |
+
+The a03/a06 groups were added after the original three decay rates all carried the
+anomaly toward zero and none tested whether it should instead grow — see
+`migrations/014_climo_deviation_v2.sql` and `models/climo_deviation.py`'s `_GROUPS`.
 
 ### Deviation Groups
+
+Decay groups fade the anomaly toward zero as lead time increases (formula and % below).
+Amplifying groups instead scale the anomaly by a diurnal factor that peaks at 13:00 local
+(`1 + beta * sin(pi * (valid_hour - 6) / 14)` for valid hours 06:00–20:00, else 1.0) —
+they never decay with lead time, only with time of day.
 
 | Group  | Formula                       | Deviation at +6h | Deviation at +12h | Deviation at +24h |
 |--------|-------------------------------|------------------|-------------------|-------------------|
@@ -36,6 +47,8 @@ Comparing member groups against each other reveals how quickly carrying the anom
 | k=0.03 | `baseline + dev * e^(-0.03h)` | 84%              | 70%               | 49%               |
 | k=0.05 | `baseline + dev * e^(-0.05h)` | 74%              | 55%               | 30%               |
 | k=0.10 | `baseline + dev * e^(-0.10h)` | 55%              | 30%               | 9%                |
+| a03    | `baseline + dev * (1 + 0.30*diurnal)` | 100–130% of dev, peaking at 13:00 local | same | same |
+| a06    | `baseline + dev * (1 + 0.60*diurnal)` | 100–160% of dev, peaking at 13:00 local | same | same |
 
 ## Confidence
 

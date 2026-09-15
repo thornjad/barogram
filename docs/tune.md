@@ -2,7 +2,7 @@
 
 The ensemble models in barogram generate a large field of members per run. Model 3 has 9,
 each using a different recency-weighting scheme for historical observations. Model 4 has
-36, adding four decay-rate hypotheses on top of those 9. Every forecast run collapses that
+54, expanding on those 9 with further decay-rate and deviation hypotheses. Every forecast run collapses that
 field into a single `member_id=0` value that the dashboard shows. How to do that collapsing
 well is the question tuning tries to answer.
 

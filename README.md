@@ -59,14 +59,18 @@ uv run barogram [--config PATH] <command>
 ### Commands
 
 ```
-run           score pending forecasts, run all models, rebuild dashboard
 forecast      run forecast models and write to output database
 score         score past forecasts against observations
+prune         null out raw value/spread/observed/confidence past a debugging window
 tune          compute skill-score member weights from scoring history
 dashboard     generate dashboard.html from latest forecast run
 conditions    show latest observed conditions from the input database
 query         run a SQL query against barogram.db or the input database
+insights      emit forecast + accuracy summary as JSON (or --format table)
 ```
+
+There is no `run` subcommand — `make run` composes `score`, `forecast`, `dashboard`,
+then `prune` as separate CLI calls.
 
 `query` accepts `--input` to target the wxlog database instead of barogram.db, and
 `--format json` for JSON output instead of a table.
@@ -76,7 +80,7 @@ The dashboard requires internet connectivity to load Plotly from CDN.
 ### Typical workflow
 
 `make run` fires automatically (e.g. every 3 hours via a cron job or launchd) and handles the
-score → forecast → dashboard pipeline, stopping if the forecast step fails. `tune` is a separate, infrequent step — run it
+score → forecast → dashboard → prune pipeline, stopping if the forecast step fails. `tune` is a separate, infrequent step — run it
 periodically once enough scoring data has accumulated to meaningfully differentiate ensemble
 members. See [docs/tune.md](docs/tune.md) for details.
 
@@ -85,11 +89,13 @@ members. See [docs/tune.md](docs/tune.md) for details.
 A `Makefile` wraps the common commands for convenience:
 
 ```bash
-make          # score → forecast → dashboard (stops if forecast fails)
+make          # score → forecast → dashboard → prune (stops if forecast fails)
 make run      # same as bare make
+make full     # tune, then the full run cycle above
 make forecast
 make score
-make tune     # tune weights, then rebuild dashboard
+make prune
+make tune     # score, then tune weights
 make dashboard
 make conditions
 make test

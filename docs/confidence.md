@@ -8,10 +8,12 @@ forecast time: given how similar current conditions are to specific days in a
 member's own scored history, and how well that member did on those specific days,
 how much should its number right now be trusted.
 
-Every model and every member has a confidence value, 373 members in total against
-the live database. The meta-ensemble (`barogram_ensemble`) is just another model
-here, combining its members' confidence the same way every other multi-member
-model does.
+Every model and every member has a confidence value — every row in the `members`
+table, across every model. This count grows as models gain members (see
+[database.md](database.md)'s `members` table and `migrations/`), so treat any
+specific total as a snapshot, not a fixed fact. The meta-ensemble
+(`barogram_ensemble`) is just another model here, combining its members'
+confidence the same way every other multi-member model does.
 
 ## Computing confidence
 

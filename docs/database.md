@@ -51,6 +51,7 @@ Compare the output against `001_baseline.sql`. The `metadata` table and `sqlite_
 |-----|------------|-------|
 | `schema_version` | `run_migrations` | Current migration version (integer as string) |
 | `last_forecast` | `forecast`, `run` | Unix epoch of the most recent forecast run |
+| `last_prune` | `prune` | Unix epoch of the most recent prune run |
 | `last_tune` | `tune` | Unix epoch of the most recent tune run |
 
 ## `weights` table
