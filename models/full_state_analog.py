@@ -45,6 +45,11 @@ _MEMBERS = [
                                   "lightning_count"],                                 False, False),
     (7, "full-seasonal",     5,  _ALL_FEATURES,                                      False, True),
     (8, "full-dist-weighted",10, _ALL_FEATURES,                                      True,  False),
+    (9, "full-k3",           3,  _ALL_FEATURES,                                      False, False),
+    (10, "full-k15",         15, _ALL_FEATURES,                                      False, False),
+    (11, "full-k20",         20, _ALL_FEATURES,                                      False, False),
+    (12, "full-k35",         35, _ALL_FEATURES,                                      False, False),
+    (13, "full-k50",         50, _ALL_FEATURES,                                      False, False),
 ]
 _ALL_MEMBER_IDS = [m[0] for m in _MEMBERS]
 
