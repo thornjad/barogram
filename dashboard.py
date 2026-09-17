@@ -3453,7 +3453,8 @@ def _run_browser_html(models: list) -> str:
   <h3 class="obs-subhead">Forecast vs. Actual</h3>
   <p class="chart-legend-note">One forecast run at a time: dashed lines are observed
   temperature/dewpoint, solid lines are each source's forecast across that run's 24-hour
-  window. Default run is the most recent one fully scored. Last 14 days of runs browsable.</p>
+  window. Observed data starts 3 hours before the run to show the incoming trend. Default
+  run is the most recent one fully scored. Last 14 days of runs browsable.</p>
   <div class="run-browser-nav">
     <button id="run-browser-prev" class="run-browser-nav-btn" title="previous run">&#9664;</button>
     <select id="run-browser-select"></select>
@@ -3529,6 +3530,10 @@ function lastObsShapes(winStartSec, winEndSec) {{
     }}];
 }}
 
+const RUN_BROWSER_LEAD_IN_SEC = 3 * 3600;
+let rbBaseShapes = [];
+let rbConfBaseShapes = [];
+
 function renderRunBrowser() {{
     const run = _runBrowserData.runs[runBrowserIndex];
     if (!run) return;
@@ -3537,7 +3542,7 @@ function renderRunBrowser() {{
     const showTemp = document.getElementById('run-browser-temp-cb').checked;
     const showDew = document.getElementById('run-browser-dew-cb').checked;
     const traces = [];
-    const winStart = run.issued_at;
+    const winStart = run.issued_at - RUN_BROWSER_LEAD_IN_SEC;
     const winEnd = run.issued_at + 24 * 3600;
     const obs = _runBrowserData.obs;
     const obsIdx = [];
@@ -3622,17 +3627,19 @@ function renderRunBrowser() {{
         }}
     }});
 
-    Plotly.react('run-browser-chart', traces, {{
+    rbBaseShapes = lastObsShapes(winStart, winEnd);
+    return Plotly.react('run-browser-chart', traces, {{
         height: 420, margin: {{t: 20, b: 40, l: 50, r: 16}},
         font: {{color: plotBg().font}}, paper_bgcolor: plotBg().paper, plot_bgcolor: plotBg().plot,
         yaxis: {{title: '\\u00b0F'}},
         xaxis: {{
-            type: 'date', showspikes: true, spikemode: 'across', spikesnap: 'cursor',
+            type: 'date', range: [winStart * 1000, winEnd * 1000],
+            showspikes: true, spikemode: 'across', spikesnap: 'cursor',
             spikethickness: 1, spikedash: 'solid', spikecolor: '#888',
         }},
         hovermode: 'x',
         showlegend: false,
-        shapes: lastObsShapes(winStart, winEnd),
+        shapes: rbBaseShapes,
     }}, {{responsive: true}});
 }}
 
@@ -3644,8 +3651,8 @@ function renderRunBrowserConfidence() {{
     const showDew = document.getElementById('run-browser-dew-cb').checked;
     const leadTimes = [];
     for (let lead = 1; lead <= 24; lead++) leadTimes.push((run.issued_at + lead * 3600) * 1000);
-    const confWinStart = run.issued_at + 3600;
-    const confWinEnd = run.issued_at + 24 * 3600;
+    const winStart = run.issued_at - RUN_BROWSER_LEAD_IN_SEC;
+    const winEnd = run.issued_at + 24 * 3600;
 
     function compactConf(values) {{
         const xs = [], ys = [];
@@ -3679,27 +3686,55 @@ function renderRunBrowserConfidence() {{
         }}
     }});
 
-    Plotly.react('run-browser-confidence-chart', traces, {{
+    rbConfBaseShapes = lastObsShapes(winStart, winEnd);
+    return Plotly.react('run-browser-confidence-chart', traces, {{
         height: 300, margin: {{t: 20, b: 40, l: 50, r: 16}},
         font: {{color: plotBg().font}}, paper_bgcolor: plotBg().paper, plot_bgcolor: plotBg().plot,
         yaxis: {{title: 'confidence %', range: [0, 100]}},
         xaxis: {{
-            type: 'date', showspikes: true, spikemode: 'across', spikesnap: 'cursor',
+            type: 'date', range: [winStart * 1000, winEnd * 1000],
+            showspikes: true, spikemode: 'across', spikesnap: 'cursor',
             spikethickness: 1, spikedash: 'solid', spikecolor: '#888',
         }},
         hovermode: 'x',
         showlegend: false,
-        shapes: lastObsShapes(confWinStart, confWinEnd),
+        shapes: rbConfBaseShapes,
     }}, {{responsive: true}});
 }}
 
 function renderRunBrowserAll() {{
-    renderRunBrowser();
-    renderRunBrowserConfidence();
+    return Promise.all([renderRunBrowser(), renderRunBrowserConfidence()]);
+}}
+
+function withHoverLine(baseShapes, hoverX) {{
+    return baseShapes.concat([{{
+        type: 'line', xref: 'x', yref: 'paper', x0: hoverX, x1: hoverX, y0: 0, y1: 1,
+        line: {{color: '#888', width: 1, dash: 'solid'}},
+    }}]);
 }}
 
 populateRunBrowserSelect();
-renderRunBrowserAll();
+// Plotly.react's own promise only resolves once each div is a real, fully-initialized
+// graph div — waiting on it (rather than calling .on right after renderRunBrowserAll())
+// avoids a race where .on isn't attached yet on the very first render.
+renderRunBrowserAll().then(function() {{
+    // mirror only the vertical hover line onto the other chart, not Plotly's own
+    // value tooltip — that stays local to whichever chart the cursor is actually on.
+    document.getElementById('run-browser-chart').on('plotly_hover', function(evt) {{
+        if (!evt.points || !evt.points.length) return;
+        Plotly.relayout('run-browser-confidence-chart', {{shapes: withHoverLine(rbConfBaseShapes, evt.points[0].x)}});
+    }});
+    document.getElementById('run-browser-chart').on('plotly_unhover', function() {{
+        Plotly.relayout('run-browser-confidence-chart', {{shapes: rbConfBaseShapes}});
+    }});
+    document.getElementById('run-browser-confidence-chart').on('plotly_hover', function(evt) {{
+        if (!evt.points || !evt.points.length) return;
+        Plotly.relayout('run-browser-chart', {{shapes: withHoverLine(rbBaseShapes, evt.points[0].x)}});
+    }});
+    document.getElementById('run-browser-confidence-chart').on('plotly_unhover', function() {{
+        Plotly.relayout('run-browser-chart', {{shapes: rbBaseShapes}});
+    }});
+}});
 
 document.getElementById('run-browser-select').addEventListener('change', function() {{
     runBrowserIndex = parseInt(this.value, 10);
