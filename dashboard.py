@@ -220,6 +220,9 @@ h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 #run-browser-select { padding: 4px 8px; font-size: 12px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; color: #444; }
 .run-browser-var-toggle { display: flex; justify-content: center; gap: 18px; margin-bottom: 10px; font-size: 12px; color: #444; }
 .run-browser-checkboxes { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 4px 10px; margin-bottom: 10px; font-size: 12px; color: #444; }
+.run-browser-model-actions { display: flex; justify-content: center; gap: 8px; margin-bottom: 8px; }
+.run-browser-select-btn { padding: 3px 9px; font-size: 11px; font-family: inherit; background: #fff; border: 1px solid #ccc; border-radius: 3px; cursor: pointer; color: #666; }
+.run-browser-select-btn:hover { background: #f0f0f0; }
 .run-browser-checkbox { display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
 .run-browser-mid { display: inline-block; width: 2em; text-align: right; margin-right: 4px; color: #888; font-variant-numeric: tabular-nums; }
 .run-browser-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px; flex-shrink: 0; border: 1px solid rgba(128,128,128,.4); }
@@ -933,7 +936,7 @@ def _zambretti_panel_html(z: dict | None) -> str:
         f'</p>'
         f'<p class="zambretti-algo">'
         f'Zambretti algorithm: sea-level pressure, trend, wind direction, season, '
-        f'as of ~9 AM solar time'
+        f'as of ~09:00 solar time'
         f'</p>'
         f'</div>'
     )
@@ -973,7 +976,7 @@ def _conditions_card(label: str, obs, elevation_m: float = 0.0, fallback_ts: dic
         ts = fallback_ts.get(field)
         if ts is None:
             return ""
-        t = datetime.fromtimestamp(ts, tz=fmt.CENTRAL).strftime("%-I:%M %p").lstrip("0")
+        t = datetime.fromtimestamp(ts, tz=fmt.CENTRAL).strftime("%H:%M")
         return f' <span class="obs-fallback">({t})</span>'
 
     if label == "Tempest":
@@ -1632,12 +1635,12 @@ def _ensemble_forecast_section(
         return best, nws_forecast[best]
 
     def _fmt_time(ts: int) -> str:
-        return datetime.fromtimestamp(ts, tz=fmt.CENTRAL).strftime("%-I %p").lstrip("0")
+        return datetime.fromtimestamp(ts, tz=fmt.CENTRAL).strftime("%H:%M")
 
     def _lead_label(lead: int) -> str:
         vat = lead_valid_at.get(lead)
         if vat:
-            return datetime.fromtimestamp(vat, tz=fmt.CENTRAL).strftime("%-I %p").lstrip("0")
+            return datetime.fromtimestamp(vat, tz=fmt.CENTRAL).strftime("%H:%M")
         return f"+{lead}h"
 
     def _ref_panel(label: str, temp_val, dew_val,
@@ -3464,6 +3467,10 @@ def _run_browser_html(models: list) -> str:
     <label class="run-browser-checkbox"><input type="checkbox" id="run-browser-temp-cb" checked>Temperature</label>
     <label class="run-browser-checkbox"><input type="checkbox" id="run-browser-dew-cb" checked>Dew Point</label>
   </div>
+  <div class="run-browser-model-actions">
+    <button id="run-browser-select-all" class="run-browser-select-btn" type="button">Select all</button>
+    <button id="run-browser-deselect-all" class="run-browser-select-btn" type="button">Deselect all</button>
+  </div>
   <div class="run-browser-checkboxes">
     {checkboxes_html}
   </div>
@@ -3506,7 +3513,7 @@ function populateRunBrowserSelect() {{
     _runBrowserData.runs.forEach(function(run, i) {{
         const d = new Date(run.issued_at * 1000);
         const label = d.toLocaleString('en-US', {{
-            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: false
         }}) + (run.fully_scored ? '' : ' (scoring)');
         const opt = document.createElement('option');
         opt.value = i;
@@ -3750,6 +3757,14 @@ document.querySelectorAll(
     '#run-browser-obs-cb, #run-browser-temp-cb, #run-browser-dew-cb, .run-browser-model-cb'
 ).forEach(function(cb) {{
     cb.addEventListener('change', renderRunBrowserAll);
+}});
+document.getElementById('run-browser-select-all').addEventListener('click', function() {{
+    document.querySelectorAll('.run-browser-model-cb').forEach(function(cb) {{ cb.checked = true; }});
+    renderRunBrowserAll();
+}});
+document.getElementById('run-browser-deselect-all').addEventListener('click', function() {{
+    document.querySelectorAll('.run-browser-model-cb').forEach(function(cb) {{ cb.checked = false; }});
+    renderRunBrowserAll();
 }});
 """
 

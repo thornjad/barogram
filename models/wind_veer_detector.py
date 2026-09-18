@@ -21,6 +21,7 @@
 #                            positives from noisy near-calm direction readings
 
 import statistics
+import time
 
 import db
 import models._confidence as _confidence
@@ -48,7 +49,41 @@ _MEMBERS = [
     (2, "veer_lowgate"),
     (3, "veer_gust_confirmed"),
 ]
-_ALL_MEMBER_IDS = [mid for mid, _ in _MEMBERS]
+
+# members 4-5 (added 2026-09-17): veer_nogate (member 1) has no wind-speed floor
+# by design -- it exists to catch the 2026-09-12 case, a real airmass veer at
+# 0.1-0.8 m/s. Root cause on the 2026-09-16 09:00 run: the same no-floor
+# classification also fires on plain compass noise from near-calm, direction-
+# unstable wind during a daytime solar ramp, with no way to tell the two apart.
+# Both new members restrict veer_nogate's classification to the low-light
+# conditions it was actually built for, instead of loosening or gating the
+# original member.
+_NIGHT_SOLAR_THRESHOLD = 5.0   # W/m^2; below this counts as dark enough to trust
+_NIGHT_HOURS = frozenset({22, 23, 0, 1, 2, 3, 4, 5})  # local hour-of-day
+
+_EXTRA_MEMBERS = [
+    (4, "veer_solar_gated"),
+    (5, "veer_hour_gated"),
+]
+_ALL_MEMBERS = _MEMBERS + _EXTRA_MEMBERS
+_ALL_MEMBER_IDS = [mid for mid, _ in _ALL_MEMBERS]
+
+
+def _extra_category(mid, window_obs, row_now):
+    """veer_nogate's classification, trusted only in the low-light conditions
+    it was designed for -- solar_radiation-gated (mid 4) or, as a cheaper
+    proxy needing no solar sensor, local-hour-gated (mid 5)."""
+    cat = _rotation_category(window_obs, 0.0)
+    if cat is None:
+        return None
+    if mid == 4:
+        solar = row_now.get("solar_radiation")
+        if solar is not None and solar > _NIGHT_SOLAR_THRESHOLD:
+            return None
+        return cat
+    # mid == 5
+    hour = time.localtime(row_now["timestamp"]).tm_hour
+    return cat if hour in _NIGHT_HOURS else None
 
 
 def _rotation_category(window_obs, min_wind_ms):
@@ -104,12 +139,14 @@ def _build_conditionals(all_obs):
     sorted_ts = sorted(by_ts)
     all_cols = list(VARIABLES.values())
     accum = {mid: {} for mid, _ in _MEMBERS}
+    accum.update({mid: {} for mid, _ in _EXTRA_MEMBERS})
 
     for ts in sorted_ts:
         window = _obs_in_window(sorted_ts, by_ts, ts - _SIGNAL_WINDOW_SEC, ts)
         row_now = by_ts[ts]
-        for mid, _ in _MEMBERS:
-            cat = _category(mid, window)
+        cats = {mid: _category(mid, window) for mid, _ in _MEMBERS}
+        cats.update({mid: _extra_category(mid, window, row_now) for mid, _ in _EXTRA_MEMBERS})
+        for mid, cat in cats.items():
             if cat is None:
                 continue
             for lead in LEAD_HOURS:
@@ -142,6 +179,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
         sorted_ts, by_ts, obs["timestamp"] - _SIGNAL_WINDOW_SEC, obs["timestamp"]
     )
     live_cat = {mid: _category(mid, window_obs) for mid, _ in _MEMBERS}
+    live_cat.update({mid: _extra_category(mid, window_obs, obs) for mid, _ in _EXTRA_MEMBERS})
 
     cell_confidences_by_var_lead = {
         (variable, lead): _confidence.member_confidences(
@@ -152,7 +190,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
     }
 
     rows = []
-    for mid, _ in _MEMBERS:
+    for mid, _ in _ALL_MEMBERS:
         cat = live_cat[mid]
         for variable, col in VARIABLES.items():
             obs_val = obs[col]
@@ -179,7 +217,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
             valid_at = obs["timestamp"] + lead * 3600
             cell_confidences = cell_confidences_by_var_lead[(variable, lead)]
             valid_pairs = []
-            for mid, _ in _MEMBERS:
+            for mid, _ in _ALL_MEMBERS:
                 cat = live_cat[mid]
                 obs_val = obs[col]
                 if cat is None or obs_val is None:

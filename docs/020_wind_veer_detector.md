@@ -22,6 +22,19 @@ at all for this event. This model tests whether direction is still informative b
 | 1 | veer_nogate | none (only true zero-wind excluded) |
 | 2 | veer_lowgate | 0.3 m/s |
 | 3 | veer_gust_confirmed | none, but a veer/back call is discarded unless a coincident gust/avg ratio uptick (> 1.8) also occurs in the same window |
+| 4 | veer_solar_gated | none, but the call is discarded unless solar_radiation is under 5 W/m² (dark enough to trust) |
+| 5 | veer_hour_gated | none, but the call is only trusted between 22:00 and 06:00 local |
+
+### Members 4-5 (added 2026-09-17)
+
+Root cause on the 2026-09-16 09:00 run: `veer_nogate`'s lack of a wind-speed floor,
+which exists to catch a real overnight veer like 2026-09-12's, also let it classify
+plain compass noise from near-calm, direction-unstable wind during a daytime solar
+ramp as a genuine veer/backing event — then applied that category's historical
+conditional delta, which forecast cooling on a day that was actually heating hard.
+`veer_solar_gated` and `veer_hour_gated` restrict `veer_nogate`'s classification to
+the low-light conditions the member was actually designed for, rather than loosening
+or gating member 1 itself.
 
 ## Algorithm
 

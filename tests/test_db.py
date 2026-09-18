@@ -150,6 +150,101 @@ def test_nearest_tempest_obs_empty_table():
     assert db.nearest_tempest_obs(conn, _T) is None
 
 
+def test_nearest_tempest_obs_includes_migration_004_columns():
+    conn = make_input_db()
+    conn.execute(
+        """
+        insert into tempest_obs
+            (station_id, timestamp, air_temp, battery, lightning_avg_distance,
+             lightning_strike_last_distance, nc_rain)
+        values ('KTEST', ?, 20.0, 2.6, 12.0, 8.5, 0.4)
+        """,
+        (_T,),
+    )
+    row = db.nearest_tempest_obs(conn, _T)
+    assert row["battery"] == 2.6
+    assert row["lightning_avg_distance"] == 12.0
+    assert row["lightning_strike_last_distance"] == 8.5
+    assert row["nc_rain"] == 0.4
+
+
+def test_nearest_tempest_obs_tolerates_null_migration_004_columns():
+    # an observation predating the 2026-09-18 migration (or a dropped report)
+    # leaves these columns NULL -- must not raise, key must still be present
+    conn = make_input_db()
+    _seed_obs(conn, _T)
+    row = db.nearest_tempest_obs(conn, _T)
+    assert row["battery"] is None
+    assert row["lightning_avg_distance"] is None
+    assert row["lightning_strike_last_distance"] is None
+    assert row["nc_rain"] is None
+
+
+# --- full_analog_candidates ---
+
+def _seed_analog_day(conn, ts, air_temp, **extra):
+    cols = ["station_id", "timestamp", "air_temp"] + list(extra.keys())
+    placeholders = ", ".join(["?"] * len(cols))
+    conn.execute(
+        f"insert into tempest_obs ({', '.join(cols)}) values ({placeholders})",
+        ["KTEST", ts, air_temp] + list(extra.values()),
+    )
+
+
+def test_full_analog_candidates_includes_migration_004_columns():
+    conn = make_input_db()
+    now = _T
+    _seed_analog_day(conn, now - 86400, 15.0, battery=2.7, lightning_avg_distance=5.0,
+                      lightning_strike_last_distance=3.0, nc_rain=0.2)
+    candidates = db.full_analog_candidates(conn, now, lookback_sec=5 * 86400)
+    assert len(candidates) == 1
+    row = dict(candidates[0])
+    assert row["battery"] == 2.7
+    assert row["lightning_avg_distance"] == 5.0
+    assert row["lightning_strike_last_distance"] == 3.0
+    assert row["nc_rain"] == 0.2
+
+
+def test_full_analog_candidates_tolerates_null_migration_004_columns():
+    conn = make_input_db()
+    now = _T
+    _seed_analog_day(conn, now - 86400, 15.0)  # no migration-004 columns set
+    candidates = db.full_analog_candidates(conn, now, lookback_sec=5 * 86400)
+    assert len(candidates) == 1
+    row = dict(candidates[0])
+    assert row["battery"] is None
+    assert row["lightning_avg_distance"] is None
+    assert row["lightning_strike_last_distance"] is None
+    assert row["nc_rain"] is None
+
+
+# --- tempest_obs_in_range ---
+
+def test_tempest_obs_in_range_includes_precip_type_and_lightning_3hr():
+    conn = make_input_db()
+    conn.execute(
+        """
+        insert into tempest_obs
+            (station_id, timestamp, air_temp, precip_type, lightning_strike_count_last_3hr)
+        values ('KTEST', ?, 20.0, 2, 4)
+        """,
+        (_T,),
+    )
+    rows = db.tempest_obs_in_range(conn, _T - 10, _T + 10)
+    assert len(rows) == 1
+    assert rows[0]["precip_type"] == 2
+    assert rows[0]["lightning_strike_count_last_3hr"] == 4
+
+
+def test_tempest_obs_in_range_tolerates_null_precip_type_and_lightning_3hr():
+    conn = make_input_db()
+    _seed_obs(conn, _T)
+    rows = db.tempest_obs_in_range(conn, _T - 10, _T + 10)
+    assert len(rows) == 1
+    assert rows[0]["precip_type"] is None
+    assert rows[0]["lightning_strike_count_last_3hr"] is None
+
+
 # --- open_input_db ---
 
 def test_open_input_db_missing_file():

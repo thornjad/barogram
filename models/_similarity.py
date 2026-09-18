@@ -18,6 +18,14 @@ def _arc_delta(a: float, b: float) -> float:
     return min(d, 360.0 - d)
 
 
+def signed_arc_delta(a: float, b: float) -> float:
+    """Signed circular delta (a - b) in degrees, wrapped to (-180, 180].
+    Positive means a is clockwise from b (veering); negative means
+    counterclockwise (backing). Used for wind-direction trend, where the
+    direction of change matters and not just the magnitude _arc_delta gives."""
+    return ((a - b + 180.0) % 360.0) - 180.0
+
+
 def norm_sigmas(candidates: list[dict], features: list[str]) -> dict[str, float | None]:
     """Per-feature population std dev across candidates; None means skip the
     feature. Circular features (wind_direction) get a fixed sigma instead of

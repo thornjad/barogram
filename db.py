@@ -124,9 +124,11 @@ def nearest_tempest_obs(
 ) -> dict | None:
     row = conn.execute(
         """
-        select t.air_temp, t.dew_point, t.station_pressure, t.wind_avg,
+        select t.timestamp, t.air_temp, t.dew_point, t.station_pressure, t.wind_avg,
                t.wind_direction, t.solar_radiation, t.uv_index, t.wind_gust,
-               t.lightning_count, t.precip_accum_day
+               t.lightning_count, t.precip_accum_day, t.precip, t.wind_lull,
+               t.relative_humidity, t.battery, t.lightning_avg_distance,
+               t.lightning_strike_last_distance, t.nc_rain
         from tempest_obs t
         join stations s on s.station_id = t.station_id
         where s.source = 'tempest'
@@ -1062,7 +1064,8 @@ def tempest_obs_in_range(conn: sqlite3.Connection, start_ts: int, end_ts: int) -
         """
         select t.timestamp, t.air_temp, t.dew_point, t.station_pressure, t.wind_avg,
                t.wind_direction, t.solar_radiation, t.uv_index, t.wind_gust,
-               t.lightning_count, t.precip_accum_day
+               t.lightning_count, t.precip_accum_day, t.precip_type,
+               t.lightning_strike_count_last_3hr
         from tempest_obs t
         join stations s on s.station_id = t.station_id
         where s.source = 'tempest'
@@ -1340,6 +1343,13 @@ def full_analog_candidates(
                 t.uv_index,
                 t.precip_accum_day,
                 t.lightning_count,
+                t.precip,
+                t.wind_lull,
+                t.relative_humidity,
+                t.battery,
+                t.lightning_avg_distance,
+                t.lightning_strike_last_distance,
+                t.nc_rain,
                 date(t.timestamp, 'unixepoch', 'localtime') as obs_date,
                 cast(strftime('%H', t.timestamp, 'unixepoch', 'localtime') as integer) * 3600
                 + cast(strftime('%M', t.timestamp, 'unixepoch', 'localtime') as integer) * 60
@@ -1363,7 +1373,9 @@ def full_analog_candidates(
         )
         select timestamp, air_temp, dew_point, station_pressure, wind_avg,
                wind_direction, wind_gust, solar_radiation, uv_index,
-               precip_accum_day, lightning_count, obs_date
+               precip_accum_day, lightning_count, precip, wind_lull,
+               relative_humidity, battery, lightning_avg_distance,
+               lightning_strike_last_distance, nc_rain, obs_date
         from ranked
         where rn = 1
         order by timestamp desc

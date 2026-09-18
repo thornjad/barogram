@@ -19,7 +19,7 @@ and applies it directly to the diurnal deviation from the daily mean.
 
 | member_id | name | window | pressure boost |
 |-----------|------|--------|----------------|
-| 0 | — | weighted mean of 1–6 | — |
+| 0 | — | weighted mean of 1–7 | — |
 | 1 | 24h-amp | 24h | no |
 | 2 | 48h-amp | 48h | no |
 | 3 | 72h-amp | 72h | no |

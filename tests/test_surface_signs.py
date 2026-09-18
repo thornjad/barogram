@@ -180,8 +180,13 @@ def test_solar_cloud_clear():
 
 # --- _convective_category ---
 
-def _make_conv_obs(lightning=0, precip=0.0, ts=0):
-    return {"lightning_count": lightning, "precip_accum_day": precip, "timestamp": ts}
+def _make_conv_obs(lightning=0, precip=0.0, ts=0, precip_type=None, lightning_3hr=None):
+    row = {"lightning_count": lightning, "precip_accum_day": precip, "timestamp": ts}
+    if precip_type is not None:
+        row["precip_type"] = precip_type
+    if lightning_3hr is not None:
+        row["lightning_strike_count_last_3hr"] = lightning_3hr
+    return row
 
 
 def test_convective_lightning_priority_over_precip():
@@ -225,3 +230,51 @@ def test_convective_no_obs_1h_ago():
     window = [_make_conv_obs(lightning=0)]
     obs_now = _make_conv_obs(precip=5.0)
     assert _convective_category(window, None, obs_now) == "dry"
+
+
+def test_convective_hail_beats_lightning_and_precip():
+    # even with active lightning and precipitation both present, precip_type=2
+    # (hail) on the current observation wins
+    window = [_make_conv_obs(lightning=3)]
+    obs_1h = _make_conv_obs(precip=0.0)
+    obs_now = _make_conv_obs(precip=5.0, precip_type=2)
+    assert _convective_category(window, obs_1h, obs_now) == "hail"
+
+
+def test_convective_precip_type_rain_triggers_without_accum_delta():
+    # precip_type=1 (rain) on the current obs is enough on its own, even when
+    # the accumulation-based rate check wouldn't have fired
+    window = [_make_conv_obs(lightning=0)]
+    obs_1h = _make_conv_obs(precip=1.0)
+    obs_now = _make_conv_obs(precip=1.05, precip_type=1)  # delta below threshold
+    assert _convective_category(window, obs_1h, obs_now) == "precip"
+
+
+def test_convective_onboard_lightning_counter_preferred_when_present():
+    # lightning_strike_count_last_3hr=0 on the current obs is trusted even
+    # though the manual window sum would say otherwise -- the onboard
+    # counter is authoritative once present
+    window = [_make_conv_obs(lightning=5)]
+    obs_1h = _make_conv_obs(precip=0.0)
+    obs_now = _make_conv_obs(precip=0.0, lightning_3hr=0)
+    assert _convective_category(window, obs_1h, obs_now) == "dry"
+
+
+def test_convective_onboard_lightning_counter_catches_gap_manual_sum_misses():
+    # the reverse: the onboard counter says strikes occurred even though the
+    # (possibly gappy) manual window sum saw none
+    window = [_make_conv_obs(lightning=0)]
+    obs_1h = _make_conv_obs(precip=0.0)
+    obs_now = _make_conv_obs(precip=0.0, lightning_3hr=2)
+    assert _convective_category(window, obs_1h, obs_now) == "lightning"
+
+
+def test_convective_missing_new_fields_falls_back_unchanged():
+    # no precip_type or lightning_strike_count_last_3hr key at all (pre-2026-09-18
+    # observation, or a dropped report) -- behaves exactly as before this edit
+    window = [_make_conv_obs(lightning=2)]
+    obs_1h = _make_conv_obs(precip=0.0)
+    obs_now = _make_conv_obs(precip=0.0)
+    assert "precip_type" not in obs_now
+    assert "lightning_strike_count_last_3hr" not in obs_now
+    assert _convective_category(window, obs_1h, obs_now) == "lightning"

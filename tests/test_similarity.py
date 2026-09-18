@@ -23,6 +23,26 @@ def test_norm_sigmas_circular_feature_gets_fixed_sigma():
     assert sigmas["wind_direction"] == sim._WIND_DIR_SIGMA
 
 
+# --- signed_arc_delta ---
+
+def test_signed_arc_delta_veering_wraps_forward():
+    """350 -> 10 is a 20-degree clockwise veer, not a -340 jump."""
+    assert abs(sim.signed_arc_delta(10.0, 350.0) - 20.0) < 1e-9
+
+
+def test_signed_arc_delta_backing_wraps_backward():
+    """10 -> 350 is a 20-degree counterclockwise backing, not +340."""
+    assert abs(sim.signed_arc_delta(350.0, 10.0) - (-20.0)) < 1e-9
+
+
+def test_signed_arc_delta_no_wraparound_matches_plain_diff():
+    assert abs(sim.signed_arc_delta(100.0, 90.0) - 10.0) < 1e-9
+
+
+def test_signed_arc_delta_zero_for_identical():
+    assert sim.signed_arc_delta(200.0, 200.0) == 0.0
+
+
 # --- distance: circular wraparound ---
 
 def test_distance_wind_direction_wraparound_is_small():

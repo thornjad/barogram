@@ -35,6 +35,7 @@ import models.pressure_consensus_transfer as pressure_consensus_transfer
 import models.pressure_damped_diurnal as pressure_damped_diurnal
 import models.pressure_tendency as pressure_tendency
 import models.pressure_trend_cascade as pressure_trend_cascade
+import models.solar_ramp as solar_ramp
 import models.surface_signs as surface_signs
 import models.synoptic_state_machine as synoptic_state_machine
 import models.tempest_forecast as tempest_forecast_model
@@ -72,6 +73,7 @@ _MODELS = [
     wind_veer_detector,
     frontal_trigger,
     dewpoint_tendency,
+    solar_ramp,
     pressure_consensus_transfer,  # reads pressure predictions written above, this run
     inverse_pressure_transfer,    # reads temp/dewpoint predictions written above, this run
     nws_model,

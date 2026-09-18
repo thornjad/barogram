@@ -45,21 +45,27 @@ produced non-None values.
 | ID | Name | Signals | State space | Notes |
 |----|------|---------|-------------|-------|
 | 0 | ensemble mean | all members | — | sector-weighted mean + spread |
-| 1 | full-4 | wind, dp, cloud, convective | 3×3×3×3 = 81 | abstains at night (cloud = None) |
-| 2 | no-cloud | wind, dp, convective | 3×3×3 = 27 | works at night; drops cloud signal |
+| 1 | full-4 | wind, dp, cloud, convective | 3×3×3×4 = 108 | abstains at night (cloud = None) |
+| 2 | no-cloud | wind, dp, convective | 3×3×4 = 36 | works at night; drops cloud signal |
 | 3 | wind-moisture | wind, dp | 3×3 = 9 | the two most synoptically stable signals |
-| 4 | moisture-convective | dp, convective | 3×3 = 9 | moisture trend and active precip |
-| 5 | coarse-4 | coarsened wind, dp, cloud, convective | 2×2×2×3 = 24 | abstains at night; more data per cell |
-| 6 | full-4+ptend | wind, dp, cloud, convective, pressure tendency | 3×3×3×3×3 = 243 | abstains at night; adds pressure trend |
-| 7 | no-cloud+ptend | wind, dp, convective, pressure tendency | 3×3×3×3 = 81 | works at night; adds pressure trend |
+| 4 | moisture-convective | dp, convective | 3×4 = 12 | moisture trend and active precip |
+| 5 | coarse-4 | coarsened wind, dp, cloud, convective | 2×2×2×4 = 32 | abstains at night; more data per cell |
+| 6 | full-4+ptend | wind, dp, cloud, convective, pressure tendency | 3×3×3×4×3 = 324 | abstains at night; adds pressure trend |
+| 7 | no-cloud+ptend | wind, dp, convective, pressure tendency | 3×3×4×3 = 108 | works at night; adds pressure trend |
 | 8 | moisture-only | dp | 3 | dp trend alone |
-| 9 | convective-only | convective | 3 | convective alone; never abstains for a missing signal |
+| 9 | convective-only | convective | 4 | convective alone; never abstains for a missing signal |
 | 10 | moisture-ptend | dp, pressure tendency | 3×3 = 9 | dp paired with ptend instead of convective |
-| 11 | moisture-conv-ptend | dp, convective, pressure tendency | 3×3×3 = 27 | the three signals that don't require cloud or wind |
+| 11 | moisture-conv-ptend | dp, convective, pressure tendency | 3×4×3 = 36 | the three signals that don't require cloud or wind |
 | 12 | moisture-cloud | dp, cloud | 3×3 = 9 | abstains at night; dp paired with cloud instead of convective |
-| 13 | no-wind | dp, cloud, convective, pressure tendency | 3×3×3×3 = 81 | full-4+ptend minus wind rotation |
+| 13 | no-wind | dp, cloud, convective, pressure tendency | 3×3×4×3 = 108 | full-4+ptend minus wind rotation |
 | 14 | wind-only | wind | 3 | wind rotation alone; weak contrast baseline |
-| 15 | convective-cloud | convective, cloud | 3×3 = 9 | abstains at night; sky-condition pair, no moisture signal |
+| 15 | convective-cloud | convective, cloud | 4×3 = 12 | abstains at night; sky-condition pair, no moisture signal |
+
+Convective gained a 4th category ("hail") on 2026-09-18 when `surface_signs`'s shared
+`_convective_category` was edited in place to read two new Tempest fields — every
+member above that includes the convective signal inherits the larger state space
+automatically, since nothing here enumerates a fixed category count. "hail" starts
+with zero historical samples and abstains the same as any new category would.
 
 Members 8–15 riff on member 4 (moisture-convective), the smallest, most consistently
 available member of the original seven: they explore why it holds up (few cells, no
@@ -108,9 +114,11 @@ night (solar ≤ 5 W/m²) and when fewer than 10 historical samples exist for th
 
 ### convective state
 
-Lightning takes priority. If the 3h observation window contains any lightning strikes,
-the state is **lightning**. If the 1h precipitation accumulation rate exceeds 0.5 mm/h,
-the state is **precip**. Otherwise **dry**. Always returns a non-None category.
+Same shared `_convective_category` as `surface_signs` member 4 — see
+[009_surface_signs.md](009_surface_signs.md) for the full hail/lightning/precip/dry
+priority order and the 2026-09-18 fields (`precip_type`,
+`lightning_strike_count_last_3hr`) that feed it, both tolerant of being absent on any
+given observation. Always returns a non-None category.
 
 ### pressure tendency
 
@@ -158,7 +166,7 @@ reasons.
 - **full-4, coarse-4, and full-4+ptend** are blind at night because the cloud signal is
   unavailable. Members 2, 3, 4, and no-cloud+ptend provide coverage during overnight
   hours.
-- **full-4** has 81 possible states and **full-4+ptend** has 243. Both will abstain
+- **full-4** has 108 possible states and **full-4+ptend** has 324. Both will abstain
   frequently in the first year of data. Performance improves as history accumulates;
   members 3, 4, and 5 provide denser alternatives in the interim.
 - The model cannot distinguish between states that have identical signal categories but

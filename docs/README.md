@@ -23,6 +23,7 @@
 | 20 | wind_veer_detector | [020_wind_veer_detector.md](020_wind_veer_detector.md) |
 | 21 | frontal_trigger | [021_frontal_trigger.md](021_frontal_trigger.md) |
 | 22 | dewpoint_tendency | [022_dewpoint_tendency.md](022_dewpoint_tendency.md) |
+| 23 | solar_ramp | [023_solar_ramp.md](023_solar_ramp.md) |
 | 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
 | 200 | nws | — |
 | 201 | tempest_forecast | — |

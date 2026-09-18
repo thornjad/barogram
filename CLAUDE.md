@@ -140,6 +140,7 @@ lowercase as well.
 | 20  | wind_veer_detector           | base     | done   |
 | 21  | frontal_trigger              | base     | done   |
 | 22  | dewpoint_tendency            | base     | done   |
+| 23  | solar_ramp                   | base     | done   |
 | 100 | barogram_ensemble            | ensemble | done   |
 | 200 | nws                          | external | done   |
 | 201 | tempest_forecast             | external | done   |

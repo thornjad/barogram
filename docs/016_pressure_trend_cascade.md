@@ -30,6 +30,23 @@ from *that* predicted total delta.
 All four reuse pressure_tendency's polynomial-fit and mean-reversion functions directly
 — the numerics are the same, only what feeds the transfer function differs.
 
+- **sector_conditioned_extrap** (added 2026-09-17) — reuses fast_damped_extrap's own
+  pressure extrapolation unchanged, but applies a transfer function trained separately
+  per time-of-day sector instead of the pooled one
+- **solar_gated_extrap** (added 2026-09-17) — same pressure extrapolation and the same
+  pooled transfer function as fast_damped_extrap, but abstains on temperature/dewpoint
+  entirely while solar_radiation is climbing more than 1.0 W/m²/min (an active heating
+  ramp), instead of applying a transfer function trained mostly on non-solar cases
+
+### Root cause for members 5-6
+
+fast_damped_extrap carried ensemble weight up to 0.84 on the 2026-09-16 09:00 run and
+forecast a temp drop while pressure rose smoothly all morning under strong clear-sky
+solar heating. `_build_delta_transfer_fns` pools every rising-pressure case in history
+into one regression, dominated by post-frontal cooling — it has no way to distinguish
+that from a high building under a warming sun. Both new members target this gap without
+touching members 1-4's own extrapolation.
+
 ## Transfer functions
 
 Trained on total observed pressure delta over `[t, t+lead]` versus each variable's own

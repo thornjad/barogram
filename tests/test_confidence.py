@@ -1,3 +1,4 @@
+import datetime
 import time
 
 import models._confidence as confidence
@@ -11,16 +12,16 @@ def _row(variable, lead_hours, issued_at, mae):
 
 
 def _insert_obs(conn, ts: int, air_temp=20.0, dew_point=12.0,
-                station_pressure=1013.0, wind_avg=3.0):
+                station_pressure=1013.0, wind_avg=3.0, battery=None):
     conn.execute(
         """
         insert into tempest_obs
             (station_id, timestamp, air_temp, dew_point, station_pressure,
              wind_avg, wind_gust, wind_direction, precip_accum_day,
-             solar_radiation, uv_index, lightning_count)
-        values ('KTEST', ?, ?, ?, ?, ?, null, null, 0.0, 0.0, 0.0, 0)
+             solar_radiation, uv_index, lightning_count, battery)
+        values ('KTEST', ?, ?, ?, ?, ?, null, null, 0.0, 0.0, 0.0, 0, ?)
         """,
-        (ts, air_temp, dew_point, station_pressure, wind_avg),
+        (ts, air_temp, dew_point, station_pressure, wind_avg, battery),
     )
 
 
@@ -122,6 +123,73 @@ def test_blended_confidence_uniform_group_reproduces_identical_value():
     assert a == b
 
 
+# --- _compute_trends ---
+
+def test_compute_trends_none_prior_returns_all_none():
+    now = {"timestamp": 1000, "air_temp": 20.0}
+    result = confidence._compute_trends(now, None)
+    assert all(v is None for v in result.values())
+    assert set(result.keys()) == set(confidence._TREND_FEATURES)
+
+
+def test_compute_trends_plain_diff():
+    now = {"timestamp": 20000, "air_temp": 22.0}
+    prior = {"timestamp": 10000, "air_temp": 18.0}
+    result = confidence._compute_trends(now, prior)
+    assert abs(result["air_temp_trend"] - 4.0) < 1e-9
+
+
+def test_compute_trends_missing_value_is_none():
+    now = {"timestamp": 20000, "air_temp": None}
+    prior = {"timestamp": 10000, "air_temp": 18.0}
+    result = confidence._compute_trends(now, prior)
+    assert result["air_temp_trend"] is None
+
+
+def test_compute_trends_wind_direction_uses_signed_veer():
+    now = {"timestamp": 20000, "wind_direction": 10.0}
+    prior = {"timestamp": 10000, "wind_direction": 350.0}
+    result = confidence._compute_trends(now, prior)
+    assert abs(result["wind_direction_trend"] - 20.0) < 1e-9
+
+
+def _local_midnight_ts(year, month, day):
+    """Local-midnight epoch seconds, matching datetime.fromtimestamp's own
+    (local) interpretation -- epoch-day-boundary arithmetic (ts % 86400)
+    assumes UTC and is wrong everywhere not on UTC."""
+    return int(datetime.datetime(year, month, day, 0, 0, 0).timestamp())
+
+
+def test_compute_trends_precip_accum_day_same_date_is_plain_diff():
+    midnight = _local_midnight_ts(2026, 6, 15)
+    same_day_ts_a = midnight + 1 * 3600   # 01:00 local
+    same_day_ts_b = midnight + 4 * 3600   # 04:00 local, same day
+    now = {"timestamp": same_day_ts_b, "precip_accum_day": 5.0}
+    prior = {"timestamp": same_day_ts_a, "precip_accum_day": 2.0}
+    result = confidence._compute_trends(now, prior)
+    assert abs(result["precip_accum_day_trend"] - 3.0) < 1e-9
+
+
+def test_compute_trends_precip_accum_day_crosses_midnight_is_none():
+    midnight = _local_midnight_ts(2026, 6, 15)
+    prior_ts = midnight - 3600   # 23:00 the day before
+    now_ts = midnight + 3600     # 01:00 the next day
+    now = {"timestamp": now_ts, "precip_accum_day": 0.3}
+    prior = {"timestamp": prior_ts, "precip_accum_day": 8.6}
+    result = confidence._compute_trends(now, prior)
+    assert result["precip_accum_day_trend"] is None
+
+
+def test_compute_trends_precip_not_gated_across_midnight():
+    """Unlike precip_accum_day, raw precip isn't a since-midnight counter,
+    so its trend is a plain diff even across a midnight boundary."""
+    midnight = _local_midnight_ts(2026, 6, 15)
+    prior = {"timestamp": midnight - 3600, "precip": 1.0}
+    now = {"timestamp": midnight + 3600, "precip": 0.4}
+    result = confidence._compute_trends(now, prior)
+    assert abs(result["precip_trend"] - (-0.6)) < 1e-9
+
+
 # --- find_default_matches ---
 
 def test_find_default_matches_empty_on_fresh_database():
@@ -142,6 +210,50 @@ def test_find_default_matches_returns_historical_timestamps():
     matches = confidence.find_default_matches(conn_in, now)
     assert len(matches) > 0
     assert all(ts in same_time_of_day for ts in matches)
+
+
+def test_default_features_includes_migration_004_columns():
+    # battery included deliberately (2026-09-18): a low/declining battery may
+    # itself be a signature worth matching on. lightning_avg_distance and
+    # lightning_strike_last_distance are raw, independent sensor readings;
+    # nc_rain is the same raw per-interval quantity precip already is.
+    # heat_index/wind_chill/delta_t and precip_type are deliberately excluded --
+    # see the comment above _DEFAULT_FEATURES.
+    for col in ("battery", "lightning_avg_distance", "lightning_strike_last_distance", "nc_rain"):
+        assert col in confidence._DEFAULT_FEATURES
+        assert f"{col}_trend" in confidence._TREND_FEATURES
+    for col in ("heat_index", "wind_chill", "delta_t", "precip_type"):
+        assert col not in confidence._DEFAULT_FEATURES
+
+
+def test_find_default_matches_tolerates_missing_battery_everywhere():
+    # no candidate (and not "now" either) has a battery reading -- norm_sigmas
+    # sees zero non-null values and drops the feature; must not raise or
+    # silently return no matches because of it
+    conn_in = make_input_db()
+    now = int(time.time())
+    same_time_of_day = [now - d * _DAY for d in range(1, 6)]
+    for i, ts in enumerate(same_time_of_day):
+        _insert_obs(conn_in, ts, air_temp=15.0 + i)
+    _insert_obs(conn_in, now, air_temp=20.0)
+    matches = confidence.find_default_matches(conn_in, now)
+    assert len(matches) > 0
+
+
+def test_find_default_matches_uses_battery_when_present():
+    # air_temp held identical across every candidate so it can't drive the
+    # distance; only battery varies. If battery participates, the candidate
+    # closest to "now"'s own battery reading must win.
+    conn_in = make_input_db()
+    now = int(time.time())
+    same_time_of_day = [now - d * _DAY for d in range(1, 6)]
+    batteries = [2.0, 2.2, 2.9, 2.5, 2.1]
+    for ts, batt in zip(same_time_of_day, batteries):
+        _insert_obs(conn_in, ts, air_temp=15.0, battery=batt)
+    _insert_obs(conn_in, now, air_temp=15.0, battery=2.91)
+    matches = confidence.find_default_matches(conn_in, now)
+    assert len(matches) > 0
+    assert matches[0] == same_time_of_day[2]  # battery=2.9, nearest to 2.91
 
 
 # --- member_confidences ---

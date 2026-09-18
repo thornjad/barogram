@@ -121,7 +121,9 @@ def test_missing_weight_drops_only_that_member():
 
     # every member except member 3 (veer_gust_confirmed) gets a weight
     weights = {(1, "temperature", _LEAD, sector): 1.0,
-               (2, "temperature", _LEAD, sector): 1.0}
+               (2, "temperature", _LEAD, sector): 1.0,
+               (4, "temperature", _LEAD, sector): 1.0,
+               (5, "temperature", _LEAD, sector): 1.0}
     rows = wvd_mod.run(obs, live_ts, conn_in=conn_in, all_obs=all_obs, weights=weights)
     mean_row = next(r for r in rows if r["member_id"] == 0 and r["lead_hours"] == _LEAD and r["variable"] == "temperature")
     member_vals = {

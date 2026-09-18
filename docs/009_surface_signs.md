@@ -42,7 +42,7 @@ for those combinations rather than guessing.
 | 1 | wind-rotation | net wind direction change over 3h | veering, backing, steady |
 | 2 | dp-trend | dewpoint spread (temp − dp) change over 3h | narrowing, steady, widening |
 | 3 | solar-cloud | solar radiation deficit vs climatological mean | clear, partial_cloud, heavy_cloud |
-| 4 | convective | lightning count (3h) + precip rate (1h) | lightning, precip, dry |
+| 4 | convective | precip type + lightning (3h) + precip rate (1h) | hail, lightning, precip, dry |
 
 ## Signal details
 
@@ -90,15 +90,30 @@ unavailable (common early in deployment).
 
 ### convective (member 4)
 
-Lightning takes priority over precipitation.
+Hail takes priority, then lightning, then precipitation (added 2026-09-18: `precip_type`
+and `lightning_strike_count_last_3hr`, two Tempest fields not previously read anywhere
+in barogram).
 
-1. Sums `lightning_count` (treating `NULL` as 0) over the 3h window. Any strikes → **lightning**.
-2. Computes the 1h precipitation rate: `max(0, precip_accum_day_now − precip_accum_day_1h_ago)`.
+1. `precip_type == 2` (hail) on the current observation → **hail**.
+2. Lightning: prefers Tempest's own onboard `lightning_strike_count_last_3hr` counter
+   when present (`> 0` → **lightning**); falls back to summing `lightning_count`
+   (treating `NULL` as 0) over the 3h window when that field is missing on this
+   observation. The onboard counter survives report gaps the manual 3h sum can miss.
+3. `precip_type == 1` (rain) on the current observation → **precip**, otherwise falls
+   back to the 1h precipitation rate: `max(0, precip_accum_day_now − precip_accum_day_1h_ago)`.
    The `max(0, …)` clamp handles midnight resets. Rate > 0.5 mm/h → **precip**.
-3. Otherwise → **dry**.
+4. Otherwise → **dry**.
+
+`precip_type` and `lightning_strike_count_last_3hr` only start populating from
+2026-09-18 onward and can be absent from any individual observation — this data has
+no backfill, a dropped report is gone for good. Both are read tolerantly and fall back
+to the original signal whenever missing, so behavior for any observation lacking them
+(all history before today included) is unchanged from before this edit.
 
 Always returns a non-None category, so this member always produces a forecast (even when
-"dry" has few historical samples early in deployment).
+"dry" has few historical samples early in deployment). The "hail" category starts with
+zero historical samples and abstains (see Data requirements) until 3+ occurrences
+accumulate, the same cold-start every category already goes through.
 
 ## Limitations
 

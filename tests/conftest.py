@@ -35,11 +35,20 @@ def make_input_db() -> sqlite3.Connection:
             station_pressure  real,
             wind_avg          real,
             wind_gust         real,
+            wind_lull         real,
             wind_direction    real,
+            precip            real,
             precip_accum_day  real,
+            relative_humidity real,
             solar_radiation   real,
             uv_index          real,
-            lightning_count   integer
+            lightning_count   integer,
+            precip_type       integer,
+            lightning_avg_distance         real,
+            lightning_strike_last_distance real,
+            lightning_strike_count_last_3hr integer,
+            nc_rain           real,
+            battery           real
         );
         create table nws_obs (
             station_id        text not null,

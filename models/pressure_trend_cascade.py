@@ -55,7 +55,91 @@ _MEMBERS = [
     (3, "damped_extrap"),
     (4, "fast_damped_extrap"),
 ]
-_ALL_MEMBER_IDS = [mid for mid, _ in _MEMBERS]
+
+# members 5-6 (added 2026-09-17): both reuse member 4's (fast_damped_extrap) own
+# pressure extrapolation unchanged, and only vary the pressure->variable transfer
+# step. Root cause found on the 2026-09-16 09:00 run: fast_damped_extrap carried
+# ensemble weight up to 0.84 and forecast a temp drop on a day pressure rose
+# smoothly all morning under strong clear-sky solar heating, because
+# _build_delta_transfer_fns pools every rising-pressure case in history into one
+# regression -- dominated by post-frontal cooling, with no way to separate that
+# from a high building under a warming sun.
+_SOLAR_RAMP_WINDOW_SEC = 3600     # trailing 1h slope window
+_SOLAR_RAMP_THRESHOLD = 1.0       # W/m^2 per minute; above this counts as an active ramp
+
+_EXTRA_MEMBERS = [
+    (5, "sector_conditioned_extrap"),
+    (6, "solar_gated_extrap"),
+]
+_ALL_MEMBER_IDS = [mid for mid, _ in _MEMBERS] + [mid for mid, _ in _EXTRA_MEMBERS]
+
+
+def _build_delta_transfer_fns_by_sector(all_obs):
+    """Same regression as _build_delta_transfer_fns, but a separate (slope, intercept)
+    per time-of-day sector of the observation the delta is measured FROM -- so a
+    morning rising-pressure case and an evening one no longer share one pooled fit.
+
+    returns {(col, lead, sector): (slope, intercept)}
+    """
+    by_ts = {row["timestamp"]: row for row in all_obs}
+    sorted_ts = sorted(by_ts)
+    non_pressure = [(col, var) for var, col in VARIABLES.items() if col != "station_pressure"]
+    result = {}
+
+    for lead in LEAD_HOURS:
+        lead_sec = lead * 3600
+        buckets: dict[int, tuple[list[float], dict[str, list[float | None]]]] = {}
+
+        for ts in sorted_ts:
+            p_now = by_ts[ts]["station_pressure"]
+            if p_now is None:
+                continue
+            ts_fut = _find_nearest_ts(sorted_ts, ts + lead_sec, _FUTURE_LOOKUP_SEC)
+            if ts_fut is None:
+                continue
+            p_fut = by_ts[ts_fut]["station_pressure"]
+            if p_fut is None:
+                continue
+            sector = _sector(ts)
+            xs, ys = buckets.setdefault(sector, ([], {col: [] for col, _ in non_pressure}))
+            row_now = by_ts[ts]
+            row_fut = by_ts[ts_fut]
+            xs.append(p_fut - p_now)
+            for col, _ in non_pressure:
+                v_now = row_now[col]
+                v_fut = row_fut[col]
+                delta = (v_fut - v_now) if (v_now is not None and v_fut is not None) else None
+                ys[col].append(delta)
+
+        for sector, (xs, ys) in buckets.items():
+            for col, _ in non_pressure:
+                pairs = [(x, y) for x, y in zip(xs, ys[col]) if y is not None]
+                if len(pairs) >= 3:
+                    tf = _ols1([p[0] for p in pairs], [p[1] for p in pairs])
+                    if tf is not None:
+                        result[(col, lead, sector)] = tf
+
+    return result
+
+
+def _solar_ramp_active(all_obs, issued_at):
+    """True if solar_radiation has been climbing over the trailing window -- a
+    proxy for 'daytime heating is actively underway right now', the condition
+    fast_damped_extrap's pooled transfer function has no way to see."""
+    window = [
+        r for r in all_obs
+        if issued_at - _SOLAR_RAMP_WINDOW_SEC <= r["timestamp"] <= issued_at
+        and r.get("solar_radiation") is not None
+    ]
+    if len(window) < 2:
+        return False
+    window.sort(key=lambda r: r["timestamp"])
+    oldest, newest = window[0], window[-1]
+    dt_min = (newest["timestamp"] - oldest["timestamp"]) / 60.0
+    if dt_min <= 0:
+        return False
+    rate = (newest["solar_radiation"] - oldest["solar_radiation"]) / dt_min
+    return rate > _SOLAR_RAMP_THRESHOLD
 
 
 def _build_delta_transfer_fns(all_obs):
@@ -133,6 +217,10 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None, member_history=N
 
     rate0 = _poly_tendency_rate(coefs_lin) if coefs_lin is not None else None
 
+    sector_transfer_fns = _build_delta_transfer_fns_by_sector(all_obs)
+    obs_sector = _sector(obs["timestamp"])
+    ramp_active = _solar_ramp_active(all_obs, issued_at)
+
     rows = []
     member_vals: dict[tuple[int, str, int], float | None] = {}
 
@@ -192,6 +280,64 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None, member_history=N
                     if col != "station_pressure":
                         member_vals[(mid, variable, lead)] = None
 
+            for variable in VARIABLES:
+                rows.append({
+                    "model_id": MODEL_ID,
+                    "model": MODEL_NAME,
+                    "member_id": mid,
+                    "issued_at": issued_at,
+                    "valid_at": valid_at,
+                    "lead_hours": lead,
+                    "variable": variable,
+                    "value": member_vals[(mid, variable, lead)],
+                    "confidence": variable_confidences[variable].get(mid),
+                })
+
+        # member 5 (sector_conditioned_extrap): reuses member 4's own pressure
+        # extrapolation untouched, only swaps the pooled transfer_fns for the
+        # sector-conditioned ones built above.
+        pred_pressure_4 = preds.get(4)
+        member_vals[(5, "pressure", lead)] = pred_pressure_4
+        if pred_pressure_4 is not None and p_now is not None:
+            delta_p = pred_pressure_4 - p_now
+            for variable, col in VARIABLES.items():
+                if col == "station_pressure":
+                    continue
+                tf = sector_transfer_fns.get((col, lead, obs_sector))
+                obs_val = obs[col]
+                if tf is not None and obs_val is not None:
+                    slope, intercept = tf
+                    member_vals[(5, variable, lead)] = obs_val + slope * delta_p + intercept
+                else:
+                    member_vals[(5, variable, lead)] = None
+        else:
+            for variable, col in VARIABLES.items():
+                if col != "station_pressure":
+                    member_vals[(5, variable, lead)] = None
+
+        # member 6 (solar_gated_extrap): same member-4 pressure extrapolation and
+        # the same pooled transfer_fns as member 4, but abstains on temp/dewpoint
+        # entirely while a solar ramp is actively underway, instead of applying a
+        # transfer function trained mostly on post-frontal (non-solar) cases.
+        member_vals[(6, "pressure", lead)] = pred_pressure_4
+        if pred_pressure_4 is not None and p_now is not None and not ramp_active:
+            delta_p = pred_pressure_4 - p_now
+            for variable, col in VARIABLES.items():
+                if col == "station_pressure":
+                    continue
+                tf = transfer_fns.get((col, lead))
+                obs_val = obs[col]
+                if tf is not None and obs_val is not None:
+                    slope, intercept = tf
+                    member_vals[(6, variable, lead)] = obs_val + slope * delta_p + intercept
+                else:
+                    member_vals[(6, variable, lead)] = None
+        else:
+            for variable, col in VARIABLES.items():
+                if col != "station_pressure":
+                    member_vals[(6, variable, lead)] = None
+
+        for mid, _name in _EXTRA_MEMBERS:
             for variable in VARIABLES:
                 rows.append({
                     "model_id": MODEL_ID,

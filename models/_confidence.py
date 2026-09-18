@@ -1,5 +1,7 @@
 # models/_confidence.py
 
+import datetime
+
 import db
 import models._similarity as _similarity
 
@@ -12,14 +14,31 @@ _MIN_HISTORY_DAYS = 5            # a cell's history must span MORE than this man
 _MATCH_K = 20                    # analog days searched
 _LOOKBACK_DAYS = 365             # how far back full_analog_candidates searches
 _CONFIDENCE_FLOOR = 0.1          # no member's influence is ever driven to exactly zero
+_TREND_WINDOW_SEC = 3 * 3600     # how far back each trend delta looks
 
 _DEFAULT_FEATURES = [
     "air_temp", "dew_point", "station_pressure", "wind_avg",
     "wind_direction", "wind_gust", "solar_radiation", "uv_index",
-    "precip_accum_day", "lightning_count",
-]  # every column full_analog_candidates already fetches; find_default_matches
-   # was previously only using the first 4, leaving the other 6 unread on
-   # every candidate row it had already pulled
+    "precip_accum_day", "lightning_count", "precip", "wind_lull",
+    "relative_humidity", "battery", "lightning_avg_distance",
+    "lightning_strike_last_distance", "nc_rain",
+]  # every raw column find_default_matches fetches for a snapshot match.
+   # battery/lightning_avg_distance/lightning_strike_last_distance/nc_rain
+   # were added 2026-09-18 (wxlog migration 004) -- excluded from this list:
+   # heat_index, wind_chill, delta_t (formulas over columns already here,
+   # same double-counting reasoning that already excluded feels_like/
+   # wet_bulb/air_density) and precip_type (categorical, not a continuous
+   # quantity norm_sigmas/distance can z-score). All four are brand new
+   # columns with no history before today -- norm_sigmas already handles
+   # that gracefully (sigma is None, feature dropped) until enough
+   # candidates accumulate real values.
+
+_TREND_FEATURES = [f"{col}_trend" for col in _DEFAULT_FEATURES]
+# one trend delta per snapshot column, computed by _compute_trends and
+# added alongside _DEFAULT_FEATURES so analog matching sees the last
+# _TREND_WINDOW_SEC of change, not just an instantaneous reading -- two
+# moments with the same pressure but opposite trajectories (falling vs
+# steady) otherwise match as identical.
 
 
 def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
@@ -95,6 +114,34 @@ def blended_confidence(matched_errors: list[float], overall_avg_error: float | N
     return 1.0 / (1.0 + r)
 
 
+def _compute_trends(now: dict, prior: dict | None) -> dict[str, float | None]:
+    """One trend delta per _DEFAULT_FEATURES column, keyed '<col>_trend':
+    now[col] - prior[col], or None if prior is missing or either value is
+    None. wind_direction uses a signed veering delta instead of a plain
+    difference, since direction wraps at 360. precip_accum_day is a
+    since-local-midnight counter, so a plain diff across a midnight
+    rollover would read as a large, fake drop in precipitation -- that
+    one delta is None whenever now and prior fall on different local
+    dates; precip's own trend has no such reset and isn't gated."""
+    if prior is None:
+        return {f"{col}_trend": None for col in _DEFAULT_FEATURES}
+    now_date = datetime.datetime.fromtimestamp(now["timestamp"]).date()
+    prior_date = datetime.datetime.fromtimestamp(prior["timestamp"]).date()
+    trends: dict[str, float | None] = {}
+    for col in _DEFAULT_FEATURES:
+        now_v = now.get(col)
+        prior_v = prior.get(col)
+        if now_v is None or prior_v is None:
+            trends[f"{col}_trend"] = None
+        elif col == "wind_direction":
+            trends[f"{col}_trend"] = _similarity.signed_arc_delta(now_v, prior_v)
+        elif col == "precip_accum_day" and now_date != prior_date:
+            trends[f"{col}_trend"] = None
+        else:
+            trends[f"{col}_trend"] = now_v - prior_v
+    return trends
+
+
 def find_default_matches(conn_in, current_ts: int) -> list[int]:
     """The shared fingerprint search used by every model. Computed once
     per forecast run by cmd_forecast. Returns [] on a fresh database."""
@@ -103,9 +150,15 @@ def find_default_matches(conn_in, current_ts: int) -> list[int]:
     if current is None or not candidates:
         return []
     current = {**dict(current), "timestamp": current_ts}
+    prior_current = db.nearest_tempest_obs(conn_in, current_ts - _TREND_WINDOW_SEC, window_sec=1800)
+    current.update(_compute_trends(current, prior_current))
     candidates = [dict(c) for c in candidates]
-    sigmas = _similarity.norm_sigmas(candidates, _DEFAULT_FEATURES)
-    cands_with_dist = [(_similarity.distance(current, c, _DEFAULT_FEATURES, sigmas), c)
+    for c in candidates:
+        prior_c = db.nearest_tempest_obs(conn_in, c["timestamp"] - _TREND_WINDOW_SEC, window_sec=1800)
+        c.update(_compute_trends(c, prior_c))
+    features = _DEFAULT_FEATURES + _TREND_FEATURES
+    sigmas = _similarity.norm_sigmas(candidates, features)
+    cands_with_dist = [(_similarity.distance(current, c, features, sigmas), c)
                         for c in candidates]
     nearest = _similarity.select_k_nearest(cands_with_dist, _MATCH_K)
     return [c["timestamp"] for _, c in nearest]

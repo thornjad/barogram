@@ -33,6 +33,8 @@ _SOLAR_FLOOR_W      = 5.0       # W/m² floor to distinguish day from night
 _SOLAR_CLIMO_MIN_W  = 100.0     # min climo mean below which cloud classification is unreliable
 _SOLAR_MIN_SAMPLES  = 10        # minimum samples to compute climo solar mean
 _VEER_THRESHOLD_DEG = 15.0      # degrees threshold for veering/backing classification
+_PRECIP_TYPE_RAIN   = 1         # Tempest precip_type code
+_PRECIP_TYPE_HAIL   = 2         # Tempest precip_type code
 
 def _find_nearest_ts(sorted_ts, target, max_delta=600):
     """Binary search for the nearest timestamp within max_delta seconds of target."""
@@ -148,13 +150,31 @@ def _solar_cloud_category(obs, solar_climo):
 def _convective_category(window_obs, obs_1h_ago, obs_now):
     """
     Classify convective / precipitation state.
-    Lightning takes priority; then active precipitation; then dry.
+    Hail takes priority, then lightning, then active precipitation, then dry.
     Always returns a non-None string.
     precip_accum_day resets at midnight, so deltas are clamped to >= 0.
+
+    precip_type and lightning_strike_count_last_3hr (added 2026-09-18) only
+    populate going forward and can be absent from any given observation --
+    this data has no backfill, a dropped report is gone for good. Both are
+    read with .get() and fall back to the original signal (manual 3h
+    lightning_count sum; no hail signal at all) whenever missing, so an
+    observation lacking the new fields behaves exactly as it did before.
     """
-    lightning = sum((r["lightning_count"] or 0) for r in window_obs)
-    if lightning > 0:
+    precip_type_now = obs_now.get("precip_type") if obs_now is not None else None
+    if precip_type_now == _PRECIP_TYPE_HAIL:
+        return "hail"
+
+    lightning_3h = obs_now.get("lightning_strike_count_last_3hr") if obs_now is not None else None
+    if lightning_3h is not None:
+        lightning = lightning_3h > 0
+    else:
+        lightning = sum((r["lightning_count"] or 0) for r in window_obs) > 0
+    if lightning:
         return "lightning"
+
+    if precip_type_now == _PRECIP_TYPE_RAIN:
+        return "precip"
     if obs_1h_ago is not None and obs_now is not None:
         p_now = obs_now["precip_accum_day"] or 0.0
         p_1h = obs_1h_ago["precip_accum_day"] or 0.0
