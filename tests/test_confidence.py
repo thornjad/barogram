@@ -47,53 +47,81 @@ def test_confidence_for_cell_filters_wrong_cell():
         _row("pressure", 24, base, 1.0),
         _row("temperature", 6, base, 1.0),
     ] + [_row("temperature", 24, base + d * _DAY, 5.0) for d in range(1, 10)]
-    # no matched days -> blended_confidence's empty-matched-errors branch (0.5),
+    # no matched days -> blended_confidence's empty-matched-errors branch (0.0),
     # confirming the cell-filter didn't silently pull in the wrong rows first
     result = confidence.confidence_for_cell(history, "temperature", 24, [])
-    assert result == 0.5
+    assert result == 0.0
 
 
-def test_confidence_for_cell_aggregates_every_run_from_a_matched_day():
-    """Two scored runs from the SAME matched calendar day both get counted,
-    not just the nearest one -- the exact bug an earlier design had. Uses two
-    matched-day runs with DIFFERENT errors (0.0 and 20.0) so aggregating both
-    (average 10.0) is numerically distinguishable from counting only one."""
+def test_confidence_for_cell_counts_multiple_runs_within_tolerance_window():
+    """Two scored runs both within _MATCH_HOUR_TOLERANCE_SEC of the matched
+    day's own clock-time snapshot both get counted -- not just the nearest
+    one. Uses two in-window runs with DIFFERENT errors (0.0 and 8.0) so
+    aggregating both (average 4.0) is numerically distinguishable from
+    counting only one."""
     base = 10_000_000
     base -= base % _DAY  # day-align so hour offsets below can't cross midnight
     matched_day_start = base + 5 * _DAY
     history = [_row("temperature", 24, base + d * _DAY, 10.0) for d in range(10) if d != 5]
-    history.append(_row("temperature", 24, matched_day_start + 1 * 3600, 0.0))
-    history.append(_row("temperature", 24, matched_day_start + 7 * 3600, 20.0))
+    history.append(_row("temperature", 24, matched_day_start - 20 * 60, 0.0))   # -20min: in window
+    history.append(_row("temperature", 24, matched_day_start + 40 * 60, 8.0))   # +40min: in window
     result = confidence.confidence_for_cell(history, "temperature", 24, [matched_day_start])
     assert result is not None
 
     overall_avg = sum(r["mae"] for r in history) / len(history)
     expected_both_counted = confidence.blended_confidence(
-        [0.0, 20.0], overall_avg, confidence._MIN_MATCHES_CAP
+        [0.0, 8.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
     )
     expected_nearest_only = confidence.blended_confidence(
-        [0.0], overall_avg, confidence._MIN_MATCHES_CAP
+        [0.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
     )
     assert abs(result - expected_both_counted) < 1e-9
     assert abs(result - expected_nearest_only) > 1e-6
 
 
-def test_confidence_for_cell_ramp_uses_fixed_threshold_not_sample_count():
-    """The exact bug found in review: min_matches must be the fixed
-    _MIN_MATCHES_CAP constant, not derived from len(matched_errors), or
-    blend_frac is always 1.0 regardless of how little evidence exists."""
+def test_confidence_for_cell_excludes_runs_outside_hour_tolerance():
+    """A run on the SAME matched calendar day but outside
+    _MATCH_HOUR_TOLERANCE_SEC of the matched clock-time must NOT count --
+    otherwise a match at 3pm would drag in that day's unrelated midnight
+    run, diluting the pool with an unrelated time of day."""
+    base = 10_000_000
+    base -= base % _DAY
+    matched_day_start = base + 5 * _DAY
+    history = [_row("temperature", 24, base + d * _DAY, 10.0) for d in range(10) if d != 5]
+    history.append(_row("temperature", 24, matched_day_start + 1 * 3600, 0.0))   # +1h: in window
+    history.append(_row("temperature", 24, matched_day_start + 7 * 3600, 20.0))  # +7h: outside window
+    result = confidence.confidence_for_cell(history, "temperature", 24, [matched_day_start])
+    assert result is not None
+
+    overall_avg = sum(r["mae"] for r in history) / len(history)
+    expected_in_window_only = confidence.blended_confidence(
+        [0.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
+    )
+    expected_if_whole_day_counted = confidence.blended_confidence(
+        [0.0, 20.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
+    )
+    assert abs(result - expected_in_window_only) < 1e-9
+    assert abs(result - expected_if_whole_day_counted) > 1e-6
+
+
+def test_confidence_for_cell_ramp_uses_fixed_pseudocount_not_sample_count():
+    """The exact bug found in review of the original ramp: the trust
+    denominator must be the fixed _CONFIDENCE_PSEUDOCOUNT constant, not
+    derived from len(matched_errors), or blend_frac is always 1.0
+    regardless of how little evidence exists."""
     base = 10_000_000
     matched_day_start = base + 5 * _DAY
-    # long history at a stable baseline error of 10.0
-    history = [_row("temperature", 24, base + d * _DAY, 10.0) for d in range(30)]
+    # long history at a stable baseline error of 10.0, skipping the matched day
+    history = [_row("temperature", 24, base + d * _DAY, 10.0) for d in range(30) if d != 5]
     # exactly ONE matched-day sample, wildly different from the baseline
     history.append(_row("temperature", 24, matched_day_start + 3600, 0.0))
     result = confidence.confidence_for_cell(history, "temperature", 24, [matched_day_start])
-    # with a fixed ramp, 1 sample out of _MIN_MATCHES_CAP=20 barely blends away
-    # from the neutral overall-average baseline -- r should stay close to 1.0
-    # (confidence close to 0.5), not snap to full trust in the single sample
+    # with a fixed pseudocount, 1 sample out of _CONFIDENCE_PSEUDOCOUNT=8 barely
+    # blends away from the neutral overall-average baseline -- r should stay
+    # close to 1.0 (confidence well below full trust), not snap toward 1.0 the
+    # way a broken n/n=1.0 ramp would
     assert result is not None
-    assert result < 0.55  # nowhere near the ~1.0 confidence a dead ramp would give
+    assert result < 0.55
 
 
 # --- blended_confidence ---
@@ -106,15 +134,23 @@ def test_blended_confidence_zero_overall_avg():
     assert confidence.blended_confidence([1.0], 0.0, 20) is None
 
 
-def test_blended_confidence_empty_matched_is_neutral():
-    assert confidence.blended_confidence([], 5.0, 20) == 0.5
+def test_blended_confidence_empty_matched_is_zero():
+    assert confidence.blended_confidence([], 5.0, 20) == 0.0
 
 
-def test_blended_confidence_full_trust_at_cap():
-    # matched errors at the cap, half the overall average error -> better than average
+def test_blended_confidence_high_trust_with_many_matches():
+    # matched errors well past k, half the overall average error -> better than average
     matched = [1.0] * 20
     result = confidence.blended_confidence(matched, 2.0, 20)
     assert result is not None and result > 0.5
+
+
+def test_blended_confidence_keeps_climbing_past_old_cap():
+    # no hard ceiling: more matched evidence at the same quality keeps
+    # increasing trust rather than plateauing once n reaches some fixed cap
+    fewer = confidence.blended_confidence([1.0] * 20, 2.0, 8)
+    more = confidence.blended_confidence([1.0] * 100, 2.0, 8)
+    assert more > fewer
 
 
 def test_blended_confidence_uniform_group_reproduces_identical_value():
@@ -238,6 +274,35 @@ def test_find_default_matches_tolerates_missing_battery_everywhere():
     _insert_obs(conn_in, now, air_temp=20.0)
     matches = confidence.find_default_matches(conn_in, now)
     assert len(matches) > 0
+
+
+def test_find_default_matches_excludes_candidates_beyond_distance_threshold():
+    # conditions far outside anything recorded -- every candidate should
+    # land beyond _MATCH_DISTANCE_THRESHOLD, so there is no real match at all
+    conn_in = make_input_db()
+    now = int(time.time())
+    same_time_of_day = [now - d * _DAY for d in range(1, 6)]
+    for i, ts in enumerate(same_time_of_day):
+        _insert_obs(conn_in, ts, air_temp=15.0 + i)  # 15..19, tight historical spread
+    _insert_obs(conn_in, now, air_temp=80.0)  # wildly outside anything recorded
+    matches = confidence.find_default_matches(conn_in, now)
+    assert matches == []
+
+
+def test_find_default_matches_caps_at_max_candidates_keeping_closest():
+    # more candidates within threshold than _MATCH_MAX_CANDIDATES -- must
+    # keep the closest ones by distance, not an arbitrary/first-found slice
+    conn_in = make_input_db()
+    now = int(time.time())
+    n_candidates = confidence._MATCH_MAX_CANDIDATES + 10
+    offsets = list(range(1, n_candidates + 1))
+    for d in offsets:
+        _insert_obs(conn_in, now - d * _DAY, air_temp=20.0 + 0.01 * d)
+    _insert_obs(conn_in, now, air_temp=20.0)
+    matches = confidence.find_default_matches(conn_in, now)
+    assert len(matches) == confidence._MATCH_MAX_CANDIDATES
+    expected_closest = {now - d * _DAY for d in offsets[:confidence._MATCH_MAX_CANDIDATES]}
+    assert set(matches) == expected_closest
 
 
 def test_find_default_matches_uses_battery_when_present():

@@ -22,15 +22,36 @@ reuse the exact analog days they already selected for their own value forecast, 
 member. Every other model uses a shared default fingerprint (`air_temp`, `dew_point`,
 `station_pressure`, `wind_avg`, unweighted) computed once per forecast run.
 
+The fingerprint search itself (`find_default_matches`) only counts a historical day as
+a real match if it's within `_MATCH_DISTANCE_THRESHOLD` (sigma-normalized distance,
+see `_similarity.distance`) of current conditions, keeping at most the closest
+`_MATCH_MAX_CANDIDATES`. Conditions genuinely unlike anything recorded so far (a first
+winter cold snap against a spring/summer-only dataset, for example) can and should
+return zero matches — this isn't a fallback path, it's the expected outcome the first
+time a truly novel pattern shows up.
+
 For a `(model_id, member_id, variable, lead_hours)` cell, `models/_confidence.py`'s
-`confidence_for_cell` buckets that member's scored history by calendar day, then for
-each matched analog day pulls the entire day's bucket into the matched-error pool
-(not just the nearest single scored run). The matched-day average error, compared
-against the cell's own overall average error, maps to a confidence value in `(0, 1]`.
-A cell with too little history (5 distinct days or fewer) returns `None`; a group
-where every member reports the same confidence value reproduces today's exact
-combination regardless of what that value is, since only the *spread* across a
-group's members moves a combined value at all.
+`confidence_for_cell` takes each matched day's own nearest-clock-time analog
+timestamp and pulls in only this member's scored runs within
+`_MATCH_HOUR_TOLERANCE_SEC` of it — not that day's entire scored history. Real forecast
+runs land roughly 3 hours apart, so this grabs the one relevant run per matched day
+without diluting the pool with runs from unrelated hours. The matched-error average,
+compared against the cell's own overall average error, blends toward trust in
+proportion to how much matched-and-scored evidence exists, using a pseudocount
+(`n / (n + _CONFIDENCE_PSEUDOCOUNT)`, no hard ceiling — more evidence always earns
+more trust, it never plateaus).
+
+Zero usable evidence — no analog day matched closely enough, or matched days exist but
+this member has no scored run near their clock time; both mean the same thing — returns
+exactly `0.0`, not a neutral fallback. This is distinct from `None`: a cell with too
+little history overall (5 distinct scored days or fewer) still returns `None`, meaning
+this member hasn't run long enough to judge at all. `0.0` means the member's mature
+enough to judge, it just has zero basis for trusting *this specific forecast*. Both
+non-`None` outcomes land in `[0, 1)` — nonempty evidence approaches but never reaches
+exactly `1.0`, since the pseudocount blend has no hard cap. A group where every member
+reports the same confidence value reproduces today's exact combination regardless of
+what that value is, since only the *spread* across a group's members moves a combined
+value at all.
 
 Per-model feature weighting on the shared fingerprint (letting a model like
 `pressure_tendency` weight `station_pressure` higher when matching analog days) was

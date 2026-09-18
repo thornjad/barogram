@@ -6,15 +6,26 @@ import db
 import models._similarity as _similarity
 
 _CONFIDENCE_WINDOW_DAYS = 400    # independent of tune's own lookback window
-_MIN_MATCHES_CAP = 20            # matched-error sample count at which the blend-to-
-                                 # full-trust ramp reaches 1.0; below this, confidence
-                                 # blends toward the overall-average-error baseline in
-                                 # proportion to how much matched evidence exists
+_CONFIDENCE_PSEUDOCOUNT = 8      # k in the n/(n+k) trust-shrinkage blend: blend_frac
+                                 # reaches 0.5 once n matched-and-scored days exist,
+                                 # and keeps climbing (never hard-caps) as n grows further
 _MIN_HISTORY_DAYS = 5            # a cell's history must span MORE than this many distinct days
-_MATCH_K = 20                    # analog days searched
+_MATCH_DISTANCE_THRESHOLD = 9.0  # analog candidates farther than this (in sigma-normalized
+                                 # distance units, see _similarity.distance) aren't a real
+                                 # match at all -- conditions genuinely unlike anything
+                                 # recorded should be able to return zero matches
+_MATCH_MAX_CANDIDATES = 50       # of the candidates within threshold, keep only the closest
+                                 # this many -- bounds compute/noise as more days accumulate
+                                 # without acting as a similarity requirement itself
 _LOOKBACK_DAYS = 365             # how far back full_analog_candidates searches
 _CONFIDENCE_FLOOR = 0.1          # no member's influence is ever driven to exactly zero
 _TREND_WINDOW_SEC = 3 * 3600     # how far back each trend delta looks
+_MATCH_HOUR_TOLERANCE_SEC = 90 * 60  # a matched day's own nearest-clock-time snapshot
+                                 # only pulls in this model's scored runs within this
+                                 # window of it, not every run from that whole calendar
+                                 # day -- runs are spaced roughly 3h apart in practice,
+                                 # so this grabs the one relevant run without bleeding
+                                 # into neighboring run slots
 
 _DEFAULT_FEATURES = [
     "air_temp", "dew_point", "station_pressure", "wind_avg",
@@ -52,12 +63,19 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
     _MIN_HISTORY_DAYS distinct calendar days OR FEWER.
 
     Otherwise, the plain average of every row's mae in that cell is the
-    overall baseline. Every row is bucketed once by its own calendar day
-    (issued_at // 86400). For each timestamp in matched_ts, its calendar
-    day's ENTIRE bucket is added to the matched-error pool, not just the
-    single nearest run -- a matched day this model ran 6 times that day
-    contributes 6 error samples, not 1. Each matched calendar day is
-    counted at most once even if matched_ts repeats a day.
+    overall baseline. Each timestamp in matched_ts is a matched day's own
+    nearest-clock-time analog snapshot (see find_default_matches); only
+    this model's scored runs within _MATCH_HOUR_TOLERANCE_SEC of that
+    specific timestamp count as that match's evidence -- not every run
+    from that whole calendar day, which would dilute the pool with runs
+    from unrelated hours. Each matched calendar day is counted at most
+    once even if matched_ts repeats a day.
+
+    matched_ts may be empty (no analog day was close enough to count as a
+    real match) or nonempty but yield zero usable evidence (matched days
+    exist but this model has no scored run near their clock time) -- both
+    cases mean the same thing to blended_confidence: no evidence to judge
+    confidence from.
 
     IMPORTANT for every caller: this function's result is specific to one
     (variable, lead_hours) cell. Any caller storing results across
@@ -71,9 +89,6 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
     if distinct_days <= _MIN_HISTORY_DAYS:
         return None
     overall_avg_error = sum(r["mae"] for r in cell_rows) / len(cell_rows)
-    by_day: dict[int, list[float]] = {}
-    for r in cell_rows:
-        by_day.setdefault(r["issued_at"] // 86400, []).append(r["mae"])
     seen_days: set[int] = set()
     matched_errors: list[float] = []
     for ts in matched_ts:
@@ -81,35 +96,46 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
         if day in seen_days:
             continue
         seen_days.add(day)
-        matched_errors.extend(by_day.get(day, []))
-    return blended_confidence(matched_errors, overall_avg_error, _MIN_MATCHES_CAP)
+        matched_errors.extend(
+            r["mae"] for r in cell_rows
+            if abs(r["issued_at"] - ts) <= _MATCH_HOUR_TOLERANCE_SEC
+        )
+    return blended_confidence(matched_errors, overall_avg_error, _CONFIDENCE_PSEUDOCOUNT)
 
 
 def blended_confidence(matched_errors: list[float], overall_avg_error: float | None,
-                        min_matches: int) -> float | None:
+                        k: int) -> float | None:
     """
     Returns None when overall_avg_error is None or <= 0. Returns exactly
-    0.5 when matched_errors is empty. Otherwise:
+    0.0 when matched_errors is empty -- zero usable evidence, whether
+    because no analog day was a close enough match at all, or matched
+    days exist but this model has no scored run near their clock time.
+    Either way, there is nothing to base a confidence claim on. Otherwise:
 
         matched_avg = sum(matched_errors) / len(matched_errors)
-        blend_frac = min(1.0, len(matched_errors) / min_matches)
+        blend_frac = len(matched_errors) / (len(matched_errors) + k)
         r = (1 - blend_frac) * 1.0 + blend_frac * (matched_avg / overall_avg_error)
         return 1.0 / (1.0 + r)
 
-    min_matches is a fixed constant (_MIN_MATCHES_CAP), not derived from
-    len(matched_errors) -- blend_frac only reaches 1.0 once matched_errors
-    actually has that many samples; a cell with fewer samples blends
-    partway toward the neutral overall-average baseline in proportion to
-    how much evidence it has. r is always > 0, so the result is always in
-    (0, 1]. A GROUP where every member reports the same confidence value
-    reproduces today's exact combination regardless of what that value is.
+    k is a fixed pseudocount constant (_CONFIDENCE_PSEUDOCOUNT), not a hard
+    cap -- blend_frac has no ceiling and keeps climbing toward 1.0 as
+    matched_errors grows without bound, it just reaches 0.5 exactly at
+    n=k. A cell with fewer samples than k blends more than half its trust
+    toward the neutral overall-average baseline; more samples always earn
+    more trust, with no plateau. blend_frac never actually reaches 1.0 for
+    finite n, so r never reaches exactly 0 -- a nonempty-evidence result is
+    always in the OPEN interval (0, 1), approaching but never touching
+    either end. Combined with the empty-evidence 0.0 case, the full range
+    is [0, 1). A GROUP where every member reports the same confidence
+    value reproduces today's exact combination regardless of what that
+    value is.
     """
     if overall_avg_error is None or overall_avg_error <= 0:
         return None
     if not matched_errors:
-        return 0.5
+        return 0.0
     matched_avg = sum(matched_errors) / len(matched_errors)
-    blend_frac = min(1.0, len(matched_errors) / min_matches)
+    blend_frac = len(matched_errors) / (len(matched_errors) + k)
     r = (1 - blend_frac) * 1.0 + blend_frac * (matched_avg / overall_avg_error)
     return 1.0 / (1.0 + r)
 
@@ -144,7 +170,13 @@ def _compute_trends(now: dict, prior: dict | None) -> dict[str, float | None]:
 
 def find_default_matches(conn_in, current_ts: int) -> list[int]:
     """The shared fingerprint search used by every model. Computed once
-    per forecast run by cmd_forecast. Returns [] on a fresh database."""
+    per forecast run by cmd_forecast. Returns [] on a fresh database, or
+    when nothing recorded so far is even within _MATCH_DISTANCE_THRESHOLD
+    of current conditions -- a real possibility, not just an edge case:
+    the first genuinely unprecedented cold snap or storm this station has
+    seen should return no matches at all, not the 20 nearest regardless of
+    how dissimilar they actually are. Of whatever clears the threshold,
+    keeps only the closest _MATCH_MAX_CANDIDATES."""
     current = db.nearest_tempest_obs(conn_in, current_ts, window_sec=1800)
     candidates = db.full_analog_candidates(conn_in, current_ts, lookback_sec=_LOOKBACK_DAYS * 86400)
     if current is None or not candidates:
@@ -160,7 +192,9 @@ def find_default_matches(conn_in, current_ts: int) -> list[int]:
     sigmas = _similarity.norm_sigmas(candidates, features)
     cands_with_dist = [(_similarity.distance(current, c, features, sigmas), c)
                         for c in candidates]
-    nearest = _similarity.select_k_nearest(cands_with_dist, _MATCH_K)
+    within_threshold = [(d, c) for d, c in cands_with_dist
+                         if d is not None and d <= _MATCH_DISTANCE_THRESHOLD]
+    nearest = _similarity.select_k_nearest(within_threshold, _MATCH_MAX_CANDIDATES)
     return [c["timestamp"] for _, c in nearest]
 
 
