@@ -107,21 +107,21 @@ def test_confidence_for_cell_excludes_runs_outside_hour_tolerance():
 def test_confidence_for_cell_ramp_uses_fixed_pseudocount_not_sample_count():
     """The exact bug found in review of the original ramp: the trust
     denominator must be the fixed _CONFIDENCE_PSEUDOCOUNT constant, not
-    derived from len(matched_errors), or blend_frac is always 1.0
-    regardless of how little evidence exists."""
+    derived from len(matched_errors), or trust is always 1.0 regardless of
+    how little evidence exists."""
     base = 10_000_000
     matched_day_start = base + 5 * _DAY
     # long history at a stable baseline error of 10.0, skipping the matched day
     history = [_row("temperature", 24, base + d * _DAY, 10.0) for d in range(30) if d != 5]
-    # exactly ONE matched-day sample, wildly different from the baseline
+    # exactly ONE matched-day sample, a perfect (zero-error) match -- raw
+    # would be 1.0 with full trust, but there's only 1 sample of evidence
     history.append(_row("temperature", 24, matched_day_start + 3600, 0.0))
     result = confidence.confidence_for_cell(history, "temperature", 24, [matched_day_start])
-    # with a fixed pseudocount, 1 sample out of _CONFIDENCE_PSEUDOCOUNT=8 barely
-    # blends away from the neutral overall-average baseline -- r should stay
-    # close to 1.0 (confidence well below full trust), not snap toward 1.0 the
-    # way a broken n/n=1.0 ramp would
+    # with a fixed pseudocount, 1 sample out of _CONFIDENCE_PSEUDOCOUNT=8 gives
+    # trust=1/9 -- confidence should be muted far below the 1.0 raw would
+    # justify, not snap to 1.0 the way a broken n/n=1.0 trust ratio would
     assert result is not None
-    assert result < 0.55
+    assert result < 0.2
 
 
 # --- blended_confidence ---
@@ -139,8 +139,9 @@ def test_blended_confidence_empty_matched_is_zero():
 
 
 def test_blended_confidence_high_trust_with_many_matches():
-    # matched errors well past k, half the overall average error -> better than average
-    matched = [1.0] * 20
+    # matched errors well past k, half the overall average error, and enough
+    # samples that trust is close to 1.0 -- confidence should clear 0.5
+    matched = [1.0] * 200
     result = confidence.blended_confidence(matched, 2.0, 20)
     assert result is not None and result > 0.5
 
@@ -151,6 +152,34 @@ def test_blended_confidence_keeps_climbing_past_old_cap():
     fewer = confidence.blended_confidence([1.0] * 20, 2.0, 8)
     more = confidence.blended_confidence([1.0] * 100, 2.0, 8)
     assert more > fewer
+
+
+def test_blended_confidence_thin_evidence_mutes_even_a_strong_signal():
+    # a single matched sample with a huge relative improvement (raw alone
+    # would be near 1.0) still reports LOW confidence -- thin evidence
+    # deserves a muted claim, not a strong one, regardless of which
+    # direction the raw signal points. This is the core fix: the old
+    # design blended thin evidence TOWARD 0.5; this design shrinks it
+    # TOWARD 0, so one lucky match can't fake high confidence.
+    result = confidence.blended_confidence([0.1], 10.0, 8)
+    raw = 1.0 / (1.0 + 0.1 / 10.0)
+    assert raw > 0.95
+    assert result < 0.15
+
+
+def test_blended_confidence_thick_evidence_reaches_high_confidence():
+    # with enough matched-and-scored evidence, a genuinely better-than-usual
+    # signal must be able to cross well above 0.5 -- the range has to
+    # actually open up, not stay capped near neutral forever
+    result = confidence.blended_confidence([0.1] * 200, 10.0, 8)
+    assert result > 0.9
+
+
+def test_blended_confidence_thick_evidence_reaches_low_confidence():
+    # symmetric case: a genuinely worse-than-usual signal with lots of
+    # evidence should drop well below 0.5, not just get muted toward it
+    result = confidence.blended_confidence([100.0] * 200, 10.0, 8)
+    assert result < 0.1
 
 
 def test_blended_confidence_uniform_group_reproduces_identical_value():
@@ -420,3 +449,18 @@ def test_inject_total_influence_zero_does_not_raise():
 
 def test_combine_pattern_no_pairs_returns_none():
     assert confidence.combine_pattern([], {}, {}) == (None, None)
+
+
+def test_inject_all_confidences_unknown_uses_zero_not_neutral_fallback():
+    """Every member's own confidence is unknown (never computed, not the
+    same as a computed 0.0) -- the group has nothing to lean on, so the
+    internal per-member fallback used in place of a missing confidence is
+    0.0, not a neutral 0.5 guess. Both members floor identically here (floor
+    is symmetric), so the mean is unaffected -- this only proves the
+    fallback itself no longer assumes 50% trust when nothing is known."""
+    pairs = [(1, 10.0), (2, 20.0)]
+    weights = {1: 1.0, 2: 1.0}
+    confidences = {1: None, 2: None}
+    mean, group_conf = confidence._inject(pairs, weights, confidences)
+    assert abs(mean - 15.0) < 1e-9
+    assert group_conf is None

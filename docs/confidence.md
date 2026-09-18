@@ -35,23 +35,39 @@ For a `(model_id, member_id, variable, lead_hours)` cell, `models/_confidence.py
 timestamp and pulls in only this member's scored runs within
 `_MATCH_HOUR_TOLERANCE_SEC` of it — not that day's entire scored history. Real forecast
 runs land roughly 3 hours apart, so this grabs the one relevant run per matched day
-without diluting the pool with runs from unrelated hours. The matched-error average,
-compared against the cell's own overall average error, blends toward trust in
-proportion to how much matched-and-scored evidence exists, using a pseudocount
-(`n / (n + _CONFIDENCE_PSEUDOCOUNT)`, no hard ceiling — more evidence always earns
-more trust, it never plateaus).
+without diluting the pool with runs from unrelated hours.
+
+`blended_confidence` computes this in two independent steps, not one blend:
+
+```
+raw   = 1 / (1 + matched_avg / overall_avg_error)
+trust = n / (n + _CONFIDENCE_PSEUDOCOUNT)     # n = matched-and-scored sample count
+confidence = trust * raw
+```
+
+`raw` is what confidence would say with total trust in the evidence — above 0.5 when
+this member does *better* than its own typical error on days like today, below 0.5
+when it does *worse*. `trust` is a multiplier on that claim, not a blend toward it: it
+scales confidence *down toward zero* as evidence thins, rather than blending it toward
+a neutral 0.5 guess the way an earlier version of this design did. This is deliberate
+and matches the intended meaning of the number: confidence is a model's own claim about
+whether to trust it right now, and a claim backed by only a sliver of evidence deserves
+to be muted, in *either* direction — a single lucky match can't manufacture high
+confidence any more than a single unlucky one can manufacture certainty of failure.
+`trust` has no hard ceiling and keeps climbing as `n` grows, so a well-evidenced signal
+can reach real confidence near either extreme, not just hover near the middle.
 
 Zero usable evidence — no analog day matched closely enough, or matched days exist but
 this member has no scored run near their clock time; both mean the same thing — returns
-exactly `0.0`, not a neutral fallback. This is distinct from `None`: a cell with too
-little history overall (5 distinct scored days or fewer) still returns `None`, meaning
-this member hasn't run long enough to judge at all. `0.0` means the member's mature
-enough to judge, it just has zero basis for trusting *this specific forecast*. Both
-non-`None` outcomes land in `[0, 1)` — nonempty evidence approaches but never reaches
-exactly `1.0`, since the pseudocount blend has no hard cap. A group where every member
-reports the same confidence value reproduces today's exact combination regardless of
-what that value is, since only the *spread* across a group's members moves a combined
-value at all.
+exactly `0.0` (`trust` is 0, so the formula already gives this without a special case
+needed at the trust step; matched_avg being undefined at n=0 is the only reason an early
+return still exists). This is distinct from `None`: a cell with too little history
+overall (5 distinct scored days or fewer) still returns `None`, meaning this member
+hasn't run long enough to judge at all. `0.0` means the member's mature enough to judge,
+it just has zero basis for trusting *this specific forecast* — "I don't know what I'm
+doing here," not "coin flip." Both non-`None` outcomes land in `[0, 1)` — nonempty
+evidence approaches but never reaches exactly `1.0`, since `trust` never reaches exactly
+1 for finite n.
 
 Per-model feature weighting on the shared fingerprint (letting a model like
 `pressure_tendency` weight `station_pressure` higher when matching analog days) was
@@ -64,10 +80,14 @@ cheap to add later if a concrete case shows up.
 
 Every weighted model in this plan (20 of the 25) shares one combination shape:
 `models/_confidence.py`'s `combine_pattern` drops only the members missing a weight,
-then multiplies each remaining member's weight by its own confidence (floored at 0.1
-so no member is ever driven to exactly zero influence, and defaulted to the group's
-own average when a member's confidence is unknown), renormalizes, and returns both
-the combined value and an influence-weighted group confidence.
+then multiplies each remaining member's weight by its own confidence (floored at
+`_CONFIDENCE_FLOOR = 0.001`, 0.1% — not 10% — so no member is ever driven to fully zero
+influence, but a member reporting genuine 0% confidence still counts for almost
+nothing, and defaulted to the group's own average when a member's confidence is
+unknown, or `0.0` when *no* member in the group has a known confidence at all — same
+"nothing to base trust on" case as the zero-evidence path above, not a neutral guess),
+renormalizes, and returns both the combined value and an influence-weighted group
+confidence.
 
 `combine_pattern` also fixed a real, pre-existing bug independent of confidence: 16
 of these 20 models used to fall back to a plain equal average for the *entire* group
@@ -106,8 +126,9 @@ history to design against, which is exactly why every `forecasts` row stores its
 Confidence quality is expected to improve as scored history accumulates, the same way
 every model's own accuracy has. The three newest models
 (`wind_veer_detector`/`frontal_trigger`/`dewpoint_tendency`, added in migration 041)
-start with confidence at the neutral fallback and their combined output identical to
-today's, until they accumulate enough scored history of their own; this is expected
+start with `None` confidence (too little history to judge at all, see the
+`_MIN_HISTORY_DAYS` gate above) and are floored to near-zero influence in any
+combination until they accumulate enough scored history of their own; this is expected
 graceful-cold-start behavior, not a shortfall.
 
 ## Verifying the mechanism, not just the wiring

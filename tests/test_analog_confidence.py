@@ -81,11 +81,14 @@ def test_confidence_shifts_value_versus_weights_alone():
         if r["member_id"] == 0 and r["lead_hours"] == 6 and r["variable"] == "temperature"
     )
 
-    # give member 1 (k3, matches analog days at offsets 1,2,3) a much better
-    # track record ON ITS OWN MATCHED DAYS than member 4 (k20, matches
-    # offsets 1..20) has on its own; both also get a normal baseline error on
-    # OTHER, unmatched days so overall_avg_error differs from the matched
-    # subset and the ramp actually engages
+    # member 1 (k3) only ever gets 3 matched-day samples (it matches analog
+    # days at offsets 1,2,3, by construction); member 4 (k20) always gets 20
+    # (offsets 1..20). Confidence now shrinks TOWARD ZERO as evidence thins,
+    # not toward a neutral 0.5 -- so a member with only 3 samples can't win
+    # on quality alone, thin evidence is muted regardless of which way it
+    # points. Give member 4 (more evidence) the GOOD track record and member
+    # 1 (less evidence) the BAD one, so volume and quality reinforce the same
+    # direction instead of fighting each other on a knife's edge.
     matched_days_k3 = [now - d * _DAY for d in [1, 2, 3]]
     matched_days_k20 = [now - d * _DAY for d in range(1, 21)]
     baseline_days = [now - d * _DAY for d in range(50, 80)]  # not selected by any member
@@ -102,8 +105,8 @@ def test_confidence_shifts_value_versus_weights_alone():
         return rows
 
     member_history = {
-        1: _history(matched_days_k3, matched_mae=0.1, baseline_mae=5.0),   # trusted
-        4: _history(matched_days_k20, matched_mae=10.0, baseline_mae=5.0),  # distrusted
+        1: _history(matched_days_k3, matched_mae=10.0, baseline_mae=5.0),   # thin AND bad
+        4: _history(matched_days_k20, matched_mae=0.1, baseline_mae=5.0),   # thick AND good
     }
 
     rows_with_confidence = analog_mod.run(
@@ -114,10 +117,11 @@ def test_confidence_shifts_value_versus_weights_alone():
         if r["member_id"] == 0 and r["lead_hours"] == 6 and r["variable"] == "temperature"
     )
 
-    # member 1's value (22.0, from k3) should now count more than before,
-    # since it has a much better confidence than member 4 (30.5, from k20)
+    # member 4's value (30.5, from k20) should now count more than before,
+    # since it has both far more evidence AND better quality than member 1
+    # (22.0, from k3, thin and bad)
     assert mean_with_confidence != mean_no_confidence
-    assert mean_with_confidence < mean_no_confidence  # pulled toward member 1's lower value
+    assert mean_with_confidence > mean_no_confidence  # pulled toward member 4's higher value
 
 
 def test_missing_weight_drops_only_that_member():

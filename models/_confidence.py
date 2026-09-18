@@ -6,9 +6,9 @@ import db
 import models._similarity as _similarity
 
 _CONFIDENCE_WINDOW_DAYS = 400    # independent of tune's own lookback window
-_CONFIDENCE_PSEUDOCOUNT = 8      # k in the n/(n+k) trust-shrinkage blend: blend_frac
-                                 # reaches 0.5 once n matched-and-scored days exist,
-                                 # and keeps climbing (never hard-caps) as n grows further
+_CONFIDENCE_PSEUDOCOUNT = 8      # k in the n/(n+k) trust multiplier: trust reaches 0.5
+                                 # once n matched-and-scored days exist, and keeps
+                                 # climbing (never hard-caps) as n grows further
 _MIN_HISTORY_DAYS = 5            # a cell's history must span MORE than this many distinct days
 _MATCH_DISTANCE_THRESHOLD = 9.0  # analog candidates farther than this (in sigma-normalized
                                  # distance units, see _similarity.distance) aren't a real
@@ -18,7 +18,11 @@ _MATCH_MAX_CANDIDATES = 50       # of the candidates within threshold, keep only
                                  # this many -- bounds compute/noise as more days accumulate
                                  # without acting as a similarity requirement itself
 _LOOKBACK_DAYS = 365             # how far back full_analog_candidates searches
-_CONFIDENCE_FLOOR = 0.1          # no member's influence is ever driven to exactly zero
+_CONFIDENCE_FLOOR = 0.001        # 0.1%, not 10% -- a member reporting genuine 0%
+                                 # confidence still keeps a sliver of ensemble influence
+                                 # so it's never fully excluded, but a member that says
+                                 # "I don't know what I'm doing" should count for almost
+                                 # nothing, not a full tenth of a confident member's weight
 _TREND_WINDOW_SEC = 3 * 3600     # how far back each trend delta looks
 _MATCH_HOUR_TOLERANCE_SEC = 90 * 60  # a matched day's own nearest-clock-time snapshot
                                  # only pulls in this model's scored runs within this
@@ -106,38 +110,40 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
 def blended_confidence(matched_errors: list[float], overall_avg_error: float | None,
                         k: int) -> float | None:
     """
-    Returns None when overall_avg_error is None or <= 0. Returns exactly
-    0.0 when matched_errors is empty -- zero usable evidence, whether
-    because no analog day was a close enough match at all, or matched
-    days exist but this model has no scored run near their clock time.
-    Either way, there is nothing to base a confidence claim on. Otherwise:
+    Returns None when overall_avg_error is None or <= 0 -- no baseline to
+    measure against at all (a cell too young to have one; see
+    confidence_for_cell's _MIN_HISTORY_DAYS gate). Otherwise:
 
         matched_avg = sum(matched_errors) / len(matched_errors)
-        blend_frac = len(matched_errors) / (len(matched_errors) + k)
-        r = (1 - blend_frac) * 1.0 + blend_frac * (matched_avg / overall_avg_error)
-        return 1.0 / (1.0 + r)
+        raw = 1.0 / (1.0 + matched_avg / overall_avg_error)
+        trust = len(matched_errors) / (len(matched_errors) + k)
+        return trust * raw
 
-    k is a fixed pseudocount constant (_CONFIDENCE_PSEUDOCOUNT), not a hard
-    cap -- blend_frac has no ceiling and keeps climbing toward 1.0 as
-    matched_errors grows without bound, it just reaches 0.5 exactly at
-    n=k. A cell with fewer samples than k blends more than half its trust
-    toward the neutral overall-average baseline; more samples always earn
-    more trust, with no plateau. blend_frac never actually reaches 1.0 for
-    finite n, so r never reaches exactly 0 -- a nonempty-evidence result is
-    always in the OPEN interval (0, 1), approaching but never touching
-    either end. Combined with the empty-evidence 0.0 case, the full range
-    is [0, 1). A GROUP where every member reports the same confidence
-    value reproduces today's exact combination regardless of what that
-    value is.
+    `raw` is what confidence would say with full trust in the evidence:
+    above 0.5 when this member does BETTER than its own typical error on
+    days like this, below 0.5 when it does WORSE. `trust` is a multiplier
+    on that claim, not a blend toward it -- it scales confidence DOWN
+    toward zero as evidence thins, rather than blending it toward a
+    neutral 0.5 guess. Zero matched evidence (trust=0, matched_errors
+    empty) returns exactly 0.0: no analog day was ever a close enough
+    match, or matched days exist but this member has no scored run near
+    their clock time -- either way, there is no basis to claim any
+    confidence at all, not a coin-flip default. As n grows, trust climbs
+    toward 1.0 (no hard ceiling) and the result converges on `raw`. A cell
+    with fewer samples than k reports LESS than half of what raw alone
+    would justify, regardless of which direction raw points -- thin
+    evidence deserves a muted claim in either direction, not a neutral
+    one. Result is always in [0, 1): 0.0 only when matched_errors is
+    empty, otherwise strictly positive and never reaching 1.0 for finite n.
     """
     if overall_avg_error is None or overall_avg_error <= 0:
         return None
     if not matched_errors:
         return 0.0
     matched_avg = sum(matched_errors) / len(matched_errors)
-    blend_frac = len(matched_errors) / (len(matched_errors) + k)
-    r = (1 - blend_frac) * 1.0 + blend_frac * (matched_avg / overall_avg_error)
-    return 1.0 / (1.0 + r)
+    raw = 1.0 / (1.0 + matched_avg / overall_avg_error)
+    trust = len(matched_errors) / (len(matched_errors) + k)
+    return trust * raw
 
 
 def _compute_trends(now: dict, prior: dict | None) -> dict[str, float | None]:
@@ -243,7 +249,10 @@ def _inject(pairs: list[tuple[int, float]], member_weights: dict[int, float],
     if not pairs:
         return None, None
     known = [c for mid, _ in pairs if (c := confidences.get(mid)) is not None]
-    group_avg = sum(known) / len(known) if known else 0.5
+    # no member in the group reports any confidence at all -- total absence
+    # of evidence, same "nothing to base trust on" case blended_confidence's
+    # own empty-matches branch returns 0.0 for, not a neutral 0.5 guess
+    group_avg = sum(known) / len(known) if known else 0.0
     infl = []
     for mid, v in pairs:
         w = member_weights[mid]
