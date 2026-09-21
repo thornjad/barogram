@@ -1,6 +1,6 @@
 # pressure_tendency: forecast from the recent barometric pressure time series.
 #
-# regression members fit polynomials (OLS or WLS, degree 1 or 2) to recent pressure
+# regression members fit degree-1 polynomials (OLS or WLS) to recent pressure
 # observations, then extrapolate to each lead time for the pressure forecast. for
 # other variables, a transfer function (OLS slope from historical data) maps the
 # polynomial's tendency rate at t=0 to expected variable deltas.
@@ -116,20 +116,22 @@ _ZAMBRETTI_TEXT = {
 }
 
 # (member_id, name, poly_degree, window_hours, half_life_minutes or None)
+#
+# Members 6,7,8,9,10,11 (all the degree-2/quadratic members) retired 2026-09-18:
+# consistently the worst performers in the whole barogram roster (cross-variable
+# z-score analysis) -- a quadratic fit over a 3-6h window is a structural mismatch,
+# not a data-maturity gap, since the window length (not total history collected)
+# is what starves the fit of points. Historical forecast rows and the members-table
+# registry entries are kept; only future generation stopped. Full writeup: thornlog
+# message board "barogram-model-analysis".
 _MEMBERS = [
     (2,  "linear_1h",      1, 1,  None),
     (3,  "linear_3h",      1, 3,  None),
     (4,  "linear_6h",      1, 6,  None),
     (5,  "linear_3h_hl45", 1, 3,  45),
-    (6,  "quad_3h",        2, 3,  None),
-    (7,  "quad_6h",        2, 6,  None),
-    (8,  "quad_3h_hl20",   2, 3,  20),
-    (9,  "quad_3h_hl45",   2, 3,  45),
-    (10, "quad_6h_hl20",   2, 6,  20),
-    (11, "quad_6h_hl45",   2, 6,  45),
 ]
 
-_MIN_PTS = {1: 2, 2: 3}
+_MIN_PTS = {1: 2}
 _TENDENCY_WINDOW_SEC = 3 * 3600  # 3h
 _TENDENCY_LOOKUP_SEC = 600       # ±10 min
 _FUTURE_LOOKUP_SEC = 900         # ±15 min

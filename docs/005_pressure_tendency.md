@@ -17,9 +17,17 @@ where `p_mean` is the all-time mean of historical station pressures and `λ = 0.
 
 Members differ in:
 - **Window length**: how far back in time observations are drawn from (1h, 3h, or 6h)
-- **Polynomial degree**: linear (degree 1) or quadratic (degree 2)
 - **Weighting scheme**: uniform (all observations equally weighted) or exponentially
   decaying (more recent observations receive higher weight)
+
+### Retired members (2026-09-18)
+
+IDs 6, 7, 8, 9, 10, 11 (`quad_3h` through `quad_6h_hl45`, all degree-2/quadratic) were
+consistently the worst performers in the whole barogram roster — a quadratic fit over a
+3-6h window overshoots on extrapolation regardless of how much history accumulates, a
+structural mismatch rather than a data-maturity gap. Historical forecast rows and their
+`members`-table entries are kept; they just no longer run. Full writeup: thornlog
+message board "barogram-model-analysis". Only linear (degree-1) members remain.
 
 The exponential decay weighting uses the form `w = exp(ln(2)/hl * t)` where t is the
 centered time in hours and hl is the half-life. At t=0 (current time), w=1; at t=-hl,
