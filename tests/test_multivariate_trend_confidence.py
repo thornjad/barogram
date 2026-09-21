@@ -8,7 +8,7 @@ _ISSUED_AT = 1_700_000_000  # fixed epoch for determinism
 _LEAD = 6
 _VALID_AT = _ISSUED_AT + _LEAD * 3600
 _SHORT_MID = 1   # linear-1h
-_LONG_MID = 12   # linear-24h
+_LONG_MID = 2    # linear-3h
 
 
 def _row(ts, air_temp):
@@ -23,8 +23,8 @@ def _row(ts, air_temp):
 def _seed_all_obs():
     """24h of flat history (50.0) followed by a sharp ramp in the final hour
     (50 -> 55 -> 60). A 1h-window linear fit sees only the steep ramp; a
-    24h-window fit sees mostly flat history, so the two members extrapolate
-    to genuinely different values at lead=6."""
+    3h-window fit blends in two extra flat hours that damp the slope, so the
+    two members extrapolate to genuinely different values at lead=6."""
     rows = [_row(_ISSUED_AT - h * 3600, 50.0) for h in range(24, 1, -1)]
     rows.append(_row(_ISSUED_AT - 3600, 50.0))       # t = -1h
     rows.append(_row(_ISSUED_AT - 1800, 55.0))        # t = -0.5h
