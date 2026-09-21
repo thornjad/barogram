@@ -7,7 +7,6 @@
 #
 # members:
 #   1  linear_extrap    linear (degree 1) fit over 3h window, mean-reverted extrapolation
-#   2  quad_extrap      quadratic (degree 2) fit over 6h window, mean-reverted extrapolation
 #   3  damped_extrap    3h tendency rate decayed toward zero over the lead (OU-style rate decay,
 #                       analytically integrated) rather than extrapolating the raw polynomial
 #   4  fast_damped_extrap  same as damped_extrap but with a much shorter decay half-life
@@ -16,6 +15,13 @@
 #                       the actual crash; this member tests whether a faster-decaying rate
 #                       tracks rapid sub-6h transitions better without overreacting to noise
 #                       during slower, more typical drift
+#
+# member 2 (quad_extrap) retired 2026-09-18: consistently among the worst performers
+# in the whole barogram roster (cross-variable z-score analysis) -- quadratic fit over
+# a 6h window overshoots on extrapolation regardless of how much history accumulates,
+# a structural mismatch rather than a data-maturity gap. Historical forecast rows and
+# the members-table registry entry are kept; only future generation stopped. Full
+# writeup: thornlog message board "barogram-model-analysis".
 #
 # reuses the polynomial-fit and mean-reversion machinery from pressure_tendency rather
 # than re-deriving it — these are genuinely the same numerics, just fed differently.
@@ -51,7 +57,6 @@ _FUTURE_LOOKUP_SEC = 900   # +-15 min
 
 _MEMBERS = [
     (1, "linear_extrap"),
-    (2, "quad_extrap"),
     (3, "damped_extrap"),
     (4, "fast_damped_extrap"),
 ]
@@ -206,15 +211,6 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None, member_history=N
         p_vals = [r["station_pressure"] for r in win_3h]
         coefs_lin = _poly_fit(t_vals, p_vals, 1)
 
-    # quad_extrap: 6h window, degree 2
-    start_6h = issued_at - 6 * 3600
-    win_6h = [r for r in all_obs if r["timestamp"] >= start_6h and r["station_pressure"] is not None]
-    coefs_quad = None
-    if len(win_6h) >= 3:
-        t_vals = [(r["timestamp"] - issued_at) / 3600.0 for r in win_6h]
-        p_vals = [r["station_pressure"] for r in win_6h]
-        coefs_quad = _poly_fit(t_vals, p_vals, 2)
-
     rate0 = _poly_tendency_rate(coefs_lin) if coefs_lin is not None else None
 
     sector_transfer_fns = _build_delta_transfer_fns_by_sector(all_obs)
@@ -234,12 +230,6 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None, member_history=N
             preds[1] = _apply_mean_reversion(raw, p_mean, lead_f)
         else:
             preds[1] = None
-
-        if coefs_quad is not None and p_mean is not None and p_now is not None:
-            raw = _poly_eval(coefs_quad, lead_f)
-            preds[2] = _apply_mean_reversion(raw, p_mean, lead_f)
-        else:
-            preds[2] = None
 
         if rate0 is not None and p_now is not None:
             # analytic integral of an exponentially decaying rate: total predicted

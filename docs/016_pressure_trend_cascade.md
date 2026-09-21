@@ -17,7 +17,6 @@ from *that* predicted total delta.
 
 - **linear_extrap** — degree-1 fit over a 3h window, OU mean-reverted extrapolation
   (same reversion as pressure_tendency, λ=0.10/h)
-- **quad_extrap** — degree-2 fit over a 6h window, same mean reversion
 - **damped_extrap** — 3h tendency rate decayed toward zero over the lead
   (`delta = rate0 * (1 - exp(-λ*lead)) / λ`, λ=0.15/h), rather than extrapolating the
   raw polynomial
@@ -27,8 +26,17 @@ from *that* predicted total delta.
   the actual crash; this member tests whether decaying the rate faster tracks rapid
   sub-6h transitions better, at the cost of overreacting to noise on slower days
 
-All four reuse pressure_tendency's polynomial-fit and mean-reversion functions directly
+These reuse pressure_tendency's polynomial-fit and mean-reversion functions directly
 — the numerics are the same, only what feeds the transfer function differs.
+
+### Retired member (2026-09-18)
+
+ID 2 (`quad_extrap`, degree-2 fit over a 6h window) was consistently among the worst
+performers in the whole barogram roster — a quadratic fit over a 6h window overshoots
+on extrapolation regardless of how much history accumulates, a structural mismatch
+rather than a data-maturity gap. Historical forecast rows and its `members`-table entry
+are kept; it just no longer runs. Full writeup: thornlog message board
+"barogram-model-analysis".
 
 - **sector_conditioned_extrap** (added 2026-09-17) — reuses fast_damped_extrap's own
   pressure extrapolation unchanged, but applies a transfer function trained separately
