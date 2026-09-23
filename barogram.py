@@ -3,6 +3,8 @@
 # requires Python 3.11+; no Windows support
 
 import argparse
+import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -110,6 +112,11 @@ _MODELS = [
 
 _LOCAL_ENV = Path(__file__).parent / "barogram.local.toml"
 
+# every model anchors valid_at to this obs's timestamp, not to issued_at -- if it's
+# this stale, every lead hour's valid_at is off by the same amount and the forecast
+# isn't describing current conditions at all
+_STALE_OBS_THRESHOLD_SEC = 3600
+
 
 def _sync_check():
     conf = _sync.load_env(_LOCAL_ENV)
@@ -118,6 +125,18 @@ def _sync_check():
     result = _sync.wait_for_idle(conf)
     if result is False:
         sys.exit("error: syncthing is actively syncing — aborting to avoid write conflict")
+
+
+def _alert_stale_obs(age_sec: int) -> None:
+    message = f"latest Tempest obs is {age_sec / 3600:.1f}h old — forecast aborted"
+    print(f"error: {message}", file=sys.stderr)
+    notifier = shutil.which("terminal-notifier")
+    if notifier:
+        subprocess.run(
+            [notifier, "-title", "barogram", "-message", message,
+             "-group", "barogram", "-sound", "default"],
+            check=False,
+        )
 
 
 def cmd_conditions(args, conf):
@@ -187,6 +206,10 @@ def cmd_forecast(args, conf):
     obs = db.latest_tempest_obs(conn_in)
     if obs is None:
         sys.exit("error: no Tempest observations in input database")
+    obs_age = issued_at - obs["timestamp"]
+    if obs_age > _STALE_OBS_THRESHOLD_SEC:
+        _alert_stale_obs(obs_age)
+        sys.exit(1)
 
     shared_all_obs = (
         db.tempest_obs_in_range(conn_in, 0, issued_at)
