@@ -146,7 +146,8 @@ def test_missing_weight_drops_only_that_member():
     )
     member_vals = {
         r["member_id"]: r["value"] for r in rows
-        if r["lead_hours"] == 6 and r["variable"] == "temperature" and r["member_id"] != 0
+        if r["lead_hours"] == 6 and r["variable"] == "temperature"
+        and r["member_id"] in analog_mod._ALL_MEMBER_IDS
     }
     whole_group_average = sum(member_vals.values()) / len(member_vals)
     weighted_without_member_4 = sum(v for mid, v in member_vals.items() if mid != 4) / (len(member_vals) - 1)

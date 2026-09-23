@@ -61,6 +61,9 @@ Trained on total observed pressure delta over `[t, t+lead]` versus each variable
 delta over the same window (OLS, refit from full history on every run) — as opposed to
 pressure_tendency's fixed 3h backward rate as predictor.
 
+- **self_correction** (member 7) — standard self-correction member, see
+  [self_correction.md](self_correction.md)
+
 ## member_id=0
 
 Weighted mean (skill-score weights when available, else equal) + spread across the three

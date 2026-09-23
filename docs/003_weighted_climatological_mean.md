@@ -37,6 +37,19 @@ Continuous decay avoids arbitrary tier boundaries. `weight = e^(-k * age_days)`.
 
 The four constants span roughly an order of magnitude: `exp-steep` nearly ignores anything older than a week and might be more similar to model 001. `exp-gentle` still gives meaningful weight to observations from a month ago.
 
+### Signal members (2026-09-22)
+
+These three step outside the recency-weighting family. Each replaces or conditions the (month, hour) bucket differently instead of reweighting it by age.
+
+| ID | Name                  | Approach |
+|----|-----------------------|----------|
+| 10 | sector_climatology    | Bucket mean further filtered to observations sharing the current 8-point wind sector (NW cold/dry vs SE warm/humid advection), falling back to the plain bucket mean when the sector-filtered pool has fewer than 8 observations |
+| 11 | harmonic_regression   | Low-order Fourier fit (2 annual harmonics × 2 diurnal harmonics, plus intercept) to the full `air_temp` history, projected forward — a smooth continuous alternative to the discrete bucket. Temperature only; dewpoint and pressure are left unfit since the signal was only proposed for `air_temp` |
+| 12 | continuous_doy_phase  | Bucket mean with the hard month match replaced by a von Mises (circular Gaussian) kernel over day-of-year phase (κ=8, ~20-day effective smoothing radius), so there's no step artifact at month boundaries — most visible historically around the equinoxes |
+| 13 | self_correction | Standard self-correction member, see [self_correction.md](self_correction.md) |
+
+Sector climatology needs `wind_direction` on the bucket rows, so `db.climo_bucket_obs` now selects it alongside the existing columns. Harmonic regression and the day-of-year kernel both need the full station history rather than a single (month, hour) bucket, so the model now sets `NEEDS_ALL_OBS`.
+
 ### Model ensemble
 
 Member 0 uses skill-score weights from `tune` when available; equal weighting is the fallback before sufficient scoring history exists. The spread is the standard deviation of the member forecasts, showing how much the members disagree in a run.

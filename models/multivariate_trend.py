@@ -3,15 +3,22 @@ import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 
 MODEL_ID = 14
 MODEL_NAME = "multivariate_trend"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_ALL_OBS = True
 NEEDS_WEIGHTS = True
 NEEDS_MATCH_HISTORY = True
+
+# member 17 (self_correction): standard self-correction member
+# (models/_self_correction.py) -- member_id=0 minus this model's own learned
+# historical bias. Next open id after the retired 3,4,6-16 range.
+_SELF_CORRECTION_MEMBER = 17
 
 # (member_id, name, degree, window_h, half_life_min, max_lead_h)
 # max_lead_h: skip evaluation for leads > this value. Every member gets one — no
@@ -33,6 +40,7 @@ _MEMBERS = [
     (5,  "wls-3h-hl20",    1, 3,   20,   6),
 ]
 _ALL_MEMBER_IDS = [m[0] for m in _MEMBERS]
+_CONFIDENCE_MEMBER_IDS = _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER]
 _MIN_PTS = {1: 2}
 
 
@@ -87,7 +95,7 @@ def _exp_weights(t_vals, half_life_h):
 
 
 
-def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
+def run(obs, issued_at, *, conn_in, conn_out=None, weights=None, all_obs=None,
         member_history=None, default_matches=None):
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
@@ -130,7 +138,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
         # this model has no per-member analog selection of its own to reuse
         cell_confidences = {
             variable: _confidence.member_confidences(
-                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+                member_history, default_matches, _CONFIDENCE_MEMBER_IDS, variable, lead
             )
             for variable in all_variables
         }
@@ -185,6 +193,21 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
                 "value": mean,
                 "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences[variable].get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

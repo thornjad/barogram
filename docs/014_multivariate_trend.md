@@ -50,6 +50,7 @@ at those leads.
 | 1  | linear-1h       | 1 | 1h   | none   | 6h   | very recent micro-trends |
 | 2  | linear-3h       | 1 | 3h   | none   | 6h   | medium-term OLS |
 | 5  | wls-3h-hl20     | 1 | 3h   | 20 min | 6h   | strongly recent-biased |
+| 17 | self_correction | — | — | — | — | standard self-correction member, see [self_correction.md](self_correction.md) — next open id after the retired 3,4,6-16 range |
 
 ### Retired members (2026-09-18)
 

@@ -27,6 +27,7 @@ and applies it directly to the diurnal deviation from the daily mean.
 | 5 | 48h-amp-ridge | 48h | yes |
 | 6 | 72h-amp-ridge | 72h | yes |
 | 7 | 24h-amp-damped | 24h | no |
+| 8 | self_correction | — | — |
 
 ## Algorithm
 
@@ -80,6 +81,11 @@ diurnal amplitude for a dry regime that didn't actually bring exceptional daytim
 heating. Member 7 keeps the full-strength dewpoint anomaly (`td_anom`, undamped) and
 applies `TEMP_DAMP_FACTOR` only to `amp_adj` on the temperature side, to test whether
 the two halves of this model should be decoupled.
+
+## member 8: self_correction
+
+Standard self-correction member, see [self_correction.md](self_correction.md) —
+member_id=0 minus this model's own learned historical bias.
 
 ## Confidence
 

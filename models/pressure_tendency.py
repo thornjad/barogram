@@ -23,6 +23,13 @@
 # 15:12 UTC year-round) and always looks back to the most recent occurrence of
 # that anchor, so the dashboard shows one stable "forecast for today" no
 # matter what time it happens to regenerate.
+#
+# _build_transfer_fns and _build_zambretti_conditionals both detide
+# station_pressure (models._pressure_tide) before using it as a tendency-rate
+# or category *input* -- the small twice-daily solar pressure tide otherwise
+# adds noise to the rate estimate itself. Outputs (the actual forecast values)
+# stay in real, tide-included space; the regression members' own pressure
+# extrapolation is untouched.
 
 import bisect
 import datetime as dt
@@ -33,15 +40,24 @@ import time
 import db
 import fmt
 import models._confidence as _confidence
+import models._pressure_tide as _pressure_tide
+import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 
 MODEL_ID = 5
 MODEL_NAME = "pressure_tendency"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
 NEEDS_MATCH_HISTORY = True
+
+# member 12 (self_correction): standard self-correction member
+# (models/_self_correction.py) -- member_id=0 minus this model's own learned
+# historical bias. IDs 6-11 are retired quadratic members with existing scored
+# history (see the retired-members note above) and must not be reused.
+_SELF_CORRECTION_MEMBER = 12
 
 # 3h tendency thresholds in hPa
 _RAPID = 1.6
@@ -243,10 +259,14 @@ def _ols1(xs, ys):
     intercept = (sy - slope * sx) / n
     return slope, intercept
 
-def _build_transfer_fns(all_obs, issued_at):
+def _build_transfer_fns(all_obs, issued_at, profile):
     """
     Compute transfer functions mapping 3h tendency rate (hPa/h) to expected variable
     delta for each non-pressure variable and lead time. Uses all available history.
+
+    p_now/p_past are detided (models._pressure_tide) before computing the rate --
+    the predictor gets the tide's noise scrubbed out; row_now/row_fut's own raw
+    values (the transfer targets) are untouched.
 
     note: transfer functions are trained on 3h window rates. regression members apply
     their polynomial derivative at t=0 as the predictor, which may differ from the 3h
@@ -266,13 +286,13 @@ def _build_transfer_fns(all_obs, issued_at):
         ys = {col: [] for col, _ in non_pressure}
 
         for ts in sorted_ts:
-            p_now = by_ts[ts]["station_pressure"]
+            p_now = _pressure_tide.detided(by_ts[ts]["station_pressure"], ts, profile)
             if p_now is None:
                 continue
             ts_past = _find_nearest_ts(sorted_ts, ts - _TENDENCY_WINDOW_SEC, _TENDENCY_LOOKUP_SEC)
             if ts_past is None:
                 continue
-            p_past = by_ts[ts_past]["station_pressure"]
+            p_past = _pressure_tide.detided(by_ts[ts_past]["station_pressure"], ts_past, profile)
             if p_past is None:
                 continue
             ts_fut = _find_nearest_ts(sorted_ts, ts + lead_sec, _FUTURE_LOOKUP_SEC)
@@ -297,10 +317,13 @@ def _build_transfer_fns(all_obs, issued_at):
 
     return result
 
-def _build_zambretti_conditionals(all_obs, issued_at):
+def _build_zambretti_conditionals(all_obs, issued_at, profile):
     """
     Compute historical conditional mean deltas for each (category, col, lead).
     Cells with fewer than 3 historical pairs are omitted (returned as absent).
+
+    p_now/p_past are detided (models._pressure_tide) before categorizing --
+    see _build_transfer_fns's docstring for why.
 
     returns {(category, col, lead_hours): mean_delta}
     """
@@ -312,13 +335,13 @@ def _build_zambretti_conditionals(all_obs, issued_at):
     for lead in LEAD_HOURS:
         lead_sec = lead * 3600
         for ts in sorted_ts:
-            p_now = by_ts[ts]["station_pressure"]
+            p_now = _pressure_tide.detided(by_ts[ts]["station_pressure"], ts, profile)
             if p_now is None:
                 continue
             ts_past = _find_nearest_ts(sorted_ts, ts - _TENDENCY_WINDOW_SEC, _TENDENCY_LOOKUP_SEC)
             if ts_past is None:
                 continue
-            p_past = by_ts[ts_past]["station_pressure"]
+            p_past = _pressure_tide.detided(by_ts[ts_past]["station_pressure"], ts_past, profile)
             if p_past is None:
                 continue
             cat = _zambretti_category(p_now - p_past)
@@ -470,14 +493,15 @@ def zambretti_text(conn_in, elevation_m: float = 0.0, now_ts: int | None = None)
         "season_text": season_text,
     }
 
-def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
+def run(obs, issued_at, *, conn_in, conn_out=None, weights=None, all_obs=None,
         member_history=None, default_matches=None):
     # fetch full observation history for transfer functions and zambretti conditionals
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
 
-    transfer_fns = _build_transfer_fns(all_obs, issued_at)
-    zambretti_conds = _build_zambretti_conditionals(all_obs, issued_at)
+    profile = _pressure_tide.build_profile(all_obs)
+    transfer_fns = _build_transfer_fns(all_obs, issued_at, profile)
+    zambretti_conds = _build_zambretti_conditionals(all_obs, issued_at, profile)
 
     p_hist = [r["station_pressure"] for r in all_obs if r["station_pressure"] is not None]
     p_mean = sum(p_hist) / len(p_hist) if p_hist else None
@@ -487,12 +511,13 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
     row_past = db.nearest_tempest_obs(
         conn_in, issued_at - _TENDENCY_WINDOW_SEC, window_sec=_TENDENCY_LOOKUP_SEC
     )
-    if (
-        row_past is not None
-        and obs["station_pressure"] is not None
-        and row_past["station_pressure"] is not None
-    ):
-        delta_p = obs["station_pressure"] - row_past["station_pressure"]
+    obs_p_detided = _pressure_tide.detided(obs["station_pressure"], issued_at, profile)
+    past_p_detided = (
+        _pressure_tide.detided(row_past["station_pressure"], issued_at - _TENDENCY_WINDOW_SEC, profile)
+        if row_past is not None else None
+    )
+    if obs_p_detided is not None and past_p_detided is not None:
+        delta_p = obs_p_detided - past_p_detided
         cat = _zambretti_category(delta_p)
         for variable, col in VARIABLES.items():
             obs_val = obs[col]
@@ -555,13 +580,14 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
 
     # --- emit member rows + ensemble mean (member_id=0) ---
     all_member_ids = [1] + [mid for mid, *_ in _MEMBERS]
+    confidence_member_ids = all_member_ids + [_SELF_CORRECTION_MEMBER]
     rows = []
 
     for variable in VARIABLES:
         for lead in LEAD_HOURS:
             valid_at = obs["timestamp"] + lead * 3600
             cell_confidences = _confidence.member_confidences(
-                member_history, default_matches, all_member_ids, variable, lead
+                member_history, default_matches, confidence_member_ids, variable, lead
             )
 
             for mid in all_member_ids:
@@ -623,6 +649,21 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
                 "value": mean,
                 "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

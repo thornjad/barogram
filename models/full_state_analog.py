@@ -4,12 +4,19 @@ import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 
 MODEL_ID = 13
 MODEL_NAME = "full_state_analog"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_MATCH_HISTORY = True
+
+# member 18 (self_correction): standard self-correction member
+# (models/_self_correction.py) -- member_id=0 minus this model's own learned
+# historical bias.
+_SELF_CORRECTION_MEMBER = 18
 
 from models._climo_weights import LEAD_HOURS
 
@@ -52,6 +59,38 @@ _MEMBERS = [
     (13, "full-k50",         50, _ALL_FEATURES,                                      False, False),
 ]
 _ALL_MEMBER_IDS = [m[0] for m in _MEMBERS]
+
+# members 14-17: candidate-pool variants that don't fit the plain (member_id,
+# name, K, features, dist_weighted, seasonal) shape above -- each restricts or
+# reshapes the candidate pool itself before the same K-nearest/mean-forecast
+# machinery runs, registered in migrations/053_full_state_analog_pool_variant_members.sql
+_SEASONAL_WINDOW_ID = 14
+_REGIME_GATED_ID = 15
+_TRAJECTORY_ID = 16
+_FULL_FINGERPRINT_ID = 17
+_POOL_VARIANT_MEMBER_IDS = [_SEASONAL_WINDOW_ID, _REGIME_GATED_ID, _TRAJECTORY_ID, _FULL_FINGERPRINT_ID]
+_ALL_MEMBER_IDS = _ALL_MEMBER_IDS + _POOL_VARIANT_MEMBER_IDS
+_CONFIDENCE_MEMBER_IDS = _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER]
+
+_SEASONAL_WINDOW_DAYS = 21
+_SEASONAL_WINDOW_K = 15
+
+# same 3h-window, 0.5 hPa rising/falling/steady convention as
+# synoptic_state_machine.py's _pressure_tendency_cat, kept independent since
+# that function lives in a model file, not a shared module
+_REGIME_TREND_THRESHOLD_HPA = 0.5
+_REGIME_GATED_K = 15
+
+# trend-only features for trajectory-analog: this model's own _ALL_FEATURES,
+# each promoted to its 3h trend delta instead of an instantaneous snapshot
+_TRAJECTORY_FEATURES = [f"{col}_trend" for col in _ALL_FEATURES]
+_TRAJECTORY_K = 10
+
+# the full snapshot+trend confidence fingerprint (models/_confidence.py's
+# _DEFAULT_FEATURES + _TREND_FEATURES), reused here as a forecast-state
+# lookup rather than only a confidence-matching input
+_FULL_FINGERPRINT_FEATURES = _confidence._DEFAULT_FEATURES + _confidence._TREND_FEATURES
+_FULL_FINGERPRINT_K = 20
 
 
 def _arc_delta(a: float, b: float) -> float:
@@ -106,6 +145,33 @@ def _month_diff(ts1: int, ts2: int) -> int:
     return min(diff, 12 - diff)
 
 
+def _day_of_year_diff(ts1: int, ts2: int) -> int:
+    d1 = _dt.datetime.fromtimestamp(ts1).timetuple().tm_yday
+    d2 = _dt.datetime.fromtimestamp(ts2).timetuple().tm_yday
+    diff = abs(d1 - d2)
+    return min(diff, 366 - diff)
+
+
+def _pressure_regime(pressure_trend: float | None) -> str | None:
+    if pressure_trend is None:
+        return None
+    if pressure_trend > _REGIME_TREND_THRESHOLD_HPA:
+        return "rising"
+    if pressure_trend < -_REGIME_TREND_THRESHOLD_HPA:
+        return "falling"
+    return "steady"
+
+
+def _with_trends(conn_in, base: dict) -> dict:
+    """base plus one '<col>_trend' key per _confidence._DEFAULT_FEATURES,
+    computed against base's own 3h-prior Tempest obs. Used to build the
+    trend-augmented obs/candidate views members 15-17 match against."""
+    prior = db.nearest_tempest_obs(
+        conn_in, base["timestamp"] - _confidence._TREND_WINDOW_SEC, window_sec=1800
+    )
+    return {**base, **_confidence.compute_trends(base, prior, _confidence._DEFAULT_FEATURES)}
+
+
 def _select_analogs(cands_with_dist: list, k: int) -> list:
     valid = [(d, c) for d, c in cands_with_dist if d is not None]
     valid.sort(key=lambda x: x[0])
@@ -130,9 +196,9 @@ def _dist_weighted_forecast(dist_val_pairs: list) -> float | None:
     return sum((1.0 / d) * v for d, v in valid) / total_w
 
 
-def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
+def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_history=None,
         default_matches=None) -> list[dict]:
-    candidates = db.full_analog_candidates(conn_in, obs["timestamp"])
+    candidates = [dict(c) for c in db.full_analog_candidates(conn_in, obs["timestamp"])]
     obs_vec = {col: obs.get(col) for col in _ALL_FEATURES}
 
     member_analogs: dict[int, list] = {}
@@ -151,6 +217,55 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
                 for cand in candidates
             ]
         member_analogs[mid] = _select_analogs(cands_with_dist, k)
+
+    # seasonal-window-restricted analog: same _ALL_FEATURES distance as the
+    # full-k members, but candidates outside +/-21 calendar days never enter
+    # the pool at all, instead of full-seasonal's whole-year decay penalty
+    seasonal_pool = [
+        c for c in candidates
+        if _day_of_year_diff(obs["timestamp"], c["timestamp"]) <= _SEASONAL_WINDOW_DAYS
+    ]
+    sigmas = _norm_sigmas(seasonal_pool, _ALL_FEATURES)
+    cands_with_dist = [(_distance(obs_vec, c, _ALL_FEATURES, sigmas), c) for c in seasonal_pool]
+    member_analogs[_SEASONAL_WINDOW_ID] = _select_analogs(cands_with_dist, _SEASONAL_WINDOW_K)
+
+    # trend-augmented views for the three members that need more than an
+    # instantaneous snapshot -- one extra nearest_tempest_obs lookup per
+    # candidate, same cost accepted for the shared confidence fingerprint
+    obs_trend = _with_trends(conn_in, obs)
+    candidates_trend = [_with_trends(conn_in, c) for c in candidates]
+
+    # regime-gated analog: candidate pool filtered to the current 3h
+    # pressure-trend regime (rising/falling/steady) before the same
+    # _ALL_FEATURES distance runs within that narrower pool. No obs_regime
+    # (unknown current trend) means no basis to gate -- abstain rather than
+    # falling back to the unfiltered pool.
+    obs_regime = _pressure_regime(obs_trend.get("station_pressure_trend"))
+    regime_pool = [
+        c for c in candidates_trend if _pressure_regime(c.get("station_pressure_trend")) == obs_regime
+    ] if obs_regime is not None else []
+    sigmas = _norm_sigmas(regime_pool, _ALL_FEATURES)
+    cands_with_dist = [(_distance(obs_vec, c, _ALL_FEATURES, sigmas), c) for c in regime_pool]
+    member_analogs[_REGIME_GATED_ID] = _select_analogs(cands_with_dist, _REGIME_GATED_K)
+
+    # trajectory-analog: match on each _ALL_FEATURES column's own 3h trend
+    # delta instead of its instantaneous value -- the same trend vectors
+    # models/_confidence.py already computes for confidence matching,
+    # promoted here into an actual forecasting member
+    sigmas = _norm_sigmas(candidates_trend, _TRAJECTORY_FEATURES)
+    cands_with_dist = [
+        (_distance(obs_trend, c, _TRAJECTORY_FEATURES, sigmas), c) for c in candidates_trend
+    ]
+    member_analogs[_TRAJECTORY_ID] = _select_analogs(cands_with_dist, _TRAJECTORY_K)
+
+    # full trend+snapshot state lookup: the full confidence fingerprint
+    # (snapshot + trend, every Tempest sensor) reused as a forecast-state
+    # lookup rather than only a confidence-matching input
+    sigmas = _norm_sigmas(candidates_trend, _FULL_FINGERPRINT_FEATURES)
+    cands_with_dist = [
+        (_distance(obs_trend, c, _FULL_FINGERPRINT_FEATURES, sigmas), c) for c in candidates_trend
+    ]
+    member_analogs[_FULL_FINGERPRINT_ID] = _select_analogs(cands_with_dist, _FULL_FINGERPRINT_K)
 
     # each member's own selected analog days, reused as its confidence match
     # set too, instead of the shared default fingerprint every other model uses
@@ -198,9 +313,22 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
 
                 member_vals[mid][variable] = value
 
+        # the four pool-variant members: plain mean forecast, no
+        # distance-weighting, same shape as any non-dist-weighted member above
+        for mid in _POOL_VARIANT_MEMBER_IDS:
+            analogs = member_analogs[mid]
+            member_vals[mid] = {}
+            for variable, col in VARIABLES.items():
+                futures = [
+                    future_cache[cand["timestamp"]][col]
+                    if future_cache[cand["timestamp"]] is not None else None
+                    for _, cand in analogs
+                ]
+                member_vals[mid][variable] = _mean_forecast(futures)
+
         for variable in VARIABLES:
             cell_confidences = _confidence.member_confidences(
-                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead,
+                member_history, default_matches, _CONFIDENCE_MEMBER_IDS, variable, lead,
                 matched_ts_by_mid,
             )
             for mid in _ALL_MEMBER_IDS:
@@ -253,6 +381,21 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
                 "value": mean,
                 "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

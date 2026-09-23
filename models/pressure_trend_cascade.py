@@ -31,6 +31,7 @@ import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 from models.pressure_tendency import (
@@ -46,9 +47,15 @@ from models.pressure_tendency import (
 MODEL_ID = 16
 MODEL_NAME = "pressure_trend_cascade"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
 NEEDS_MATCH_HISTORY = True
+
+# member 7 (self_correction): standard self-correction member
+# (models/_self_correction.py) -- member_id=0 minus this model's own learned
+# historical bias.
+_SELF_CORRECTION_MEMBER = 7
 
 _REVERSION_LAMBDA = 0.10   # per hour, matches pressure_tendency's OU e-folding
 _DAMP_LAMBDA = 0.15        # per hour; e-folding ~6.7h for the damped-rate member
@@ -77,6 +84,7 @@ _EXTRA_MEMBERS = [
     (6, "solar_gated_extrap"),
 ]
 _ALL_MEMBER_IDS = [mid for mid, _ in _MEMBERS] + [mid for mid, _ in _EXTRA_MEMBERS]
+_CONFIDENCE_MEMBER_IDS = _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER]
 
 
 def _build_delta_transfer_fns_by_sector(all_obs):
@@ -191,7 +199,7 @@ def _build_delta_transfer_fns(all_obs):
     return result
 
 
-def run(obs, issued_at, *, conn_in, weights=None, all_obs=None, member_history=None,
+def run(obs, issued_at, *, conn_in, conn_out=None, weights=None, all_obs=None, member_history=None,
         default_matches=None):
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
@@ -244,7 +252,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None, member_history=N
 
         variable_confidences = {
             variable: _confidence.member_confidences(
-                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+                member_history, default_matches, _CONFIDENCE_MEMBER_IDS, variable, lead
             )
             for variable in VARIABLES
         }
@@ -380,6 +388,21 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None, member_history=N
                 "value": mean,
                 "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

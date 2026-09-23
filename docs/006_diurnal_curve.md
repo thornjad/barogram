@@ -67,7 +67,7 @@ recent-weather context.
 
 ## Member inventory
 
-39 numbered members + member_id=0 (weighted ensemble mean).
+41 numbered members + member_id=0 (weighted ensemble mean).
 
 | Member IDs | Curve      | Lookbacks             | Anchors                  |
 |------------|------------|-----------------------|--------------------------|
@@ -75,9 +75,45 @@ recent-weather context.
 | 13–24      | piecewise  | 7d, 14d, 30d, yr      | current, midnight, none  |
 | 25–36      | asymmetric | 7d, 14d, 30d, yr      | current, midnight, none  |
 | 37–39      | solar      | 30d (amp/base only)   | current, midnight, none  |
+| 40         | range_scaled | 7d                  | current                  |
+| 41         | wind_sector_conditioned | 30d        | current                  |
 
 Member naming: `{curve}-{lookback}-{anchor}` (e.g. `sine-7d-current`,
-`asymmetric-30d-none`, `solar-midnight`).
+`asymmetric-30d-none`, `solar-midnight`). Members 40 and 41 are named directly
+(`range_scaled`, `wind_sector_conditioned`) since each is a single fixed
+lookback/anchor combination rather than a member of a swept family.
+
+## Range-scaled member (40)
+
+Cloudy or windy days compress the day's temperature/dewpoint range; clear,
+calm days expand it. This member forecasts that range directly, rather than
+just the peak timing and shape the curve/anchor combinations above touch.
+
+Baseline range is the trailing-24h actual high minus low (falls back to the
+7d curve's own range if fewer than 20 trailing observations exist). That
+baseline is scaled by a ratio comparing today's actual rate of change since
+local midnight to the 7d curve's own rate over the same window: warming
+faster than climatology expands the predicted range, slower compresses it.
+The ratio is clamped to [0.3, 2.5] to keep a single unusual morning from
+blowing out the whole day's forecast.
+
+The 7d piecewise curve is then rescaled around its own mean by
+`predicted_range / curve_range` and current-anchored (shifted to pass through
+the live observation), the same anchoring the other current members use.
+
+## Wind-sector-conditioned member (41)
+
+One pooled (hour-of-day) curve assumes the day's shape doesn't depend on wind
+sector, but at this latitude an NW day and a S day have genuinely different
+diurnal shapes (winter cold-advection days vs summer humid-advection days).
+
+This member fits the piecewise curve only against the last 30 days of
+observations sharing the current prevailing 8-point wind sector (the sector
+of the live wind_direction reading, same 8-point convention as
+`airmass_diurnal`'s wind-sector members: 0=N, 1=NE, ... 7=NW), then
+current-anchors it. Filtering by sector shrinks the effective sample size
+roughly eightfold versus the pooled 30d curve, so this member returns None
+far more often in its early weeks than the pooled members do.
 
 member_id=0 is the skill-score weighted mean across all members with valid
 forecasts for a given (variable, lead_hours) pair.
@@ -103,6 +139,11 @@ produce no data until approximately one year after the station comes online.
 - **Year-ago window empty**: members 10–12, 22–24, 34–36 return None
 - **Sine fit near-singular**: `np.linalg.lstsq` handles via SVD; if
   coefficients are non-finite, sine members return None for that lookback
+- **Fewer than 20 trailing-24h observations**: member 40 falls back to the 7d
+  curve's own range instead of an actual trailing high/low
+- **No live wind_direction, or too few 30d obs in the prevailing sector** (fewer
+  than 3 obs in 12 of 24 hour buckets, the same threshold as every other
+  member here): member 41 returns None
 
 ## Confidence
 

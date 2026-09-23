@@ -240,7 +240,7 @@ def climo_bucket_obs(
     rows = conn.execute(
         """
         select t.timestamp, t.air_temp, t.dew_point,
-               t.station_pressure, t.wind_avg
+               t.station_pressure, t.wind_avg, t.wind_direction
         from tempest_obs t
         join stations s on s.station_id = t.station_id
         where s.source = 'tempest'
@@ -255,7 +255,7 @@ def climo_bucket_obs(
     return conn.execute(
         """
         select t.timestamp, t.air_temp, t.dew_point,
-               t.station_pressure, t.wind_avg
+               t.station_pressure, t.wind_avg, t.wind_direction
         from tempest_obs t
         join stations s on s.station_id = t.station_id
         where s.source = 'tempest'

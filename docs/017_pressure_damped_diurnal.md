@@ -19,6 +19,8 @@ climatology + anchor, matching airmass_diurnal's own convention).
 - **airmass_pressure_joint** — clearness index (clear/cloudy) crossed with a
   pressure-trend bucket (rising/steady/falling) into six joint states, each with its
   own fixed multiplier
+- **self_correction** (member 4) — standard self-correction member, see
+  [self_correction.md](self_correction.md)
 
 ## member_id=0
 

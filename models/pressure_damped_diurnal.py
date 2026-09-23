@@ -16,21 +16,27 @@
 #                       a fixed damping/boosting factor, else amplitude untouched
 #   3  airmass_pressure_joint  clearness index x pressure-trend bucket joint state,
 #                       each combination gets its own fixed multiplier
+#   4  self_correction  standard self-correction member (models/_self_correction.py)
+#                       -- member_id=0 minus this model's own learned historical bias
 
 import datetime as dt
 import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._utils import _sector
 from models.airmass_diurnal import _hour_means, _interp_hm, clearness_index
 
 MODEL_ID = 17
 MODEL_NAME = "pressure_damped_diurnal"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_LOCATION = True
 NEEDS_MATCH_HISTORY = True
+
+_SELF_CORRECTION_MEMBER = 4
 
 from models._climo_weights import LEAD_HOURS
 
@@ -62,6 +68,7 @@ _MEMBER_NAMES = [
     (3, "airmass_pressure_joint"),
 ]
 _ALL_MEMBER_IDS = [mid for mid, _ in _MEMBER_NAMES]
+_CONFIDENCE_MEMBER_IDS = _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER]
 
 
 def _local_hour_float(ts: int) -> float:
@@ -77,7 +84,7 @@ def _pressure_bucket(dp_dt: float) -> str:
     return "steady"
 
 
-def run(obs, issued_at: int, *, conn_in, weights=None, location=None, member_history=None,
+def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, location=None, member_history=None,
         default_matches=None) -> list[dict]:
     if location is None:
         location = db.tempest_station_location(conn_in)
@@ -111,7 +118,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None, location=None, member_his
 
         variable_confidences = {
             variable: _confidence.member_confidences(
-                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+                member_history, default_matches, _CONFIDENCE_MEMBER_IDS, variable, lead
             )
             for variable in VAR_COL
         }
@@ -202,6 +209,17 @@ def run(obs, issued_at: int, *, conn_in, weights=None, location=None, member_his
                 "lead_hours": lead, "variable": variable,
                 "value": mean, "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID, "model": MODEL_NAME, "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at, "valid_at": valid_at,
+                "lead_hours": lead, "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

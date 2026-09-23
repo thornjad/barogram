@@ -17,6 +17,8 @@
 #                       range); this member keeps the full-strength dewpoint side
 #                       and damps only the temperature side, to test whether the
 #                       two should be decoupled
+#   8  self_correction  standard self-correction member (models/_self_correction.py)
+#                       -- member_id=0 minus this model's own learned historical bias
 
 import datetime as dt
 import math
@@ -24,13 +26,17 @@ import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._utils import _sector
 
 MODEL_ID = 15
 MODEL_NAME = "dry_airmass_diurnal"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_MATCH_HISTORY = True
+
+_SELF_CORRECTION_MEMBER = 8
 
 from models._climo_weights import LEAD_HOURS
 
@@ -56,6 +62,7 @@ _MEMBERS = [
     (7, 24, False, _TEMP_DAMP_FACTOR),
 ]
 _ALL_MEMBER_IDS = [mid for mid, *_ in _MEMBERS]
+_CONFIDENCE_MEMBER_IDS = _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER]
 
 
 def _local_hour_float(ts: int) -> float:
@@ -120,7 +127,7 @@ def _null_rows(issued_at: int) -> list[dict]:
     rows = []
     for lead in LEAD_HOURS:
         valid_at = issued_at + lead * 3600
-        for mid in [0] + _ALL_MEMBER_IDS:
+        for mid in [0] + _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER]:
             for variable in VAR_COL:
                 rows.append({
                     "model_id": MODEL_ID, "model": MODEL_NAME, "member_id": mid,
@@ -131,7 +138,7 @@ def _null_rows(issued_at: int) -> list[dict]:
     return rows
 
 
-def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
+def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_history=None,
         default_matches=None) -> list[dict]:
     t_now = _local_hour_float(obs["timestamp"])
 
@@ -209,7 +216,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
 
         variable_confidences = {
             variable: _confidence.member_confidences(
-                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+                member_history, default_matches, _CONFIDENCE_MEMBER_IDS, variable, lead
             )
             for variable in VAR_COL
         }
@@ -259,6 +266,17 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
                 "lead_hours": lead, "variable": variable,
                 "value": mean, "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID, "model": MODEL_NAME, "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at, "valid_at": valid_at,
+                "lead_hours": lead, "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

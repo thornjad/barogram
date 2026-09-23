@@ -30,6 +30,11 @@ lightning is present, while a synoptic member homes in on pressure-flow patterns
    difference. Sigma is fixed at 90° (one compass quadrant) rather than computed from
    the pool, because circular statistics don't map cleanly onto z-score normalization.
 4. **Analog selection, forecasting, member_id=0**: Identical to model 8 — see `docs/008_analog.md` for details on K-nearest selection and inverse-distance weighting.
+5. **Pool-variant members (14-17)**: Instead of varying the feature subset within the
+   same whole-history candidate pool, these restrict or reshape the pool itself before
+   the same K-nearest/mean-forecast machinery runs — a hard seasonal window, a
+   pressure-regime filter, or matching on trend deltas (`models/_confidence.py`'s
+   `compute_trends`) instead of instantaneous snapshots. See the members table below.
 
 ## Features
 
@@ -50,7 +55,7 @@ lightning is present, while a synoptic member homes in on pressure-flow patterns
 
 | ID | Name | K | Features | Notes |
 |----|------|---|----------|-------|
-| 0 | ensemble mean | — | — | inverse-MAE weighted mean + spread across members 1–8 |
+| 0 | ensemble mean | — | — | inverse-MAE weighted mean + spread across members 1–17 |
 | 1 | full-k5 | 5 | all 10 | equal weights |
 | 2 | full-k10 | 10 | all 10 | more stable as data accumulates |
 | 3 | thermo-wind | 5 | temp, dp, pressure, wind_avg, wind_dir | thermal + kinematic state |
@@ -59,6 +64,16 @@ lightning is present, while a synoptic member homes in on pressure-flow patterns
 | 6 | precip-signal | 5 | dp, precip_accum, lightning | moisture + convective activity |
 | 7 | full-seasonal | 5 | all 10 | penalizes analogs from distant calendar months (×1+0.2×month_diff) |
 | 8 | full-dist-weighted | 10 | all 10 | inverse-distance-weighted final value |
+| 9 | full-k3 | 3 | all 10 | tightest K, most local |
+| 10 | full-k15 | 15 | all 10 | |
+| 11 | full-k20 | 20 | all 10 | |
+| 12 | full-k35 | 35 | all 10 | |
+| 13 | full-k50 | 50 | all 10 | widest K, most stable |
+| 14 | seasonal-window | 15 | all 10 | candidate pool hard-restricted to ±21 calendar days across years, instead of full-seasonal's whole-year decay penalty |
+| 15 | regime-gated | 15 | all 10 | candidate pool filtered to the current 3h pressure-trend regime (rising/falling/steady, same 0.5 hPa threshold as `synoptic_state_machine`) before ranking by distance; abstains when the current regime itself is unknown |
+| 16 | trajectory-analog | 10 | all 10, each as its own 3h trend delta | matches on recent trajectory rather than instantaneous snapshot; promotes the trend-vector matching `models/_confidence.py` already computes for confidence into an actual forecasting member |
+| 17 | full-fingerprint-lookup | 20 | full 34-feature snapshot+trend confidence fingerprint (`_confidence._DEFAULT_FEATURES` + `_TREND_FEATURES`) | reuses the confidence fingerprint as a forecast-state lookup rather than only a confidence-matching input; real curse-of-dimensionality risk against ~365 candidate days, cheap enough to be worth trying |
+| 18 | self_correction | — | — | standard self-correction member, see [self_correction.md](self_correction.md) |
 
 ## Notes
 

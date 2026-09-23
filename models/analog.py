@@ -3,6 +3,9 @@
 # data-starved early on (only ~43 days at first write) but improves over time.
 # when fewer candidates exist than K, uses however many are available.
 # member_id=0: inverse-MAE weighted mean of members 1-8 when weights available.
+# member 9 (self_correction): standard self-correction member
+# (models/_self_correction.py) -- member_id=0 minus this model's own learned
+# historical bias.
 
 import datetime as _dt
 import statistics
@@ -10,14 +13,18 @@ import time
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 import models._similarity as _similarity
 from models._utils import _sector
 
 MODEL_ID = 8
 MODEL_NAME = "analog"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_MATCH_HISTORY = True
+
+_SELF_CORRECTION_MEMBER = 9
 
 from models._climo_weights import LEAD_HOURS
 
@@ -43,6 +50,7 @@ _MEMBERS = [
     (8, "k5-seasonal",       5,  [1.0, 1.0, 1.0, 1.0]),
 ]
 _ALL_MEMBER_IDS = [m[0] for m in _MEMBERS]
+_CONFIDENCE_MEMBER_IDS = _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER]
 
 def _norm_sigmas(candidates: list) -> dict[str, float | None]:
     """Per-feature population std dev across candidates; None means skip the feature."""
@@ -85,7 +93,7 @@ def _dist_weighted_forecast(dist_val_pairs: list) -> float | None:
     total_w = sum(1.0 / d for d, _ in valid)
     return sum((1.0 / d) * v for d, v in valid) / total_w
 
-def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
+def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_history=None,
         default_matches=None) -> list[dict]:
     candidates = db.analog_candidates(conn_in, obs["timestamp"])
     obs_vec = {col: obs[col] for col in _FEATURES}
@@ -158,7 +166,7 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
         # member_id=0: weighted mean + spread across all named members
         for variable in VARIABLES:
             cell_confidences = _confidence.member_confidences(
-                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead,
+                member_history, default_matches, _CONFIDENCE_MEMBER_IDS, variable, lead,
                 matched_ts_by_mid,
             )
             for mid in _ALL_MEMBER_IDS:
@@ -212,6 +220,21 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
                 "value": mean,
                 "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

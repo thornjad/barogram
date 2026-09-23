@@ -31,6 +31,7 @@ Sigma is computed from the candidate pool at each forecast issuance. When sigma 
 | 6 | k5-synoptic | 5 | [1, 0.5, 2, 1.5] | pressure and wind emphasized; targets synoptic regime |
 | 7 | k10-dist-weighted | 10 | [1, 1, 1, 1] | inverse-distance weighted mean; closer analogs count proportionally more |
 | 8 | k5-seasonal | 5 | [1, 1, 1, 1] | distances penalized by calendar-month difference (γ=0.2 per month); prefers same-season analogs |
+| 9 | self_correction | — | — | standard self-correction member, see [self_correction.md](self_correction.md) |
 
 ## Limitations
 

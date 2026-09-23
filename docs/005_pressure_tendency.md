@@ -29,6 +29,10 @@ structural mismatch rather than a data-maturity gap. Historical forecast rows an
 `members`-table entries are kept; they just no longer run. Full writeup: thornlog
 message board "barogram-model-analysis". Only linear (degree-1) members remain.
 
+Member 12 is a standard self-correction member, see
+[self_correction.md](self_correction.md) — note ids 6–11 are retired
+quadratic members with existing scored history and are not reused.
+
 The exponential decay weighting uses the form `w = exp(ln(2)/hl * t)` where t is the
 centered time in hours and hl is the half-life. At t=0 (current time), w=1; at t=-hl,
 w=0.5.
