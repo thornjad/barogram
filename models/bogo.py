@@ -1,4 +1,4 @@
-# bogo: 69-member silly forecast ensemble.
+# bogo: 70-member silly forecast ensemble.
 # Each member uses a different flavor of wrongness.
 # member_id=0 is the ensemble mean+spread; every other member_id is named
 # (see the members table / docs/012_bogo.md for the full roster).
@@ -13,16 +13,23 @@ import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 
 MODEL_ID = 12
 MODEL_NAME = "bogo"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_MATCH_HISTORY = True
 
 from models._climo_weights import LEAD_HOURS
 from models._utils import _sector
 MIN_OBS = 30
+
+# standard self-correction member (models/_self_correction.py): member_id=0's
+# own mean minus this model's learned bias. Kept out of mr/_ensemble_mean --
+# it's derived from the mean and must never feed back into it.
+_SELF_CORRECTION_MEMBER = 70
 
 _STEP = {
     "temperature": 5.0,
@@ -1096,7 +1103,7 @@ def _ensemble_mean(members: dict, member_confidence: dict, weights, current_ts: 
     return result, result_confidence
 
 
-def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
+def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_history=None,
         default_matches=None) -> list[dict]:
     climos  = _precompute_climos(obs, conn_in)
     month   = datetime.datetime.fromtimestamp(obs["timestamp"]).month
@@ -1199,6 +1206,13 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
 
     mean_data, mean_confidence = _ensemble_mean(mr, member_confidence, weights, obs["timestamp"])
 
+    self_correction_confidence = {
+        (lead, var): _confidence.confidence_for_cell(
+            (member_history or {}).get(_SELF_CORRECTION_MEMBER, []), var, lead, (default_matches or [])
+        )
+        for lead in LEAD_HOURS for var in ["temperature", "dewpoint", "pressure"]
+    }
+
     rows = []
 
     for member_id, forecasts in mr.items():
@@ -1232,6 +1246,19 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
                 "value":     mean,
                 "spread":    spread,
                 "confidence": mean_confidence.get((lead, var)),
+            })
+
+            corrected = _self_correction.corrected_value(conn_out, MODEL_ID, var, lead, mean, issued_at)
+            rows.append({
+                "model_id":  MODEL_ID,
+                "model":     MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at":  valid_at,
+                "lead_hours": lead,
+                "variable":  var,
+                "value":     corrected,
+                "confidence": self_correction_confidence.get((lead, var)),
             })
 
     return rows

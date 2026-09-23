@@ -8,7 +8,7 @@
 
 Named after [bogosort](https://en.wikipedia.org/wiki/Bogosort), the famously terrible sorting algorithm that shuffles a list randomly and checks if it's sorted. Like bogosort, this model is correct only by dumb luck.
 
-BOGO is a 69-member ensemble where each member applies a different flavor of wrongness. The member_id=0 row is the ensemble mean and spread across all members. Because the members' errors are largely uncorrelated and directionally random, the mean tends to converge back toward climatology — but with maximum absurdity along the way.
+BOGO is a 69-member ensemble where each member applies a different flavor of wrongness, plus a 70th standard self-correction member. The member_id=0 row is the ensemble mean and spread across the 69 wrongness members only. Because the members' errors are largely uncorrelated and directionally random, the mean tends to converge back toward climatology — but with maximum absurdity along the way.
 
 ## Members
 
@@ -71,6 +71,7 @@ BOGO is a 69-member ensemble where each member applies a different flavor of wro
 | 67 | og-only | mean of the original 26 members (1-26), excluding peer-review (17) |
 | 68 | sine-reviewer | mean of every lookback-sine and fast-sine member (45-63) |
 | 69 | sine-integrator | arithmetic sum (not mean) of every sine member (45-63), treating them as superposable waves |
+| 70 | self_correction | standard self-correction member, see [self_correction.md](self_correction.md) -- member_id=0's own mean minus bogo's learned bias; excluded from the mean it's derived from |
 
 ## Step bounds (drunkard, blind-drunkard, chaos, mercury-retrograde, grant-funded)
 
