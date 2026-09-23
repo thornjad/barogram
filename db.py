@@ -1103,39 +1103,6 @@ def save_weights(
         raise
 
 
-def load_reference_scale(conn: sqlite3.Connection) -> dict:
-    """{(variable, lead_hours): scale} -- the reference model's own typical
-    absolute error per cell, written by cmd_tune. Feeds
-    models/_confidence.py's set_reference_scale; a missing (variable,
-    lead_hours) key means no reference scale is known yet for that cell."""
-    rows = conn.execute("select variable, lead_hours, scale from reference_scale").fetchall()
-    return {(row["variable"], row["lead_hours"]): row["scale"] for row in rows}
-
-
-def save_reference_scale(
-    conn: sqlite3.Connection,
-    scale_by_key: dict,
-    updated_at: int,
-) -> None:
-    rows = [
-        {"variable": variable, "lead_hours": lead_hours, "scale": scale, "updated_at": updated_at}
-        for (variable, lead_hours), scale in scale_by_key.items()
-    ]
-    conn.execute("begin")
-    try:
-        conn.executemany(
-            """
-            insert or replace into reference_scale (variable, lead_hours, scale, updated_at)
-            values (:variable, :lead_hours, :scale, :updated_at)
-            """,
-            rows,
-        )
-        conn.execute("commit")
-    except Exception:
-        conn.execute("rollback")
-        raise
-
-
 def tempest_obs_in_range(conn: sqlite3.Connection, start_ts: int, end_ts: int) -> list[dict]:
     return [dict(r) for r in conn.execute(
         """

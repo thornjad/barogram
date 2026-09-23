@@ -40,22 +40,35 @@ without diluting the pool with runs from unrelated hours.
 `blended_confidence` computes this in two independent steps, not one blend:
 
 ```
-raw   = 1 / (1 + matched_avg / overall_avg_error)
+matched_avg = mean(matched_errors)
+z     = matched_avg / spread
+raw   = exp(-2 * z * z)
 trust = n / (n + _CONFIDENCE_PSEUDOCOUNT)     # n = matched-and-scored sample count
 confidence = trust * raw
 ```
 
-`raw` is what confidence would say with total trust in the evidence — above 0.5 when
-this member does *better* than its own typical error on days like today, below 0.5
-when it does *worse*. `trust` is a multiplier on that claim, not a blend toward it: it
-scales confidence *down toward zero* as evidence thins, rather than blending it toward
-a neutral 0.5 guess the way an earlier version of this design did. This is deliberate
-and matches the intended meaning of the number: confidence is a model's own claim about
-whether to trust it right now, and a claim backed by only a sliver of evidence deserves
-to be muted, in *either* direction — a single lucky match can't manufacture high
-confidence any more than a single unlucky one can manufacture certainty of failure.
-`trust` has no hard ceiling and keeps climbing as `n` grows, so a well-evidenced signal
-can reach real confidence near either extreme, not just hover near the middle.
+`spread` is the natural day-to-day variability of what reality actually did, lead_hours
+out, on days that looked like today — the population stdev of matched days' own
+before/after deltas (`matched_day_spreads`), recomputed fresh every forecast run from
+the same shared matched-day set every model already uses. `z` compares this member's
+typical error on days like today against that natural variability: near 0 means the
+error is small next to normal wobble, past ~1–2 means it's large next to what genuinely
+different weather looks like. `raw`'s curve (steep, squared-exponential decay) beat
+gentler alternatives (a normal-distribution survival function, a logistic) in a
+real-data backtest across the ensemble and its largest base model, by a wide and
+statistically significant margin — see the 2026-09-23 confidence message-board thread.
+This replaced an earlier design comparing matched-day error against a fixed
+reference-model baseline instead of reality's own spread, which was vulnerable to that
+reference model's own lucky or unlucky stretches. `trust` is a multiplier on `raw`, not
+a blend toward it: it scales confidence *down toward zero* as evidence thins, rather
+than blending it toward a neutral 0.5 guess the way an earlier version of this design
+did. This is deliberate and matches the intended meaning of the number: confidence is a
+model's own claim about whether to trust it right now, and a claim backed by only a
+sliver of evidence deserves to be muted, in *either* direction — a single lucky match
+can't manufacture high confidence any more than a single unlucky one can manufacture
+certainty of failure. `trust` has no hard ceiling and keeps climbing as `n` grows, so a
+well-evidenced signal can reach real confidence near either extreme, not just hover
+near the middle.
 
 Zero usable evidence — no analog day matched closely enough, or matched days exist but
 this member has no scored run near their clock time; both mean the same thing — returns

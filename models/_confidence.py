@@ -1,6 +1,8 @@
 # models/_confidence.py
 
 import datetime
+import math
+from collections import defaultdict
 
 import db
 import models._similarity as _similarity
@@ -92,24 +94,68 @@ _TREND_WEIGHT_SCALE = 0.7  # trend deltas matter (see the 2026-09-23 confidence
 TREND_FEATURE_WEIGHTS = {f"{col}_trend": w * _TREND_WEIGHT_SCALE for col, w in FEATURE_WEIGHTS.items()}
 ALL_FEATURE_WEIGHTS = {**FEATURE_WEIGHTS, **TREND_FEATURE_WEIGHTS}
 
-_reference_scale: dict[tuple[str, int], float] = {}
-# populated once per process by set_reference_scale (cmd_forecast, before any
-# model runs) from db.load_reference_scale -- the reference model's own
-# typical absolute error per (variable, lead_hours), written weekly by
-# cmd_tune. This is what blended_confidence compares matched-day performance
-# against instead of a member's own historical average: "doing at least as
-# well as a naive reference forecast" is what 50% confidence means, the same
-# baseline `tune`'s skill-weight math already uses, not a self-comparison.
+_VARIABLE_COLUMN = {
+    "temperature": "air_temp",
+    "dewpoint": "dew_point",
+    "pressure": "station_pressure",
+}
+
+_spread: dict[tuple[str, int], float] = {}
+# populated once per forecast run by set_spread (cmd_forecast, right after
+# computing shared_default_matches) from matched_day_spreads -- the natural
+# day-to-day variability of what reality actually did, lead_hours later, on
+# days that looked like today. blended_confidence compares matched-day error
+# against this instead of a fixed reference-model baseline (the earlier
+# 2026-09-23 design): anchoring to physical reality's own variability, not a
+# specific reference model's error, means a lucky or unlucky stretch for
+# that reference model can't distort the reading (see the confidence
+# message-board thread for the full reasoning).
 
 
-def set_reference_scale(scale: dict[tuple[str, int], float]) -> None:
-    """Call once per process before computing any confidence. A (variable,
-    lead_hours) cell missing from `scale` (too new, or `tune` hasn't run
-    since it started scoring) means no reference error is known yet --
-    confidence_for_cell treats that the same as too-thin own history: zero
-    confidence, not a guess."""
-    global _reference_scale
-    _reference_scale = scale
+def set_spread(spread: dict[tuple[str, int], float]) -> None:
+    """Call once per forecast run before computing any confidence. A
+    (variable, lead_hours) cell missing from `spread` (no matched day had
+    both a before and after observation to measure) means no yardstick is
+    known yet for that cell -- confidence_for_cell treats that the same as
+    too-thin own history: zero confidence, not a guess."""
+    global _spread
+    _spread = spread
+
+
+def matched_day_spreads(conn_in, matched_ts: list[int]) -> dict[tuple[str, int], float]:
+    """Population stdev of what reality actually did, lead_hours later, on
+    each matched day -- one number per (variable, lead_hours), shared by
+    every model that uses the same matched_ts (the shared analog-day set),
+    since "how much did days like today actually vary, lead_hours out"
+    doesn't depend on which model is asking.
+
+    For each matched day, needs a snapshot near that day's own moment and
+    one lead_hours later; a day missing either (too close to "now" to have
+    a real outcome yet, or a data gap) is skipped for that cell rather than
+    raising. A cell needs at least 2 matched days with a usable pair to
+    report a stdev at all -- one sample has no spread to speak of.
+    """
+    deltas: dict[tuple[str, int], list[float]] = defaultdict(list)
+    for ts in matched_ts:
+        before = db.nearest_tempest_obs(conn_in, ts, window_sec=1800)
+        if before is None:
+            continue
+        for lead_hours in range(1, 25):
+            after = db.nearest_tempest_obs(conn_in, ts + lead_hours * 3600, window_sec=1800)
+            if after is None:
+                continue
+            for variable, col in _VARIABLE_COLUMN.items():
+                b, a = before[col], after[col]
+                if b is not None and a is not None:
+                    deltas[(variable, lead_hours)].append(a - b)
+    spread = {}
+    for key, vals in deltas.items():
+        if len(vals) < 2:
+            continue
+        mean = sum(vals) / len(vals)
+        variance = sum((v - mean) ** 2 for v in vals) / len(vals)
+        spread[key] = variance ** 0.5
+    return spread
 
 
 def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
@@ -124,12 +170,14 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
     means no basis to claim anything but zero confidence. Every forecast
     row gets a real confidence number; this function never returns None.
 
-    Otherwise, the baseline is the reference model's own typical error for
-    this (variable, lead_hours) cell (see set_reference_scale) -- never this
-    member's own historical average, which would make "confident" mean
-    "better than my usual mess" instead of "actually good." A cell with no
-    known reference scale yet gets the same 0.0 treatment as too-thin
-    history, via blended_confidence's own guard. Each timestamp in matched_ts
+    Otherwise, the yardstick is the natural day-to-day spread of what
+    reality actually did, lead_hours out, on days that looked like today
+    (see set_spread) -- never this member's own historical average, which
+    would make "confident" mean "better than my usual mess" instead of
+    "actually good," and never a specific reference model's error either,
+    which would tie confidence to that model's own lucky or unlucky
+    stretches. A cell with no known spread yet gets the same 0.0 treatment
+    as too-thin history, via blended_confidence's own guard. Each timestamp in matched_ts
     is a matched day's own nearest-clock-time analog snapshot (see
     find_default_matches); only
     this model's scored runs within _MATCH_HOUR_TOLERANCE_SEC of that
@@ -155,7 +203,7 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
     distinct_days = len({r["issued_at"] // 86400 for r in cell_rows})
     if distinct_days <= _MIN_HISTORY_DAYS:
         return 0.0
-    scale = _reference_scale.get((variable, lead_hours))
+    spread = _spread.get((variable, lead_hours))
     seen_days: set[int] = set()
     matched_errors: list[float] = []
     for ts in matched_ts:
@@ -167,49 +215,59 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
             r["mae"] for r in cell_rows
             if abs(r["issued_at"] - ts) <= _MATCH_HOUR_TOLERANCE_SEC
         )
-    return blended_confidence(matched_errors, scale, _CONFIDENCE_PSEUDOCOUNT)
+    return blended_confidence(matched_errors, spread, _CONFIDENCE_PSEUDOCOUNT)
 
 
-def blended_confidence(matched_errors: list[float], scale: float | None,
+def blended_confidence(matched_errors: list[float], spread: float | None,
                         k: int) -> float:
     """
-    Returns 0.0 when scale is None or <= 0 -- no reference baseline to
-    measure against at all (tune hasn't computed one for this cell yet, or a
-    degenerate all-zero-error reference). No basis to claim anything but
-    zero confidence; this function never returns None. Otherwise:
+    Returns 0.0 when spread is None or <= 0 -- no natural-variability
+    yardstick to measure against at all (too few matched days had both a
+    before and after observation to compute one; see matched_day_spreads).
+    No basis to claim anything but zero confidence; this function never
+    returns None. Otherwise:
 
         matched_avg = sum(matched_errors) / len(matched_errors)
-        raw = 1.0 / (1.0 + matched_avg / scale)
+        z = matched_avg / spread
+        raw = exp(-2 * z * z)
         trust = len(matched_errors) / (len(matched_errors) + k)
         return trust * raw
 
-    `raw` is what confidence would say with full trust in the evidence:
-    above 0.5 when this member's matched-day error BEATS the reference
-    model's typical error for this cell, below 0.5 when it's WORSE -- a
-    fixed external yardstick, not this member's own history, so a
-    consistently-bad member can't inflate its confidence just by having a
-    matched-day sample less catastrophic than its own usual mess. `trust`
-    is a multiplier on that claim, not a blend toward it -- it scales confidence DOWN
-    toward zero as evidence thins, rather than blending it toward a
-    neutral 0.5 guess. Zero matched evidence (trust=0, matched_errors
-    empty) returns exactly 0.0: no analog day was ever a close enough
-    match, or matched days exist but this member has no scored run near
-    their clock time -- either way, there is no basis to claim any
-    confidence at all, not a coin-flip default. As n grows, trust climbs
-    toward 1.0 (no hard ceiling) and the result converges on `raw`. A cell
-    with fewer samples than k reports LESS than half of what raw alone
-    would justify, regardless of which direction raw points -- thin
-    evidence deserves a muted claim in either direction, not a neutral
-    one. Result is always in [0, 1): 0.0 when there's no baseline or no
-    matched evidence, otherwise strictly positive and never reaching 1.0
-    for finite n.
+    z compares this member's typical error on days like today against how
+    much reality itself naturally varies on those same days: z near 0 means
+    the error is small next to normal day-to-day wobble, z past ~1-2 means
+    the error is large compared to what genuinely different weather looks
+    like. `raw`'s curve -- steep, squared-exponential decay -- was chosen
+    over gentler alternatives (a two-sided normal survival function, a
+    logistic) by backtesting real ensemble output on real scored history,
+    not picked a priori: see the 2026-09-23 confidence message-board
+    thread. Steep won decisively at the real-ensemble level (37.8% MAE
+    reduction over the prior reference-scale/1-over-(1+x) design) with
+    overwhelming statistical significance (p well under 1e-30 on two
+    independently tested models), and its advantage over the gentler
+    curves grew with model/member count rather than shrinking. `trust` is
+    a multiplier on that claim, not a blend toward it -- it scales
+    confidence DOWN toward zero as evidence thins, rather than blending it
+    toward a neutral 0.5 guess. Zero matched evidence (trust=0,
+    matched_errors empty) returns exactly 0.0: no analog day was ever a
+    close enough match, or matched days exist but this member has no
+    scored run near their clock time -- either way, there is no basis to
+    claim any confidence at all, not a coin-flip default. As n grows,
+    trust climbs toward 1.0 (no hard ceiling) and the result converges on
+    `raw`. A cell with fewer samples than k reports LESS than half of what
+    raw alone would justify, regardless of which direction raw points --
+    thin evidence deserves a muted claim in either direction, not a
+    neutral one. Result is always in [0, 1): 0.0 when there's no yardstick
+    or no matched evidence, otherwise strictly positive and never reaching
+    1.0 for finite n.
     """
-    if scale is None or scale <= 0:
+    if spread is None or spread <= 0:
         return 0.0
     if not matched_errors:
         return 0.0
     matched_avg = sum(matched_errors) / len(matched_errors)
-    raw = 1.0 / (1.0 + matched_avg / scale)
+    z = matched_avg / spread
+    raw = math.exp(-2.0 * z * z)
     trust = len(matched_errors) / (len(matched_errors) + k)
     return trust * raw
 

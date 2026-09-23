@@ -227,7 +227,9 @@ def cmd_forecast(args, conf):
         else None
     )
     if any(getattr(m, "NEEDS_MATCH_HISTORY", False) for m in _MODELS):
-        _confidence.set_reference_scale(db.load_reference_scale(conn_out))
+        _confidence.set_spread(
+            _confidence.matched_day_spreads(conn_in, shared_default_matches or [])
+        )
 
     total_rows = 0
     failed = []
@@ -738,16 +740,6 @@ def cmd_tune(args, conf):
     db.set_metadata(conn_out, "last_tune", str(now))
     total = sum(len(v) for v in all_weights.values())
     print(f"\nwrote {total} weight rows")
-
-    reference_scale = {
-        (variable, lead_hours): huber
-        for (mid, variable, lead_hours), huber in ref_pool_huber.items()
-        if mid == _REF_BY_VAR.get(variable) and huber > 0
-    }
-    if reference_scale:
-        db.save_reference_scale(conn_out, reference_scale, now)
-        print(f"wrote {len(reference_scale)} reference-scale rows "
-              f"(confidence's baseline: {_REF_BY_VAR})")
 
 
 def cmd_calibration(args, conf):

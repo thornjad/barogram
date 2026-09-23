@@ -1,4 +1,5 @@
 import datetime
+import math
 import time
 
 import models._confidence as confidence
@@ -66,7 +67,7 @@ def test_confidence_for_cell_counts_multiple_runs_within_tolerance_window():
     history.append(_row("temperature", 24, matched_day_start - 20 * 60, 0.0))   # -20min: in window
     history.append(_row("temperature", 24, matched_day_start + 40 * 60, 8.0))   # +40min: in window
     overall_avg = sum(r["mae"] for r in history) / len(history)
-    confidence.set_reference_scale({("temperature", 24): overall_avg})
+    confidence.set_spread({("temperature", 24): overall_avg})
     result = confidence.confidence_for_cell(history, "temperature", 24, [matched_day_start])
     assert result is not None
 
@@ -92,7 +93,7 @@ def test_confidence_for_cell_excludes_runs_outside_hour_tolerance():
     history.append(_row("temperature", 24, matched_day_start + 1 * 3600, 0.0))   # +1h: in window
     history.append(_row("temperature", 24, matched_day_start + 7 * 3600, 20.0))  # +7h: outside window
     overall_avg = sum(r["mae"] for r in history) / len(history)
-    confidence.set_reference_scale({("temperature", 24): overall_avg})
+    confidence.set_spread({("temperature", 24): overall_avg})
     result = confidence.confidence_for_cell(history, "temperature", 24, [matched_day_start])
     assert result is not None
 
@@ -164,7 +165,8 @@ def test_blended_confidence_thin_evidence_mutes_even_a_strong_signal():
     # design blended thin evidence TOWARD 0.5; this design shrinks it
     # TOWARD 0, so one lucky match can't fake high confidence.
     result = confidence.blended_confidence([0.1], 10.0, 8)
-    raw = 1.0 / (1.0 + 0.1 / 10.0)
+    z = 0.1 / 10.0
+    raw = math.exp(-2.0 * z * z)
     assert raw > 0.95
     assert result < 0.15
 
@@ -362,7 +364,7 @@ def test_member_confidences_degrades_to_none_without_history():
 def test_member_confidences_per_member_lookup():
     base = 10_000_000
     good_history = [_row("temperature", 24, base + d * _DAY, 1.0) for d in range(10)]
-    confidence.set_reference_scale({("temperature", 24): 1.0})
+    confidence.set_spread({("temperature", 24): 1.0})
     member_history = {1: good_history, 2: []}
     result = confidence.member_confidences(member_history, [base], [1, 2], "temperature", 24)
     assert result[1] is not None

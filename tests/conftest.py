@@ -11,29 +11,29 @@ collect_ignore_glob = ["*sync-conflict*"]
 
 _MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
 
-_DEFAULT_TEST_SCALE = 2.0  # arbitrary positive reference scale, applied to every
-                           # (variable, lead_hours) cell a test might use -- most
-                           # confidence tests only care that confidence is nonzero
-                           # and differentiates members, not this exact number. A
-                           # test that asserts a precise confidence value sets its
-                           # own scale via set_reference_scale before calling in.
+_DEFAULT_TEST_SPREAD = 2.0  # arbitrary positive spread, applied to every
+                            # (variable, lead_hours) cell a test might use -- most
+                            # confidence tests only care that confidence is nonzero
+                            # and differentiates members, not this exact number. A
+                            # test that asserts a precise confidence value sets its
+                            # own spread via set_spread before calling in.
 
 
 @pytest.fixture(autouse=True)
-def _reference_scale_default():
-    """models/_confidence.py's confidence math now reads its baseline from a
-    module-level registry (set_reference_scale) instead of computing one from
-    each call's own history -- see the 2026-09-23 confidence rework. Without
+def _spread_default():
+    """models/_confidence.py's confidence math now reads its natural-variability
+    yardstick from a module-level registry (set_spread) instead of computing one
+    from each call's own history -- see the 2026-09-23 confidence rework. Without
     this, every test would need its own boilerplate setup just to get a
-    nonzero confidence at all. Reset after each test so one test's scale
+    nonzero confidence at all. Reset after each test so one test's spread
     choice can't leak into the next."""
-    _confidence.set_reference_scale({
-        (variable, lead_hours): _DEFAULT_TEST_SCALE
+    _confidence.set_spread({
+        (variable, lead_hours): _DEFAULT_TEST_SPREAD
         for variable in ("temperature", "dewpoint", "pressure")
         for lead_hours in range(1, 25)
     })
     yield
-    _confidence.set_reference_scale({})
+    _confidence.set_spread({})
 
 
 def make_input_db() -> sqlite3.Connection:
