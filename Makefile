@@ -1,4 +1,4 @@
-.PHONY: all run full forecast score prune tune dashboard conditions test
+.PHONY: all run full forecast score prune tune tune-weights tune-similarity dashboard conditions test
 
 all: run
 
@@ -19,8 +19,14 @@ score:
 prune:
 	uv run barogram prune
 
-tune: score
+tune: tune-weights
+	uv run barogram calibration
+
+tune-weights: score
 	uv run barogram tune
+
+tune-similarity:
+	uv run barogram tune-similarity
 
 dashboard:
 	uv run barogram dashboard

@@ -10,14 +10,13 @@ _CONFIDENCE_PSEUDOCOUNT = 8      # k in the n/(n+k) trust multiplier: trust reac
                                  # once n matched-and-scored days exist, and keeps
                                  # climbing (never hard-caps) as n grows further
 _MIN_HISTORY_DAYS = 5            # a cell's history must span MORE than this many distinct days
-_MATCH_DISTANCE_THRESHOLD = 9.0  # analog candidates farther than this (in sigma-normalized
+_MATCH_DISTANCE_THRESHOLD = 8.0  # analog candidates farther than this (in sigma-normalized
                                  # distance units, see _similarity.distance) aren't a real
                                  # match at all -- conditions genuinely unlike anything
                                  # recorded should be able to return zero matches
 _MATCH_MAX_CANDIDATES = 50       # of the candidates within threshold, keep only the closest
                                  # this many -- bounds compute/noise as more days accumulate
                                  # without acting as a similarity requirement itself
-_LOOKBACK_DAYS = 365             # how far back full_analog_candidates searches
 _CONFIDENCE_FLOOR = 0.001        # 0.1%, not 10% -- a member reporting genuine 0%
                                  # confidence still keeps a sliver of ensemble influence
                                  # so it's never fully excluded, but a member that says
@@ -49,26 +48,90 @@ _DEFAULT_FEATURES = [
    # candidates accumulate real values.
 
 _TREND_FEATURES = [f"{col}_trend" for col in _DEFAULT_FEATURES]
-# one trend delta per snapshot column, computed by _compute_trends and
+# one trend delta per snapshot column, computed by compute_trends and
 # added alongside _DEFAULT_FEATURES so analog matching sees the last
 # _TREND_WINDOW_SEC of change, not just an instantaneous reading -- two
 # moments with the same pressure but opposite trajectories (falling vs
 # steady) otherwise match as identical.
 
+FEATURE_WEIGHTS = {
+    "air_temp": 1.5,
+    "dew_point": 1.5,
+    "station_pressure": 1.2,
+    "wind_avg": 0.6,
+    "wind_direction": 0.6,
+    "wind_gust": 0.4,
+    "solar_radiation": 0.5,
+    "uv_index": 0.3,
+    "precip_accum_day": 0.5,
+    "lightning_count": 0.3,
+    "precip": 0.4,
+    "wind_lull": 0.3,
+    "relative_humidity": 0.8,
+    "battery": 0.05,
+    "lightning_avg_distance": 0.3,
+    "lightning_strike_last_distance": 0.3,
+    "nc_rain": 0.4,
+}
+# first-guess per-feature weight for find_default_matches' distance calc, one
+# entry per _DEFAULT_FEATURES column. Temp/dewpoint/pressure dominate because
+# they define airmass and synoptic pattern -- the thing "similar weather"
+# actually means. battery is sensor health, not weather, so it's barely above
+# zero rather than dropped (every feature still counts, per the decision to
+# keep the full feature set). This is a real starting point, not a
+# placeholder -- models/similarity_tune.py's backtest is what earns a second,
+# better-informed guess later, the same way `tune` improves ensemble weights
+# from an initial equal-weight start.
+
+_TREND_WEIGHT_SCALE = 0.7  # trend deltas matter (see the 2026-09-23 confidence
+                           # message-board discussion on lightning trends), but
+                           # a snapshot match is the primary signal -- trends
+                           # get a flat discount off their snapshot
+                           # counterpart's weight rather than their own
+                           # separately hand-picked number
+TREND_FEATURE_WEIGHTS = {f"{col}_trend": w * _TREND_WEIGHT_SCALE for col, w in FEATURE_WEIGHTS.items()}
+ALL_FEATURE_WEIGHTS = {**FEATURE_WEIGHTS, **TREND_FEATURE_WEIGHTS}
+
+_reference_scale: dict[tuple[str, int], float] = {}
+# populated once per process by set_reference_scale (cmd_forecast, before any
+# model runs) from db.load_reference_scale -- the reference model's own
+# typical absolute error per (variable, lead_hours), written weekly by
+# cmd_tune. This is what blended_confidence compares matched-day performance
+# against instead of a member's own historical average: "doing at least as
+# well as a naive reference forecast" is what 50% confidence means, the same
+# baseline `tune`'s skill-weight math already uses, not a self-comparison.
+
+
+def set_reference_scale(scale: dict[tuple[str, int], float]) -> None:
+    """Call once per process before computing any confidence. A (variable,
+    lead_hours) cell missing from `scale` (too new, or `tune` hasn't run
+    since it started scoring) means no reference error is known yet --
+    confidence_for_cell treats that the same as too-thin own history: zero
+    confidence, not a guess."""
+    global _reference_scale
+    _reference_scale = scale
+
 
 def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
-                         matched_ts: list[int]) -> float | None:
+                         matched_ts: list[int]) -> float:
     """
     history is every scored row for one (model_id, member_id) pair (dicts
     with variable/lead_hours/issued_at/mae; see db.model_error_history).
 
-    Filters history to this (variable, lead_hours) cell. Returns None if
-    the cell has no scored history, or if its history spans
-    _MIN_HISTORY_DAYS distinct calendar days OR FEWER.
+    Filters history to this (variable, lead_hours) cell. Returns 0.0 if the
+    cell has no scored history at all, or if its history spans
+    _MIN_HISTORY_DAYS distinct calendar days OR FEWER -- no baseline yet
+    means no basis to claim anything but zero confidence. Every forecast
+    row gets a real confidence number; this function never returns None.
 
-    Otherwise, the plain average of every row's mae in that cell is the
-    overall baseline. Each timestamp in matched_ts is a matched day's own
-    nearest-clock-time analog snapshot (see find_default_matches); only
+    Otherwise, the baseline is the reference model's own typical error for
+    this (variable, lead_hours) cell (see set_reference_scale) -- never this
+    member's own historical average, which would make "confident" mean
+    "better than my usual mess" instead of "actually good." A cell with no
+    known reference scale yet gets the same 0.0 treatment as too-thin
+    history, via blended_confidence's own guard. Each timestamp in matched_ts
+    is a matched day's own nearest-clock-time analog snapshot (see
+    find_default_matches); only
     this model's scored runs within _MATCH_HOUR_TOLERANCE_SEC of that
     specific timestamp count as that match's evidence -- not every run
     from that whole calendar day, which would dilute the pool with runs
@@ -88,11 +151,11 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
     """
     cell_rows = [r for r in history if r["variable"] == variable and r["lead_hours"] == lead_hours]
     if not cell_rows:
-        return None
+        return 0.0
     distinct_days = len({r["issued_at"] // 86400 for r in cell_rows})
     if distinct_days <= _MIN_HISTORY_DAYS:
-        return None
-    overall_avg_error = sum(r["mae"] for r in cell_rows) / len(cell_rows)
+        return 0.0
+    scale = _reference_scale.get((variable, lead_hours))
     seen_days: set[int] = set()
     matched_errors: list[float] = []
     for ts in matched_ts:
@@ -104,25 +167,29 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
             r["mae"] for r in cell_rows
             if abs(r["issued_at"] - ts) <= _MATCH_HOUR_TOLERANCE_SEC
         )
-    return blended_confidence(matched_errors, overall_avg_error, _CONFIDENCE_PSEUDOCOUNT)
+    return blended_confidence(matched_errors, scale, _CONFIDENCE_PSEUDOCOUNT)
 
 
-def blended_confidence(matched_errors: list[float], overall_avg_error: float | None,
-                        k: int) -> float | None:
+def blended_confidence(matched_errors: list[float], scale: float | None,
+                        k: int) -> float:
     """
-    Returns None when overall_avg_error is None or <= 0 -- no baseline to
-    measure against at all (a cell too young to have one; see
-    confidence_for_cell's _MIN_HISTORY_DAYS gate). Otherwise:
+    Returns 0.0 when scale is None or <= 0 -- no reference baseline to
+    measure against at all (tune hasn't computed one for this cell yet, or a
+    degenerate all-zero-error reference). No basis to claim anything but
+    zero confidence; this function never returns None. Otherwise:
 
         matched_avg = sum(matched_errors) / len(matched_errors)
-        raw = 1.0 / (1.0 + matched_avg / overall_avg_error)
+        raw = 1.0 / (1.0 + matched_avg / scale)
         trust = len(matched_errors) / (len(matched_errors) + k)
         return trust * raw
 
     `raw` is what confidence would say with full trust in the evidence:
-    above 0.5 when this member does BETTER than its own typical error on
-    days like this, below 0.5 when it does WORSE. `trust` is a multiplier
-    on that claim, not a blend toward it -- it scales confidence DOWN
+    above 0.5 when this member's matched-day error BEATS the reference
+    model's typical error for this cell, below 0.5 when it's WORSE -- a
+    fixed external yardstick, not this member's own history, so a
+    consistently-bad member can't inflate its confidence just by having a
+    matched-day sample less catastrophic than its own usual mess. `trust`
+    is a multiplier on that claim, not a blend toward it -- it scales confidence DOWN
     toward zero as evidence thins, rather than blending it toward a
     neutral 0.5 guess. Zero matched evidence (trust=0, matched_errors
     empty) returns exactly 0.0: no analog day was ever a close enough
@@ -133,34 +200,40 @@ def blended_confidence(matched_errors: list[float], overall_avg_error: float | N
     with fewer samples than k reports LESS than half of what raw alone
     would justify, regardless of which direction raw points -- thin
     evidence deserves a muted claim in either direction, not a neutral
-    one. Result is always in [0, 1): 0.0 only when matched_errors is
-    empty, otherwise strictly positive and never reaching 1.0 for finite n.
+    one. Result is always in [0, 1): 0.0 when there's no baseline or no
+    matched evidence, otherwise strictly positive and never reaching 1.0
+    for finite n.
     """
-    if overall_avg_error is None or overall_avg_error <= 0:
-        return None
+    if scale is None or scale <= 0:
+        return 0.0
     if not matched_errors:
         return 0.0
     matched_avg = sum(matched_errors) / len(matched_errors)
-    raw = 1.0 / (1.0 + matched_avg / overall_avg_error)
+    raw = 1.0 / (1.0 + matched_avg / scale)
     trust = len(matched_errors) / (len(matched_errors) + k)
     return trust * raw
 
 
-def _compute_trends(now: dict, prior: dict | None) -> dict[str, float | None]:
-    """One trend delta per _DEFAULT_FEATURES column, keyed '<col>_trend':
-    now[col] - prior[col], or None if prior is missing or either value is
-    None. wind_direction uses a signed veering delta instead of a plain
-    difference, since direction wraps at 360. precip_accum_day is a
-    since-local-midnight counter, so a plain diff across a midnight
+def compute_trends(now: dict, prior: dict | None,
+                    features: list[str] = _DEFAULT_FEATURES) -> dict[str, float | None]:
+    """One trend delta per feature column (default _DEFAULT_FEATURES), keyed
+    '<col>_trend': now[col] - prior[col], or None if prior is missing or
+    either value is None. wind_direction uses a signed veering delta instead
+    of a plain difference, since direction wraps at 360. precip_accum_day is
+    a since-local-midnight counter, so a plain diff across a midnight
     rollover would read as a large, fake drop in precipitation -- that
     one delta is None whenever now and prior fall on different local
-    dates; precip's own trend has no such reset and isn't gated."""
+    dates; precip's own trend has no such reset and isn't gated.
+
+    Public: also called by full_state_analog.py to build its own
+    trend-augmented candidate pools (trajectory-analog and full
+    trend+snapshot members), not just by find_default_matches below."""
     if prior is None:
-        return {f"{col}_trend": None for col in _DEFAULT_FEATURES}
+        return {f"{col}_trend": None for col in features}
     now_date = datetime.datetime.fromtimestamp(now["timestamp"]).date()
     prior_date = datetime.datetime.fromtimestamp(prior["timestamp"]).date()
     trends: dict[str, float | None] = {}
-    for col in _DEFAULT_FEATURES:
+    for col in features:
         now_v = now.get(col)
         prior_v = prior.get(col)
         if now_v is None or prior_v is None:
@@ -184,19 +257,24 @@ def find_default_matches(conn_in, current_ts: int) -> list[int]:
     how dissimilar they actually are. Of whatever clears the threshold,
     keeps only the closest _MATCH_MAX_CANDIDATES."""
     current = db.nearest_tempest_obs(conn_in, current_ts, window_sec=1800)
-    candidates = db.full_analog_candidates(conn_in, current_ts, lookback_sec=_LOOKBACK_DAYS * 86400)
+    # no lookback cap -- a fixed window permanently defeats analog matching's
+    # purpose once history exceeds it: a once-a-year event's prior occurrence
+    # becomes unmatchable forever. Full-history cost is negligible at plausible
+    # data volumes (checked to 10yr / ~3650 candidate days on the 8GB machine).
+    candidates = db.full_analog_candidates(conn_in, current_ts, lookback_sec=None)
     if current is None or not candidates:
         return []
     current = {**dict(current), "timestamp": current_ts}
     prior_current = db.nearest_tempest_obs(conn_in, current_ts - _TREND_WINDOW_SEC, window_sec=1800)
-    current.update(_compute_trends(current, prior_current))
+    current.update(compute_trends(current, prior_current))
     candidates = [dict(c) for c in candidates]
     for c in candidates:
         prior_c = db.nearest_tempest_obs(conn_in, c["timestamp"] - _TREND_WINDOW_SEC, window_sec=1800)
-        c.update(_compute_trends(c, prior_c))
+        c.update(compute_trends(c, prior_c))
     features = _DEFAULT_FEATURES + _TREND_FEATURES
+    weights = [ALL_FEATURE_WEIGHTS[col] for col in features]
     sigmas = _similarity.norm_sigmas(candidates, features)
-    cands_with_dist = [(_similarity.distance(current, c, features, sigmas), c)
+    cands_with_dist = [(_similarity.distance(current, c, features, sigmas, weights), c)
                         for c in candidates]
     within_threshold = [(d, c) for d, c in cands_with_dist
                          if d is not None and d <= _MATCH_DISTANCE_THRESHOLD]
@@ -207,12 +285,12 @@ def find_default_matches(conn_in, current_ts: int) -> list[int]:
 def member_confidences(member_history: dict[int, list[dict]] | None,
                         default_matches: list[int] | None,
                         member_ids: list[int], variable: str, lead_hours: int,
-                        matched_ts_by_mid: dict[int, list[int]] | None = None) -> dict[int, float | None]:
+                        matched_ts_by_mid: dict[int, list[int]] | None = None) -> dict[int, float]:
     """
     Shared per-member confidence computation, called once per (variable,
     lead_hours) cell. member_history/default_matches being None degrades
-    every member to None, which every combine_pattern function already
-    treats as "not enough data yet, behave as before this plan."
+    every member to 0.0, which every combine_pattern function already
+    treats as "no basis to trust this member right now."
 
     matched_ts_by_mid, when given, overrides default_matches for specific
     member_ids -- only analog.py and full_state_analog.py use this, since

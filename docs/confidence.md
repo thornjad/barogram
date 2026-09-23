@@ -61,13 +61,13 @@ Zero usable evidence — no analog day matched closely enough, or matched days e
 this member has no scored run near their clock time; both mean the same thing — returns
 exactly `0.0` (`trust` is 0, so the formula already gives this without a special case
 needed at the trust step; matched_avg being undefined at n=0 is the only reason an early
-return still exists). This is distinct from `None`: a cell with too little history
-overall (5 distinct scored days or fewer) still returns `None`, meaning this member
-hasn't run long enough to judge at all. `0.0` means the member's mature enough to judge,
-it just has zero basis for trusting *this specific forecast* — "I don't know what I'm
-doing here," not "coin flip." Both non-`None` outcomes land in `[0, 1)` — nonempty
-evidence approaches but never reaches exactly `1.0`, since `trust` never reaches exactly
-1 for finite n.
+return still exists). A cell with too little history overall (5 distinct scored days
+or fewer) also returns `0.0`: no baseline exists yet to measure this forecast against,
+which is itself zero basis for claiming any confidence at all — not a separate "unknown"
+state, just the same "nothing to trust yet" answer arrived at from a different gap in
+the evidence. Every forecast row therefore carries a real confidence number; nothing in
+this pipeline returns `None`. Confidence lands in `[0, 1)` — it approaches but never
+reaches exactly `1.0`, since `trust` never reaches exactly 1 for finite n.
 
 Per-model feature weighting on the shared fingerprint (letting a model like
 `pressure_tendency` weight `station_pressure` higher when matching analog days) was
@@ -124,12 +124,11 @@ history to design against, which is exactly why every `forecasts` row stores its
 `confidence` value regardless of whether anything reads it yet.
 
 Confidence quality is expected to improve as scored history accumulates, the same way
-every model's own accuracy has. The three newest models
-(`wind_veer_detector`/`frontal_trigger`/`dewpoint_tendency`, added in migration 041)
-start with `None` confidence (too little history to judge at all, see the
-`_MIN_HISTORY_DAYS` gate above) and are floored to near-zero influence in any
-combination until they accumulate enough scored history of their own; this is expected
-graceful-cold-start behavior, not a shortfall.
+every model's own accuracy has. A newly added model or member starts at `0.0`
+confidence (too little history to judge at all, see the `_MIN_HISTORY_DAYS` gate above)
+and is floored to near-zero influence in any combination until it accumulates enough
+scored history of its own; this is expected graceful-cold-start behavior, not a
+shortfall.
 
 ## Verifying the mechanism, not just the wiring
 

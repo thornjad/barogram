@@ -65,10 +65,11 @@ def test_confidence_for_cell_counts_multiple_runs_within_tolerance_window():
     history = [_row("temperature", 24, base + d * _DAY, 10.0) for d in range(10) if d != 5]
     history.append(_row("temperature", 24, matched_day_start - 20 * 60, 0.0))   # -20min: in window
     history.append(_row("temperature", 24, matched_day_start + 40 * 60, 8.0))   # +40min: in window
+    overall_avg = sum(r["mae"] for r in history) / len(history)
+    confidence.set_reference_scale({("temperature", 24): overall_avg})
     result = confidence.confidence_for_cell(history, "temperature", 24, [matched_day_start])
     assert result is not None
 
-    overall_avg = sum(r["mae"] for r in history) / len(history)
     expected_both_counted = confidence.blended_confidence(
         [0.0, 8.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
     )
@@ -90,10 +91,11 @@ def test_confidence_for_cell_excludes_runs_outside_hour_tolerance():
     history = [_row("temperature", 24, base + d * _DAY, 10.0) for d in range(10) if d != 5]
     history.append(_row("temperature", 24, matched_day_start + 1 * 3600, 0.0))   # +1h: in window
     history.append(_row("temperature", 24, matched_day_start + 7 * 3600, 20.0))  # +7h: outside window
+    overall_avg = sum(r["mae"] for r in history) / len(history)
+    confidence.set_reference_scale({("temperature", 24): overall_avg})
     result = confidence.confidence_for_cell(history, "temperature", 24, [matched_day_start])
     assert result is not None
 
-    overall_avg = sum(r["mae"] for r in history) / len(history)
     expected_in_window_only = confidence.blended_confidence(
         [0.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
     )
@@ -188,11 +190,11 @@ def test_blended_confidence_uniform_group_reproduces_identical_value():
     assert a == b
 
 
-# --- _compute_trends ---
+# --- compute_trends ---
 
 def test_compute_trends_none_prior_returns_all_none():
     now = {"timestamp": 1000, "air_temp": 20.0}
-    result = confidence._compute_trends(now, None)
+    result = confidence.compute_trends(now, None)
     assert all(v is None for v in result.values())
     assert set(result.keys()) == set(confidence._TREND_FEATURES)
 
@@ -200,21 +202,21 @@ def test_compute_trends_none_prior_returns_all_none():
 def test_compute_trends_plain_diff():
     now = {"timestamp": 20000, "air_temp": 22.0}
     prior = {"timestamp": 10000, "air_temp": 18.0}
-    result = confidence._compute_trends(now, prior)
+    result = confidence.compute_trends(now, prior)
     assert abs(result["air_temp_trend"] - 4.0) < 1e-9
 
 
 def test_compute_trends_missing_value_is_none():
     now = {"timestamp": 20000, "air_temp": None}
     prior = {"timestamp": 10000, "air_temp": 18.0}
-    result = confidence._compute_trends(now, prior)
+    result = confidence.compute_trends(now, prior)
     assert result["air_temp_trend"] is None
 
 
 def test_compute_trends_wind_direction_uses_signed_veer():
     now = {"timestamp": 20000, "wind_direction": 10.0}
     prior = {"timestamp": 10000, "wind_direction": 350.0}
-    result = confidence._compute_trends(now, prior)
+    result = confidence.compute_trends(now, prior)
     assert abs(result["wind_direction_trend"] - 20.0) < 1e-9
 
 
@@ -231,7 +233,7 @@ def test_compute_trends_precip_accum_day_same_date_is_plain_diff():
     same_day_ts_b = midnight + 4 * 3600   # 04:00 local, same day
     now = {"timestamp": same_day_ts_b, "precip_accum_day": 5.0}
     prior = {"timestamp": same_day_ts_a, "precip_accum_day": 2.0}
-    result = confidence._compute_trends(now, prior)
+    result = confidence.compute_trends(now, prior)
     assert abs(result["precip_accum_day_trend"] - 3.0) < 1e-9
 
 
@@ -241,7 +243,7 @@ def test_compute_trends_precip_accum_day_crosses_midnight_is_none():
     now_ts = midnight + 3600     # 01:00 the next day
     now = {"timestamp": now_ts, "precip_accum_day": 0.3}
     prior = {"timestamp": prior_ts, "precip_accum_day": 8.6}
-    result = confidence._compute_trends(now, prior)
+    result = confidence.compute_trends(now, prior)
     assert result["precip_accum_day_trend"] is None
 
 
@@ -251,7 +253,7 @@ def test_compute_trends_precip_not_gated_across_midnight():
     midnight = _local_midnight_ts(2026, 6, 15)
     prior = {"timestamp": midnight - 3600, "precip": 1.0}
     now = {"timestamp": midnight + 3600, "precip": 0.4}
-    result = confidence._compute_trends(now, prior)
+    result = confidence.compute_trends(now, prior)
     assert abs(result["precip_trend"] - (-0.6)) < 1e-9
 
 
@@ -360,6 +362,7 @@ def test_member_confidences_degrades_to_none_without_history():
 def test_member_confidences_per_member_lookup():
     base = 10_000_000
     good_history = [_row("temperature", 24, base + d * _DAY, 1.0) for d in range(10)]
+    confidence.set_reference_scale({("temperature", 24): 1.0})
     member_history = {1: good_history, 2: []}
     result = confidence.member_confidences(member_history, [base], [1, 2], "temperature", 24)
     assert result[1] is not None

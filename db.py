@@ -391,6 +391,25 @@ def model_error_history(conn: sqlite3.Connection, model_id: int, member_id: int,
     ).fetchall()
 
 
+def confidence_calibration_rows(conn: sqlite3.Connection, since: int | None = None) -> list:
+    """Every scored row that has a real confidence value: (model_id, member_id,
+    variable, lead_hours, confidence, mae). Feeds cmd_calibration's decile
+    bucketing -- checks whether a higher claimed confidence actually tracks
+    lower real forecast error, the calibration measurement models/_confidence.py
+    itself has no way to validate on its own.
+    """
+    since_clause = "and issued_at >= ?" if since is not None else ""
+    return conn.execute(
+        f"""
+        select model_id, member_id, variable, lead_hours, confidence, mae
+        from forecasts
+        where confidence is not null and mae is not null and scored_at is not null
+          {since_clause}
+        """,
+        (since,) if since is not None else (),
+    ).fetchall()
+
+
 def member_ids_for_model(conn: sqlite3.Connection, model_id: int) -> list[int]:
     """Every registered member_id for a model, including 0."""
     return [
@@ -1059,6 +1078,39 @@ def save_weights(
         raise
 
 
+def load_reference_scale(conn: sqlite3.Connection) -> dict:
+    """{(variable, lead_hours): scale} -- the reference model's own typical
+    absolute error per cell, written by cmd_tune. Feeds
+    models/_confidence.py's set_reference_scale; a missing (variable,
+    lead_hours) key means no reference scale is known yet for that cell."""
+    rows = conn.execute("select variable, lead_hours, scale from reference_scale").fetchall()
+    return {(row["variable"], row["lead_hours"]): row["scale"] for row in rows}
+
+
+def save_reference_scale(
+    conn: sqlite3.Connection,
+    scale_by_key: dict,
+    updated_at: int,
+) -> None:
+    rows = [
+        {"variable": variable, "lead_hours": lead_hours, "scale": scale, "updated_at": updated_at}
+        for (variable, lead_hours), scale in scale_by_key.items()
+    ]
+    conn.execute("begin")
+    try:
+        conn.executemany(
+            """
+            insert or replace into reference_scale (variable, lead_hours, scale, updated_at)
+            values (:variable, :lead_hours, :scale, :updated_at)
+            """,
+            rows,
+        )
+        conn.execute("commit")
+    except Exception:
+        conn.execute("rollback")
+        raise
+
+
 def tempest_obs_in_range(conn: sqlite3.Connection, start_ts: int, end_ts: int) -> list[dict]:
     return [dict(r) for r in conn.execute(
         """
@@ -1316,19 +1368,27 @@ def analog_candidates(
 def full_analog_candidates(
     conn: sqlite3.Connection,
     ts: int,
-    lookback_sec: int = 365 * 86400,
+    lookback_sec: int | None = 365 * 86400,
+    before_ts: int | None = None,
 ) -> list:
     """One Tempest obs per historical day, each closest to ts's local time-of-day.
 
     Like analog_candidates but returns all sensor columns for full-state similarity.
-    Excludes the calendar day of ts.
+    Excludes the calendar day of ts. lookback_sec=None searches full history
+    with no lower time bound. before_ts, when given, additionally excludes any
+    observation at or after that timestamp -- the live system never needs this
+    (ts is always "now", so nothing in the database is ever after it), but a
+    walk-forward backtest simulating a past "current day" does: without this,
+    a candidate pool built for a historical test day would leak in days that
+    happen after it, which the live system could never have seen at the time.
     """
     dt = datetime.datetime.fromtimestamp(ts)
     tod_sec = dt.hour * 3600 + dt.minute * 60 + dt.second
     today_str = dt.strftime("%Y-%m-%d")
-    since = ts - lookback_sec
+    since = ts - lookback_sec if lookback_sec is not None else 0
+    before_clause = "and t.timestamp < :before_ts" if before_ts is not None else ""
     return conn.execute(
-        """
+        f"""
         with
         raw as (
             select
@@ -1360,6 +1420,7 @@ def full_analog_candidates(
             where s.source = 'tempest'
               and t.timestamp >= :since
               and date(t.timestamp, 'unixepoch', 'localtime') != :today
+              {before_clause}
         ),
         candidates as (
             select *,
@@ -1380,7 +1441,7 @@ def full_analog_candidates(
         where rn = 1
         order by timestamp desc
         """,
-        {"tod": tod_sec, "today": today_str, "since": since},
+        {"tod": tod_sec, "today": today_str, "since": since, "before_ts": before_ts},
     ).fetchall()
 
 

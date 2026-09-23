@@ -42,6 +42,7 @@ import models.tempest_forecast as tempest_forecast_model
 import models.weighted_climatological_mean as weighted_climatological_mean
 import models.wind_veer_detector as wind_veer_detector
 import models._confidence as _confidence
+import similarity_tune
 
 def _huber(e: float, delta: float) -> float:
     ae = abs(e)
@@ -50,6 +51,17 @@ def _huber(e: float, delta: float) -> float:
 
 def _mean_huber(errors: list, delta: float) -> float:
     return sum(_huber(e, delta) for e in errors) / len(errors)
+
+
+_REF_BY_VAR = {
+    "temperature": climatological_mean.MODEL_ID,
+    "dewpoint":    climatological_mean.MODEL_ID,
+    "pressure":    persistence.MODEL_ID,
+}
+# the "beat this to be trustworthy" baseline, shared by cmd_tune's skill-weight
+# scoring (loss vs ref_loss) and confidence's reference_scale table (see
+# models/_confidence.py) -- one shared choice per variable, not two
+# independently-drifting ideas of what a naive reference forecast is.
 
 
 
@@ -177,6 +189,8 @@ def cmd_forecast(args, conf):
         if any(getattr(m, "NEEDS_MATCH_HISTORY", False) for m in _MODELS)
         else None
     )
+    if any(getattr(m, "NEEDS_MATCH_HISTORY", False) for m in _MODELS):
+        _confidence.set_reference_scale(db.load_reference_scale(conn_out))
 
     total_rows = 0
     failed = []
@@ -525,11 +539,6 @@ def cmd_tune(args, conf):
         return
 
     _SECTOR_LABELS = {0: "night 00-05", 1: "morning 06-11", 2: "afternoon 12-17", 3: "evening 18-23"}
-    _REF_BY_VAR = {
-        "temperature": climatological_mean.MODEL_ID,
-        "dewpoint":    climatological_mean.MODEL_ID,
-        "pressure":    persistence.MODEL_ID,
-    }
     _TUNE_WINDOW_DAYS = 400
     since = int(time.time()) - _TUNE_WINDOW_DAYS * 86400
     print(f"tuning window: last {_TUNE_WINDOW_DAYS} days (since {time.strftime('%Y-%m-%d', time.localtime(since))})")
@@ -693,6 +702,75 @@ def cmd_tune(args, conf):
     total = sum(len(v) for v in all_weights.values())
     print(f"\nwrote {total} weight rows")
 
+    reference_scale = {
+        (variable, lead_hours): huber
+        for (mid, variable, lead_hours), huber in ref_pool_huber.items()
+        if mid == _REF_BY_VAR.get(variable) and huber > 0
+    }
+    if reference_scale:
+        db.save_reference_scale(conn_out, reference_scale, now)
+        print(f"wrote {len(reference_scale)} reference-scale rows "
+              f"(confidence's baseline: {_REF_BY_VAR})")
+
+
+def cmd_calibration(args, conf):
+    conn_out = db.open_output_db(conf.output_db)
+    rows = db.confidence_calibration_rows(conn_out)
+    if not rows:
+        print("no scored rows with a confidence value yet")
+        return
+
+    # per-cell baseline error, same definition confidence_for_cell itself uses,
+    # so "relative error" below is comparable across variables/leads that
+    # otherwise live on very different error scales
+    cell_errors = defaultdict(list)
+    for r in rows:
+        cell_errors[(r["model_id"], r["member_id"], r["variable"], r["lead_hours"])].append(r["mae"])
+    cell_baseline = {k: sum(v) / len(v) for k, v in cell_errors.items()}
+
+    buckets = defaultdict(list)
+    for r in rows:
+        key = (r["model_id"], r["member_id"], r["variable"], r["lead_hours"])
+        baseline = cell_baseline[key]
+        if baseline <= 0:
+            continue
+        rel_error = r["mae"] / baseline
+        decile = min(int(r["confidence"] * 10), 9)
+        buckets[decile].append(rel_error)
+
+    print("confidence calibration -- relative error = mae / that cell's own average error")
+    print(f"{'confidence':>12}  {'n':>7}  {'mean rel. error':>16}")
+    prev_mean = None
+    monotonic = True
+    for decile in range(10):
+        errs = buckets.get(decile, [])
+        if not errs:
+            continue
+        mean_err = sum(errs) / len(errs)
+        label = f"{decile * 10:2d}-{decile * 10 + 10:2d}%"
+        print(f"{label:>12}  {len(errs):7d}  {mean_err:16.3f}")
+        if prev_mean is not None and mean_err > prev_mean:
+            monotonic = False
+        prev_mean = mean_err
+
+    if monotonic:
+        print("\nmonotonic: higher confidence deciles show lower relative error, as expected")
+    else:
+        print("\nnot monotonic: at least one higher-confidence decile shows worse relative "
+              "error than a lower one -- confidence isn't cleanly tracking real accuracy yet")
+
+
+def cmd_tune_similarity(args, conf):
+    conn_in = db.open_input_db(conf.input_db)
+    print("similarity-match backtest -- full history, walk-forward, no future leakage")
+    print("scores each weight vector by predicting each test day's actual +3h temp change")
+    print("as the mean +3h change across its matched days; lower mae is a better vector\n")
+    print(f"{'weight vector':<42} {'test days':>10} {'w/ matches':>11} {'mae (C)':>9}")
+    for name, weights in similarity_tune.CANDIDATE_WEIGHT_VECTORS.items():
+        result = similarity_tune.evaluate_weight_vector(conn_in, weights)
+        mae_str = f"{result['mae']:.3f}" if result["mae"] is not None else "n/a"
+        print(f"{name:<42} {result['n_test_days']:>10} {result['n_with_matches']:>11} {mae_str:>9}")
+
 
 def main():
     script_dir = Path(__file__).parent
@@ -784,6 +862,13 @@ def main():
         "--dry-run", action="store_true",
         help="print weights without writing to database",
     )
+    subparsers.add_parser(
+        "calibration", help="check whether confidence deciles actually track lower error"
+    )
+    subparsers.add_parser(
+        "tune-similarity",
+        help="backtest candidate analog-matching weight vectors against held-out skill",
+    )
 
     args = parser.parse_args()
 
@@ -809,6 +894,10 @@ def main():
         cmd_insights(args, conf)
     elif args.command == "tune":
         cmd_tune(args, conf)
+    elif args.command == "calibration":
+        cmd_calibration(args, conf)
+    elif args.command == "tune-similarity":
+        cmd_tune_similarity(args, conf)
 
 
 if __name__ == "__main__":

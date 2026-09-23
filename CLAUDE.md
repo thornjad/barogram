@@ -17,13 +17,20 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 | `conditions` | Print latest Tempest and NWS observations            |
 | `query`      | Run a SQL query against barogram.db or wxlog         |
 | `insights`   | Emit forecast + accuracy summary as JSON (or `--format table`) |
+| `calibration` | Check whether confidence deciles actually track lower forecast error |
+| `tune-similarity` | Backtest candidate analog-matching feature-weight vectors against held-out skill |
 
 There is no `run` subcommand. `make run` composes the full cycle — `score`, then
 `forecast`, then `dashboard`, then `prune` — as separate steps, and stops if `forecast`
 exits non-zero (it does so only when no forecast rows were written), so a stale or empty
-forecast never reaches the dashboard or publish step. `make tune` runs `score` first
-(its own weighting math needs freshly scored rows), then `tune`. `make full` runs
+forecast never reaches the dashboard or publish step. `make tune` runs `score`, then the
+skill-weight tuning step (`make tune-weights`, i.e. `barogram tune`), then `barogram
+calibration` — this is the target the weekly launchd job already calls, so calibration's
+report lands in that job's existing log without needing a scheduler change. `make full` runs
 `tune` then the full `run` cycle — use it when weights are stale and a forecast is due.
+`make tune-similarity` is separate and not part of `tune`'s weekly cycle — it backtests
+analog-matching weight vectors (see `similarity_tune.py`) and is run manually while that
+work is still being decided.
 
 `prune` only nulls `value`/`spread`/`observed`/`confidence` on already-scored rows older
 than the cutoff — `error`/`mae`/`scored_at` and everything else stay forever for long-run
@@ -268,6 +275,7 @@ node screenshots/capture.js
 - `dashboard.py` — generates `dashboard.html`
 - `fmt.py` — shared formatting helpers
 - `sync.py` — Syncthing API integration; polls for idle state before each run
+- `similarity_tune.py` — backtests candidate analog-matching feature-weight vectors, adjacent to but separate from `tune`'s ensemble skill-score weighting
 - `migrations/` — numbered SQL files, run automatically at startup
 - `models/` — one file per model, plus shared helpers `_confidence.py` (per-cell confidence), `_similarity.py` (analog-day matching), `_climo_weights.py`, `_utils.py`
 - `docs/` — one Markdown doc per model plus `README.md` index and `database.md` (schema evolution rules)
