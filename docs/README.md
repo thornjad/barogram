@@ -24,7 +24,14 @@
 | 21 | frontal_trigger | [021_frontal_trigger.md](021_frontal_trigger.md) |
 | 22 | dewpoint_tendency | [022_dewpoint_tendency.md](022_dewpoint_tendency.md) |
 | 23 | solar_ramp | [023_solar_ramp.md](023_solar_ramp.md) |
+| 24 | regime_stability | [024_regime_stability.md](024_regime_stability.md) |
+| 25 | diurnal_rate_anomaly | [025_diurnal_rate_anomaly.md](025_diurnal_rate_anomaly.md) |
+| 26 | storm_trajectory | [026_storm_trajectory.md](026_storm_trajectory.md) |
+| 27 | pressure_trajectory | [027_pressure_trajectory.md](027_pressure_trajectory.md) |
+| 28 | radiational_cooling | [028_radiational_cooling.md](028_radiational_cooling.md) |
+| 29 | moisture_trajectory | [029_moisture_trajectory.md](029_moisture_trajectory.md) |
 | 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
+| 101 | ensemble_bias_correction | [101_ensemble_bias_correction.md](101_ensemble_bias_correction.md) |
 | 200 | nws | — |
 | 201 | tempest_forecast | — |
 | 202 | external_corrected | [202_external_corrected.md](202_external_corrected.md) |
@@ -35,4 +42,5 @@
 |-------|---------------|
 | Ensemble member weighting | [tune.md](tune.md) |
 | Per-member confidence | [confidence.md](confidence.md) |
+| Standard self-correction member | [self_correction.md](self_correction.md) |
 | Database schema and migrations | [database.md](database.md) |
