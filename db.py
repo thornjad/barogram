@@ -1268,14 +1268,14 @@ def incremental_vacuum(conn: sqlite3.Connection, pages: int | None = None) -> No
 
 
 def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
-    # bootstrap metadata table before checking schema_version
+    # bootstrap tracking tables before checking what's applied
     conn.execute(
         "create table if not exists metadata (key text primary key, value text)"
     )
-    row = conn.execute(
-        "select value from metadata where key = 'schema_version'"
-    ).fetchone()
-    current = int(row[0]) if row else 0
+    conn.execute(
+        "create table if not exists applied_migrations "
+        "(filename text primary key, version integer, applied_at integer)"
+    )
 
     migration_files = sorted(
         f for f in migrations_dir.glob("[0-9][0-9][0-9]_*.sql")
@@ -1283,21 +1283,55 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
     )
     if not migration_files:
         return
-    if current >= int(migration_files[-1].name[:3]):
-        return
 
+    applied = {row[0] for row in conn.execute("select filename from applied_migrations")}
+
+    # one-time backfill for a db that predates per-file tracking (a bare
+    # schema_version watermark): trust it for files at or below it, so a
+    # pre-existing install doesn't re-run everything from scratch. This does
+    # NOT retroactively catch a file that already raced past the watermark
+    # before this fix landed (repair that by hand) — it only closes the gap
+    # going forward, where a lower-numbered file lands on disk after a
+    # higher-numbered one already ran and advanced the watermark past it.
+    if not applied:
+        row = conn.execute(
+            "select value from metadata where key = 'schema_version'"
+        ).fetchone()
+        if row is not None:
+            watermark = int(row[0])
+            now = int(datetime.datetime.now().timestamp())
+            for f in migration_files:
+                if int(f.name[:3]) <= watermark:
+                    conn.execute(
+                        "insert or ignore into applied_migrations "
+                        "(filename, version, applied_at) values (?, ?, ?)",
+                        (f.name, int(f.name[:3]), now),
+                    )
+                    applied.add(f.name)
+
+    ran_any = False
     for f in migration_files:
-        version = int(f.name[:3])
-        if version <= current:
+        if f.name in applied:
             continue
+        version = int(f.name[:3])
         # executescript issues an implicit commit before running; most DDL migrations
         # are idempotent via IF NOT EXISTS, but migrations using DROP TABLE are not
         # (020_sector_weights.sql). re-running on partial failure is only safe if the
         # migration does not destroy existing data
         conn.executescript(f.read_text())
         conn.execute(
+            "insert or replace into applied_migrations "
+            "(filename, version, applied_at) values (?, ?, ?)",
+            (f.name, version, int(datetime.datetime.now().timestamp())),
+        )
+        applied.add(f.name)
+        ran_any = True
+
+    if ran_any:
+        highest = max(int(f.name[:3]) for f in migration_files if f.name in applied)
+        conn.execute(
             "insert or replace into metadata (key, value) values ('schema_version', ?)",
-            (str(version),),
+            (str(highest),),
         )
 
 
