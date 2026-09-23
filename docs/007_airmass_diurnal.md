@@ -48,6 +48,28 @@ Positive `dev` (afternoon peak): clear sky boosts the forecast upward. Negative 
 | 14 | wind-veer | net veering/backing rate (°/hour) from 3h direction history → advection offset |
 | 15 | clearness-stability | k dampened by solar radiation CV — broken cumulus reduces amplitude |
 | 16 | veer+clearness | members 14 + 15 combined |
+| 17 | clearsky-envelope-trend | trend of solar_radiation vs the station's own 30d hourly max envelope, not the astronomical clear-sky formula |
+| 18 | uv-solar-divergence | uv_index vs solar_radiation ratio, divergence from own history — speculative haze/smoke-aloft proxy |
+| 19 | early-ramp-steepness | solar_radiation ramp rate in the first 2h after sunrise vs the theoretical clear-sky ramp |
+| 20 | snow-cover-proxy | sub-freezing run-length + any precip in that run infers snow-covered ground, deliberately conservative |
+
+## Guardrail: continental diurnal-swing ceiling
+
+Not a member. Every member's temperature value (including member_id=0's blend) is
+clamped to within half of a locally-learned seasonal ceiling around the day's
+climatological mean:
+
+```
+ceiling = 95th percentile of daily (max − min air_temp) for this calendar month,
+          across up to 400 days of history
+value = clamp(value, T_daily_mean − ceiling/2, T_daily_mean + ceiling/2)
+```
+
+Inland, non-lake-moderated stations see larger clear/calm diurnal swings than a
+coastal or lake-adjacent one — the ceiling is learned from this station's own
+history rather than a fixed constant, and stays inactive (no clamping) until at
+least 5 days of same-month history exist. See `_seasonal_swing_ceiling` in
+`models/airmass_diurnal.py`.
 
 ## Limitations
 
@@ -55,6 +77,10 @@ Positive `dev` (afternoon peak): clear sky boosts the forecast upward. Negative 
 - Sector offsets (members 4, 5, 8) are static empirical constants, not derived from local data. They will likely have systematic bias until enough data accumulates for tuning.
 - The veering/backing signal (member 14, 16) uses the net direction change over 3 hours. A single 180° wind shift will appear the same as a gradual 3°/hour drift; rapid synoptic changes may alias the signal.
 - Solar CV (members 15, 16) requires at least 4 daytime observations (> 10 W/m²) in the 3h window; pre-dawn or deeply overcast runs fall back to the raw clearness index.
+- The envelope trend (member 17) needs 12+ populated hourly buckets in the trailing 30 days and 2+ qualifying daytime points in the 3h window; otherwise it falls back to no amplitude adjustment, same as the astronomical-clearness members.
+- UV-solar divergence (member 18) is explicitly speculative — cheap to test, no strong physical calibration yet, sensitivity may need retuning once it has scored history.
+- Early-ramp steepness (member 19) only fires 4-10h out on the same calendar day, and only once 2h have actually elapsed since today's sunrise; it's silent (no adjustment) the rest of the time, including every overnight/next-day lead.
+- Snow-cover proxy (member 20) is inference, not measurement — no snow-depth sensor exists. It requires 3+ consecutive sub-freezing days with precip recorded in that stretch, and its suppression is deliberately modest and capped so a wrong guess costs little.
 
 ## Confidence
 
@@ -66,3 +92,10 @@ group's own average when unknown) via `models/_confidence.py`'s `combine_pattern
 which also fixed a pre-existing bug: a member missing a weight used to collapse the
 whole group to a plain average, now only that member is dropped. See
 [confidence.md](confidence.md) for the full design.
+
+## Self-correction
+
+Member 21 (`self_correction`) is the standard self-correction member (migration
+`065_batch_b_self_correction_members.sql`) — member_id=0 minus this model's own
+learned historical bias at each (variable, lead_hours) cell. See
+[self_correction.md](self_correction.md).

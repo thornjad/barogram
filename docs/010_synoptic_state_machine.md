@@ -161,6 +161,26 @@ None of these change any existing member's signal definition or state tuple. Exi
 members 1-15 are only ever modified for a confirmed bug, never for weight/performance
 reasons.
 
+## New members (95-96)
+
+Added 2026-09-22, standalone hand-designed additions rather than another parametric
+sweep. Registered in `migrations/052_synoptic_state_machine_gust_and_rh_members.sql`.
+
+- **gust-ratio-trend (95)**: trend of the `wind_gust / wind_avg` ratio itself, comparing
+  two adjacent 3h trailing windows (`_GUST_TREND_WINDOW_HOURS`). A rise greater than 0.3
+  in the ratio is **rising**, a fall greater than 0.3 is **falling**, otherwise
+  **steady**. Distinct from the existing gust members (64-75), which read the ratio's
+  level at a single window rather than whether it's itself climbing or falling — a
+  rising ratio is a leading indicator of approaching mechanical mixing (a wind shift),
+  a falling one reads as a calming trend. Single-signal member, 3 cells.
+- **rh-wind-pressure (96)**: joint state of relative humidity, wind rotation, and
+  pressure tendency (3h). Relative humidity is bucketed by proximity to saturation —
+  `relative_humidity` ≥ 90% is **saturated**, ≥ 60% is **moist**, otherwise **dry** —
+  and reuses the model's existing wind-rotation and pressure-tendency signals. No
+  other member here reads `relative_humidity` directly, only dewpoint spread, so this
+  is a genuinely orthogonal axis rather than a restatement of the moisture members.
+  3×3×3 = 27 cells.
+
 ## Limitations
 
 - **full-4, coarse-4, and full-4+ptend** are blind at night because the cloud signal is
@@ -196,3 +216,10 @@ group's own average when unknown) via `models/_confidence.py`'s `combine_pattern
 which also fixed a pre-existing bug: a member missing a weight used to collapse the
 whole group to a plain average, now only that member is dropped. See
 [confidence.md](confidence.md) for the full design.
+
+## Self-correction
+
+Member 97 (`self_correction`) is the standard self-correction member (migration
+`065_batch_b_self_correction_members.sql`) — member_id=0 minus this model's own
+learned historical bias at each (variable, lead_hours) cell. See
+[self_correction.md](self_correction.md).

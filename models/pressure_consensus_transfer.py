@@ -15,11 +15,14 @@
 #                             delta is dampened when sources disagree (wide spread)
 #   3  best_model_only        pass through a single source's prediction, picked by a
 #                             fixed priority order (first available at that lead)
+#   4  self_correction        standard self-correction member (models/_self_correction.py)
+#                             -- member_id=0 minus this model's own learned bias
 
 import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 from models.pressure_trend_cascade import _build_delta_transfer_fns
@@ -31,6 +34,8 @@ NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
 NEEDS_MATCH_HISTORY = True
+
+_SELF_CORRECTION_MEMBER = 4
 
 # preference order for the best_model_only member; first one present at a given
 # lead wins. anything not in this list is still eligible for the mean/spread members.
@@ -91,7 +96,7 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None,
 
         cell_confidences_by_variable = {
             variable: _confidence.member_confidences(
-                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+                member_history, default_matches, _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER], variable, lead
             )
             for variable in VARIABLES
         }
@@ -171,6 +176,21 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None,
                 "value": mean,
                 "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

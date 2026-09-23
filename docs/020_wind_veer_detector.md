@@ -62,3 +62,10 @@ member_id=0's combination is confidence-adjusted via `models/_confidence.py`'s
 output stays identical to today's until it accumulates enough scored history of its
 own, the same graceful-cold-start behavior every newly added member gets. See
 [confidence.md](confidence.md) for the full design.
+
+## Self-correction
+
+Member 6 (`self_correction`) is the standard self-correction member (migration
+`065_batch_b_self_correction_members.sql`) — member_id=0 minus this model's own
+learned historical bias at each (variable, lead_hours) cell. See
+[self_correction.md](self_correction.md).

@@ -16,11 +16,14 @@
 #   2  dewpoint_only_inverse   infers pressure delta from the dewpoint-only
 #                              inverse transfer function (moisture-led signal)
 #   3  joint_inverse           average of the two single-variable inverses
+#   4  self_correction         standard self-correction member (models/_self_correction.py)
+#                              -- member_id=0 minus this model's own learned bias
 
 import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 from models.pressure_tendency import _find_nearest_ts, _ols1
@@ -32,6 +35,8 @@ NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
 NEEDS_MATCH_HISTORY = True
+
+_SELF_CORRECTION_MEMBER = 4
 
 _FUTURE_LOOKUP_SEC = 900  # +-15 min
 
@@ -142,7 +147,7 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None,
             pred_joint = pred_dew
 
         cell_confidences = _confidence.member_confidences(
-            member_history, default_matches, _ALL_MEMBER_IDS, "pressure", lead
+            member_history, default_matches, _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER], "pressure", lead
         )
 
         preds = {1: pred_temp, 2: pred_dew, 3: pred_joint}
@@ -196,6 +201,21 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None,
             "value": mean,
             "spread": spread,
             "confidence": group_confidence,
+        })
+
+        corrected = _self_correction.corrected_value(
+            conn_out, MODEL_ID, "pressure", lead, mean, issued_at
+        )
+        rows.append({
+            "model_id": MODEL_ID,
+            "model": MODEL_NAME,
+            "member_id": _SELF_CORRECTION_MEMBER,
+            "issued_at": issued_at,
+            "valid_at": valid_at,
+            "lead_hours": lead,
+            "variable": "pressure",
+            "value": corrected,
+            "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
         })
 
     return rows

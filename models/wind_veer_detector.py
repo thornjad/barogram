@@ -19,12 +19,15 @@
 #                            call is only trusted when a coincident gust/avg ratio
 #                            uptick also occurs — confirmation to cut false
 #                            positives from noisy near-calm direction readings
+#   6  self_correction       standard self-correction member (models/_self_correction.py)
+#                            -- member_id=0 minus this model's own learned bias
 
 import statistics
 import time
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
 from models.surface_signs import _angular_diff, _find_nearest_ts, _obs_in_window
@@ -32,9 +35,12 @@ from models.surface_signs import _angular_diff, _find_nearest_ts, _obs_in_window
 MODEL_ID = 20
 MODEL_NAME = "wind_veer_detector"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
 NEEDS_MATCH_HISTORY = True
+
+_SELF_CORRECTION_MEMBER = 6
 
 _SIGNAL_WINDOW_SEC = 3 * 3600  # 3h lookback, matches surface_signs's wind_rotation
 _FUTURE_LOOKUP_SEC = 900       # +/- 15 min
@@ -166,7 +172,7 @@ def _build_conditionals(all_obs):
     }
 
 
-def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
+def run(obs, issued_at, *, conn_in, conn_out=None, weights=None, all_obs=None,
         member_history=None, default_matches=None):
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
@@ -183,7 +189,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
 
     cell_confidences_by_var_lead = {
         (variable, lead): _confidence.member_confidences(
-            member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+            member_history, default_matches, _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER], variable, lead
         )
         for variable in VARIABLES
         for lead in LEAD_HOURS
@@ -258,6 +264,21 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
                 "value": mean,
                 "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

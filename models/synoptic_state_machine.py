@@ -43,11 +43,25 @@
 #   preciprate (88-93, 6 members): precip accumulation rate trend
 #     (accelerating/steady/decelerating) at windows {30min,1h,3h} x pairing {+conv, +dp}.
 #   moisture-convective-cloud (94, 1 member): dp_trend + conv + cloud, three-way.
+#
+# members 95-96: standalone hand-designed additions (2026-09-22), not part of a
+# parametric family, registered in migrations/052_synoptic_state_machine_gust_and_rh_members.sql:
+#   95  gust-ratio-trend  (gust_trend,) — 3 cells; trend of the gust/avg ratio itself
+#       across two adjacent trailing windows, a leading indicator of approaching
+#       mechanical mixing (rising) vs a calming trend (falling), distinct from the
+#       existing gust members' snapshot ratio read.
+#   96  rh-wind-pressure  (rh, wind_rot, p_tend) — 3x3x3 = 27 cells; relative_humidity
+#       as its own axis (proximity to saturation), joined with wind rotation and
+#       pressure tendency. No other member here reads relative_humidity directly,
+#       only dewpoint, so this is orthogonal rather than a restatement.
+#   97  self_correction   standard self-correction member (models/_self_correction.py)
+#       -- member_id=0 minus this model's own learned bias
 
 import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._utils import _sector
 from models.surface_signs import (
     _FUTURE_LOOKUP_SEC,
@@ -65,6 +79,7 @@ from models.surface_signs import (
 MODEL_ID = 10
 MODEL_NAME = "synoptic_state_machine"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
 NEEDS_MATCH_HISTORY = True
@@ -77,14 +92,21 @@ VARIABLES = {
 }
 
 _MIN_SAMPLES = 3
-_ALL_MEMBER_IDS = list(range(1, 16)) + list(range(16, 95))
+_GUST_TREND_ID = 95
+_RH_JOINT_ID = 96
+_SELF_CORRECTION_MEMBER = 97
+_ALL_MEMBER_IDS = list(range(1, 16)) + list(range(16, 95)) + [_GUST_TREND_ID, _RH_JOINT_ID]
 _PTEND_THRESHOLD = 0.5
 _PTEND_STRONG_THRESHOLD = 1.5
 _GUST_MIN_WIND_MS = 0.5
 _GUST_BREEZY_RATIO = 1.5
 _GUST_GUSTY_RATIO = 2.5
+_GUST_TREND_WINDOW_HOURS = 3
+_GUST_TREND_THRESHOLD = 0.3  # ratio-units change between adjacent windows
 _TEMP_TREND_THRESHOLD = 1.0
 _PRECIP_RATE_THRESHOLD = 0.2  # mm/h change between windows
+_RH_SATURATED_THRESHOLD = 90.0
+_RH_MOIST_THRESHOLD = 60.0
 
 _PTEND_WINDOWS = [1, 2, 4, 5, 6, 12, 18, 24]
 _PTEND_GRANS = ["std", "graded"]
@@ -146,9 +168,8 @@ def _pressure_tendency_cat_graded(obs_now, obs_prior) -> str | None:
     return "steady"
 
 
-def _gustiness_category(window_obs) -> str | None:
-    """Categorize wind_gust/wind_avg ratio over the window — turbulence proxy,
-    orthogonal to wind_rotation (direction). None below the wind-speed floor."""
+def _gust_ratio(window_obs) -> float | None:
+    """Raw wind_gust/wind_avg ratio over the window. None below the wind-speed floor."""
     valid = [
         r for r in window_obs
         if r["wind_gust"] is not None
@@ -159,10 +180,47 @@ def _gustiness_category(window_obs) -> str | None:
         return None
     avg_gust = sum(r["wind_gust"] for r in valid) / len(valid)
     avg_wind = sum(r["wind_avg"] for r in valid) / len(valid)
-    ratio = avg_gust / avg_wind
+    return avg_gust / avg_wind
+
+
+def _gustiness_category(window_obs) -> str | None:
+    """Categorize wind_gust/wind_avg ratio over the window — turbulence proxy,
+    orthogonal to wind_rotation (direction). None below the wind-speed floor."""
+    ratio = _gust_ratio(window_obs)
+    if ratio is None:
+        return None
     if ratio > _GUST_GUSTY_RATIO:   return "gusty"
     if ratio > _GUST_BREEZY_RATIO:  return "breezy"
     return "smooth"
+
+
+def _gust_ratio_trend_category(sorted_ts, by_ts, ts) -> str | None:
+    """Trend of the gust/avg ratio itself across two adjacent trailing windows, not
+    _gustiness_category's snapshot level. Rising is a leading indicator of approaching
+    mechanical mixing (a wind shift); falling reads as a calming trend."""
+    w = _GUST_TREND_WINDOW_HOURS * 3600
+    recent = _gust_ratio(_obs_in_window(sorted_ts, by_ts, ts - w, ts))
+    prior = _gust_ratio(_obs_in_window(sorted_ts, by_ts, ts - 2 * w, ts - w))
+    if recent is None or prior is None:
+        return None
+    delta = recent - prior
+    if delta > _GUST_TREND_THRESHOLD:   return "rising"
+    if delta < -_GUST_TREND_THRESHOLD:  return "falling"
+    return "steady"
+
+
+def _rh_category(row) -> str | None:
+    """Relative humidity bucketed by proximity to saturation. Orthogonal to dp_trend:
+    RH captures how close the air is to saturation, which absolute moisture content
+    (dewpoint) alone doesn't."""
+    if row is None:
+        return None
+    rh = row.get("relative_humidity")
+    if rh is None:
+        return None
+    if rh >= _RH_SATURATED_THRESHOLD:  return "saturated"
+    if rh >= _RH_MOIST_THRESHOLD:      return "moist"
+    return "dry"
 
 
 def _temp_trend_category(obs_now, obs_prior) -> str | None:
@@ -284,6 +342,15 @@ def _build_expansion_states(dp, conv, cloud, ptend_std, ptend_graded, gust, temp
     return states
 
 
+def _build_new_signal_states(gust_trend, rh, rot, p_tend) -> dict:
+    """Members 95-96: standalone hand-designed additions, not part of the parametric
+    expansion families above. See migrations/052_synoptic_state_machine_gust_and_rh_members.sql."""
+    return {
+        _GUST_TREND_ID: (gust_trend,) if gust_trend is not None else None,
+        _RH_JOINT_ID: (rh, rot, p_tend) if None not in (rh, rot, p_tend) else None,
+    }
+
+
 def _signals_at(ts, sorted_ts, by_ts, solar_climo):
     """Compute every raw signal category at a historical timestamp: the original four
     plus the point lookups and windowed slices the expansion families need."""
@@ -315,6 +382,10 @@ def _signals_at(ts, sorted_ts, by_ts, solar_climo):
 
     states = _member_states(rot, dp, cloud, conv, ptend_std[3])
     states.update(_build_expansion_states(dp, conv, cloud, ptend_std, ptend_graded, gust, temp_trend, precip_rate))
+
+    gust_trend = _gust_ratio_trend_category(sorted_ts, by_ts, ts)
+    rh = _rh_category(row_now)
+    states.update(_build_new_signal_states(gust_trend, rh, rot, ptend_std[3]))
     return states
 
 
@@ -356,7 +427,7 @@ def _build_conditionals(all_obs: list, solar_climo: dict) -> tuple[dict, dict, l
     return conds, by_ts, sorted_ts
 
 
-def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None,
+def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, all_obs=None,
         member_history=None, default_matches=None) -> list[dict]:
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
@@ -395,13 +466,17 @@ def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None,
     live_states = _member_states(rot, dp, cloud, conv, ptend_std[3])
     live_states.update(_build_expansion_states(dp, conv, cloud, ptend_std, ptend_graded, gust, temp_trend, precip_rate))
 
+    gust_trend = _gust_ratio_trend_category(sorted_ts, by_ts, obs_ts)
+    rh = _rh_category(obs)
+    live_states.update(_build_new_signal_states(gust_trend, rh, rot, ptend_std[3]))
+
     rows = []
 
     # confidence per (variable, lead) cell, shared default fingerprint --
     # this model has no per-member analog selection of its own to reuse
     cell_confidences = {
         (variable, lead): _confidence.member_confidences(
-            member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+            member_history, default_matches, _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER], variable, lead
         )
         for variable in VARIABLES for lead in LEAD_HOURS
     }
@@ -476,6 +551,21 @@ def run(obs, issued_at: int, *, conn_in, weights=None, all_obs=None,
                 "value": mean,
                 "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences[(variable, lead)].get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

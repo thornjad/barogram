@@ -39,3 +39,10 @@ member_id=0's combination is confidence-adjusted via `models/_confidence.py`'s
 models' `member_id=0` values, already confidence-adjusted, as its own input, then
 applies its own confidence on top; that compounding is an accepted, documented
 property of "no special case," not an oversight. See [confidence.md](confidence.md).
+
+## Self-correction
+
+Member 4 (`self_correction`) is the standard self-correction member (migration
+`065_batch_b_self_correction_members.sql`) — member_id=0 minus this model's own
+learned historical bias at each (variable, lead_hours) cell. See
+[self_correction.md](self_correction.md).

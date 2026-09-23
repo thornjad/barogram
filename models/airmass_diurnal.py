@@ -20,6 +20,16 @@
 #  14  wind-veer                   veering/backing rate from 3h direction history
 #  15  clearness-stability         k dampened by solar radiation CV (cloud character)
 #  16  veer+clearness              member 14 + member 15 combined
+#  17  clearsky-envelope-trend     trend of solar_radiation vs own 30d hourly max envelope
+#  18  uv-solar-divergence         uv_index vs solar_radiation ratio, divergence from own history
+#  19  early-ramp-steepness        solar_radiation ramp rate in first 2h after sunrise
+#  20  snow-cover-proxy            sub-freezing run-length + precip infers snow-covered ground
+#  21  self_correction             standard self-correction member (models/_self_correction.py)
+#                                   -- member_id=0 minus this model's own learned bias
+#
+# guardrail (not a member, applied to every member's temperature value): a
+# locally-learned seasonal diurnal-swing ceiling caps how far any member can
+# push a value from the day's climatological mean. See _seasonal_swing_ceiling.
 
 import datetime as dt
 import math
@@ -28,14 +38,18 @@ import time
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._utils import _sector
 
 MODEL_ID = 7
 MODEL_NAME = "airmass_diurnal"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_LOCATION = True
 NEEDS_MATCH_HISTORY = True
+
+_SELF_CORRECTION_MEMBER = 21
 
 from models._climo_weights import LEAD_HOURS
 
@@ -53,6 +67,15 @@ _P_DEP_SENSITIVITY = 0.7  # °C temp adj per hPa below 30d mean pressure (warm s
 _VEER_SENSITIVITY = 0.015 # °C per (°/hour of veer × lead_hours), capped at ±4°C
 _CV_DAMPEN = 0.4          # fraction by which high solar CV reduces k_adj amplitude
 _CV_MIN_OBS = 4           # minimum daytime solar obs to compute CV
+_ENV_K_SENSITIVITY = 1.5   # amplitude multiplier for envelope-trend projected index (member 17)
+_UV_DIV_SENSITIVITY = 15.0 # °C adj per unit of uv/solar ratio divergence from own history (member 18)
+_RAMP_SENSITIVITY = 1.5    # amplitude multiplier for early solar-ramp factor (member 19)
+_SNOW_SUPPRESSION = 1.5    # °C daytime warming suppression when snow cover is inferred (member 20)
+_SNOW_MIN_RUN_DAYS = 3     # consecutive sub-freezing days before snow cover is inferred
+_SNOW_RUN_CAP = 10         # run length (days) at which suppression reaches full _SNOW_SUPPRESSION
+_SWING_HISTORY_DAYS = 400    # cross-year window for the seasonal swing ceiling, matches
+                             # _confidence.py's own cross-year window convention
+_SWING_CEILING_MIN_DAYS = 5  # minimum same-month history days before the ceiling activates
 
 # temperature offsets (°C) by 8-point wind sector: 0=N 1=NE 2=E 3=SE 4=S 5=SW 6=W 7=NW
 _SECTOR_TEMP = {0: -1.5, 1: -1.0, 2: -0.5, 3: 0.5, 4: 1.5, 5: 2.0, 6: 0.5, 7: -0.5}
@@ -74,6 +97,10 @@ _MEMBER_NAMES = [
     (14, "wind-veer"),
     (15, "clearness-stability"),
     (16, "veer+clearness"),
+    (17, "clearsky-envelope-trend"),
+    (18, "uv-solar-divergence"),
+    (19, "early-ramp-steepness"),
+    (20, "snow-cover-proxy"),
 ]
 _ALL_MEMBER_IDS = [mid for mid, _ in _MEMBER_NAMES]
 
@@ -191,7 +218,104 @@ def _solar_cv(solar_obs: list) -> float | None:
         return None
     return statistics.pstdev(vals) / mean
 
-def run(obs, issued_at: int, *, conn_in, weights=None, location=None, member_history=None,
+def _hour_max(
+    obs_rows: list,
+    col: str,
+    min_obs: int = 3,
+    min_buckets: int = 12,
+) -> dict[int, float] | None:
+    """Own-history envelope: per-local-hour max of col, distinct from the
+    astronomical clear-sky formula _clear_sky_irr uses (member 17)."""
+    buckets: dict[int, list[float]] = {}
+    for row in obs_rows:
+        v = row[col]
+        if v is None:
+            continue
+        h = dt.datetime.fromtimestamp(row["timestamp"]).hour
+        buckets.setdefault(h, []).append(v)
+    populated = {h: vals for h, vals in buckets.items() if len(vals) >= min_obs}
+    if len(populated) < min_buckets:
+        return None
+    return {h: max(vals) for h, vals in populated.items()}
+
+def _compute_envelope_trend(obs_rows: list, env_hm: dict[int, float]) -> float | None:
+    """Slope (per hour) of solar_radiation / envelope(hour) over obs_rows.
+    None if envelope is missing or fewer than 2 daytime points qualify."""
+    if not env_hm:
+        return None
+    points = []
+    for r in obs_rows:
+        if r["solar_radiation"] is None:
+            continue
+        env_val = _interp_hm(env_hm, _local_hour_float(r["timestamp"]))
+        if env_val is None or env_val <= 0:
+            continue
+        ratio = max(0.0, min(1.3, r["solar_radiation"] / env_val))
+        points.append((r["timestamp"], ratio))
+    if len(points) < 2:
+        return None
+    elapsed = (points[-1][0] - points[0][0]) / 3600.0
+    if elapsed <= 0:
+        return None
+    return (points[-1][1] - points[0][1]) / elapsed
+
+def _sunrise_ts(lat_deg: float, day_ts: int) -> int | None:
+    """First timestamp on day_ts's local date where the sun is up, per the
+    same threshold _clear_sky_irr already uses. 5-minute resolution."""
+    midnight = dt.datetime.fromtimestamp(day_ts).replace(hour=0, minute=0, second=0, microsecond=0)
+    for minute in range(0, 12 * 60, 5):
+        ts = int((midnight + dt.timedelta(minutes=minute)).timestamp())
+        if _clear_sky_irr(lat_deg, ts) is not None:
+            return ts
+    return None
+
+def _consecutive_subfreezing_run(obs_rows: list, today: dt.date) -> tuple[int, bool]:
+    """Run-length (days, ending yesterday) of daily-max air_temp < 0°C, plus
+    whether any day in that run recorded precip_accum_day > 0 (member 20).
+    today's own partial date is excluded. A gap or a day at/above freezing
+    ends the run."""
+    daily_max: dict[dt.date, float] = {}
+    daily_precip: dict[dt.date, float] = {}
+    for row in obs_rows:
+        d = dt.datetime.fromtimestamp(row["timestamp"]).date()
+        if d == today:
+            continue
+        if row["air_temp"] is not None:
+            daily_max[d] = max(daily_max.get(d, row["air_temp"]), row["air_temp"])
+        if row["precip_accum_day"] is not None:
+            daily_precip[d] = max(daily_precip.get(d, 0.0), row["precip_accum_day"])
+    run_length = 0
+    had_precip = False
+    d = today - dt.timedelta(days=1)
+    while d in daily_max and daily_max[d] < 0.0:
+        run_length += 1
+        if daily_precip.get(d, 0.0) > 0.0:
+            had_precip = True
+        d -= dt.timedelta(days=1)
+    return run_length, had_precip
+
+def _seasonal_swing_ceiling(hist_rows: list, month: int, min_days: int = _SWING_CEILING_MIN_DAYS) -> float | None:
+    """95th-percentile daily (max − min air_temp) among hist_rows falling in
+    calendar `month`, across whatever years of history hist_rows spans.
+    None if fewer than min_days qualifying days exist yet (guardrail
+    inactive until then)."""
+    daily: dict[dt.date, tuple[float, float]] = {}
+    for row in hist_rows:
+        if row["air_temp"] is None:
+            continue
+        ts_dt = dt.datetime.fromtimestamp(row["timestamp"])
+        if ts_dt.month != month:
+            continue
+        date = ts_dt.date()
+        lo, hi = daily.get(date, (row["air_temp"], row["air_temp"]))
+        daily[date] = (min(lo, row["air_temp"]), max(hi, row["air_temp"]))
+    ranges = sorted(hi - lo for lo, hi in daily.values())
+    if len(ranges) < min_days:
+        return None
+    idx = max(0, min(len(ranges) - 1, round(0.95 * (len(ranges) - 1))))
+    return ranges[idx]
+
+def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, location=None, member_history=None,
         default_matches=None) -> list[dict]:
     if location is None:
         location = db.tempest_station_location(conn_in)
@@ -276,6 +400,64 @@ def run(obs, issued_at: int, *, conn_in, weights=None, location=None, member_his
     sector = int((wind_dir + 22.5) / 45) % 8 if wind_dir is not None else None
     sector_temp_adj = _SECTOR_TEMP.get(sector, 0.0) if sector is not None else 0.0
 
+    obs_date = dt.datetime.fromtimestamp(obs["timestamp"]).date()
+
+    # own-history clear-sky envelope + its trend (member 17)
+    env_hm = _hour_max(raw_30d, "solar_radiation")
+    env_idx_now = None
+    if env_hm is not None and obs["solar_radiation"] is not None:
+        env_val_now = _interp_hm(env_hm, t_now)
+        if env_val_now is not None and env_val_now > 0:
+            env_idx_now = max(0.0, min(1.3, obs["solar_radiation"] / env_val_now))
+    env_dk_dt = _compute_envelope_trend(recent_3h, env_hm) if env_hm is not None else None
+
+    # UV-vs-solar divergence from the station's own history (member 18)
+    uv_hist_ratios = [
+        r["uv_index"] / r["solar_radiation"]
+        for r in raw_30d
+        if r["solar_radiation"] is not None and r["solar_radiation"] > 50 and r["uv_index"] is not None
+    ]
+    uv_ratio_hist = sum(uv_hist_ratios) / len(uv_hist_ratios) if uv_hist_ratios else None
+    uv_ratio_now = (
+        obs.get("uv_index") / obs["solar_radiation"]
+        if obs["solar_radiation"] is not None and obs["solar_radiation"] > 50 and obs.get("uv_index") is not None
+        else None
+    )
+    uv_div = (
+        uv_ratio_now - uv_ratio_hist
+        if uv_ratio_now is not None and uv_ratio_hist is not None
+        else None
+    )
+
+    # early solar-ramp steepness vs the theoretical clear-sky ramp (member 19)
+    ramp_factor = None
+    if lat is not None:
+        sunrise_ts = _sunrise_ts(lat, obs["timestamp"])
+        if sunrise_ts is not None and obs["timestamp"] >= sunrise_ts + 2 * 3600:
+            ramp_obs = db.tempest_obs_in_range(conn_in, sunrise_ts, sunrise_ts + 2 * 3600)
+            ramp_vals = [
+                (r["timestamp"], r["solar_radiation"])
+                for r in ramp_obs
+                if r["solar_radiation"] is not None
+            ]
+            if len(ramp_vals) >= 2:
+                elapsed_h = (ramp_vals[-1][0] - ramp_vals[0][0]) / 3600.0
+                expected_irr = _clear_sky_irr(lat, sunrise_ts + 2 * 3600)
+                if elapsed_h > 0 and expected_irr and expected_irr > 0:
+                    actual_ramp = (ramp_vals[-1][1] - ramp_vals[0][1]) / elapsed_h
+                    expected_ramp = expected_irr / 2.0
+                    ramp_factor = max(0.0, min(2.5, actual_ramp / expected_ramp))
+
+    # inferred snow cover from a sub-freezing run + any precip in it (member 20)
+    snow_run_length, snow_had_precip = _consecutive_subfreezing_run(raw_30d, obs_date)
+    snow_likely = snow_run_length >= _SNOW_MIN_RUN_DAYS and snow_had_precip
+
+    # continental diurnal-swing ceiling: guardrail on every member's temperature
+    # value, not a forecasting member of its own
+    swing_hist = db.tempest_obs_in_range(conn_in, issued_at - _SWING_HISTORY_DAYS * 86400, issued_at)
+    swing_ceiling = _seasonal_swing_ceiling(swing_hist, obs_date.month)
+    half_swing_ceiling = swing_ceiling / 2.0 if swing_ceiling is not None else None
+
     rows = []
     for lead in LEAD_HOURS:
         valid_at = obs["timestamp"] + lead * 3600
@@ -295,11 +477,21 @@ def run(obs, issued_at: int, *, conn_in, weights=None, location=None, member_his
             k_trend = None
         k_trend_adj = (k_trend - _K_MEAN) if k_trend is not None else None
 
+        # projected envelope index for member 17 (env_dk_dt slope × lead)
+        if env_idx_now is not None and env_dk_dt is not None:
+            env_idx_proj = max(0.0, min(1.3, env_idx_now + env_dk_dt * lead))
+            env_adj = env_idx_proj - 1.0
+        else:
+            env_adj = None
+
+        daytime_valid = _clear_sky_irr(lat, valid_at) is not None if lat is not None else False
+        same_day_valid = dt.datetime.fromtimestamp(valid_at).date() == obs_date
+
         member_vals: dict[int, dict[str, float | None]] = {}
 
         variable_confidences = {
             variable: _confidence.member_confidences(
-                member_history, default_matches, _ALL_MEMBER_IDS, variable, lead
+                member_history, default_matches, _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER], variable, lead
             )
             for variable in VAR_COL
         }
@@ -402,8 +594,22 @@ def run(obs, issued_at: int, *, conn_in, weights=None, location=None, member_his
                             else:
                                 k_eff_adj = k_adj
                             T_adj += dev * k_eff_adj * _K_SENSITIVITY
+                    elif mid == 17:
+                        if env_adj is not None and lead <= 4 and daytime_valid:
+                            T_adj = dev * env_adj * _ENV_K_SENSITIVITY
+                    elif mid == 18:
+                        if uv_div is not None and daytime_valid:
+                            T_adj = dev * uv_div * _UV_DIV_SENSITIVITY
+                    elif mid == 19:
+                        if ramp_factor is not None and 4 <= lead <= 10 and same_day_valid:
+                            T_adj = dev * (ramp_factor - 1.0) * _RAMP_SENSITIVITY
+                    elif mid == 20:
+                        if snow_likely and 9 <= v_hour <= 16:
+                            T_adj = -_SNOW_SUPPRESSION * min(snow_run_length, _SNOW_RUN_CAP) / _SNOW_RUN_CAP
 
                 value = T_base_valid + anchor + T_adj
+                if variable == "temperature" and half_swing_ceiling is not None and t_daily_mean is not None:
+                    value = max(t_daily_mean - half_swing_ceiling, min(t_daily_mean + half_swing_ceiling, value))
                 member_vals[mid][variable] = value
                 rows.append({
                     "model_id": MODEL_ID, "model": MODEL_NAME, "member_id": mid,
@@ -447,6 +653,17 @@ def run(obs, issued_at: int, *, conn_in, weights=None, location=None, member_his
                 "lead_hours": lead, "variable": variable,
                 "value": mean, "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID, "model": MODEL_NAME, "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at, "valid_at": valid_at,
+                "lead_hours": lead, "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows
