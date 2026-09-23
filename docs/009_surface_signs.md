@@ -43,6 +43,7 @@ for those combinations rather than guessing.
 | 2 | dp-trend | dewpoint spread (temp − dp) change over 3h | narrowing, steady, widening |
 | 3 | solar-cloud | solar radiation deficit vs climatological mean | clear, partial_cloud, heavy_cloud |
 | 4 | convective | precip type + lightning (3h) + precip rate (1h) | hail, lightning, precip, dry |
+| 5 | self_correction | standard self-correction member, see [self_correction.md](self_correction.md) | — |
 
 ## Signal details
 
