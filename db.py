@@ -1168,6 +1168,37 @@ def tempest_solar_history(
     ).fetchall()
 
 
+def tempest_delta_t_in_range(
+    conn: sqlite3.Connection, start_ts: int, end_ts: int
+) -> list[dict]:
+    """Tempest obs with delta_t (wet-bulb depression, wxlog migration 004), for
+    models that need this column's own trend. Not part of tempest_obs_in_range's
+    shared row shape -- delta_t is station-derived with only partial coverage
+    (populated when the Tempest firmware reports it), so it gets its own narrow
+    query rather than widening the shared one for every NEEDS_ALL_OBS model.
+
+    delta_t isn't in REQUIRED_COLUMNS (validate_schema doesn't demand it), so an
+    older wxlog database predating its migration 004 -- or a test fixture with a
+    trimmed tempest_obs schema -- won't have the column at all. Returns empty
+    rather than raising in that case; callers already treat "no delta_t history"
+    the same as "not enough of it yet"."""
+    try:
+        return [dict(r) for r in conn.execute(
+            """
+            select t.timestamp, t.delta_t
+            from tempest_obs t
+            join stations s on s.station_id = t.station_id
+            where s.source = 'tempest'
+              and t.delta_t is not null
+              and t.timestamp >= ? and t.timestamp <= ?
+            order by t.timestamp asc
+            """,
+            (start_ts, end_ts),
+        ).fetchall()]
+    except sqlite3.OperationalError:
+        return []
+
+
 def sky_cover_history(
     conn: sqlite3.Connection, start_ts: int, end_ts: int
 ) -> list:
