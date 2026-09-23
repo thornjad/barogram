@@ -923,13 +923,17 @@ def latest_forecast_per_model(conn: sqlite3.Connection) -> list:
 
 
 def sync_ensemble_members(conn: sqlite3.Connection) -> None:
-    """Ensure model_id=100 has a member row for every base model (type='base', id < 100).
+    """Ensure model_id=100 has a member row for every base model (type='base').
 
     Called at forecast time and dashboard generation so the members table stays
     current without requiring a migration every time a new base model is added.
+    Deliberately not filtered by id < 100: ensemble_bias_correction (101) is
+    type='base' too, despite sitting past the ensemble's own id, and re-enters
+    barogram_ensemble as an ordinary member the same as any other base model,
+    no special-casing.
     """
     base_rows = conn.execute(
-        "select id, name from models where type = 'base' and id < 100"
+        "select id, name from models where type = 'base'"
     ).fetchall()
     for r in base_rows:
         conn.execute(

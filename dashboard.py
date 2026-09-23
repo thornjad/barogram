@@ -403,6 +403,13 @@ h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .weight-table tbody tr:last-child th,
 .weight-table tbody tr:last-child td { border-bottom: none; }
 .weight-table td.wt-pct { text-align: right; font-variant-numeric: tabular-nums; min-width: 52px; }
+.wt101-checkbox { display: none; }
+.wt101-toggle-bar { margin: 4px 0 8px; }
+.wt101-toggle-bar label { display: inline-block; }
+.wt101-view-without { display: none; }
+.wt101-checkbox:checked ~ .wt101-view-with { display: none; }
+.wt101-checkbox:checked ~ .wt101-view-without { display: block; }
+.wt101-checkbox:checked ~ .wt101-toggle-bar label { background: #555; color: #fff; border-color: #555; }
 .weight-group-hdr th { background: #f5f5f5; font-size: 11px; color: #888; font-weight: 600;
     letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 10px; }
 .learnings-intro { margin-bottom: 14px; color: #555; font-size: 13px; line-height: 1.6; }
@@ -685,7 +692,59 @@ def _weights_section_html(
         return ""
 
     _EXT_CORRECTED_ID = 202
+
+    # ensemble_bias_correction (model 101) has no weight table of its own --
+    # it re-enters barogram_ensemble as member 101, so its tuned weight lives
+    # in avg_weights[100][101]. Surfaced via the exclude-101 toggle on model
+    # 100's own block below, not a separate pinned block.
+    _ENSEMBLE_ID = 100
+    _BIAS_CORRECTION_ID = 101
+
     blocks = []
+    def _sectored_table(model_id, data, eq_w):
+        # per-sector columns: compute max weight per sector for coloring
+        sector_max = {}
+        for sector in range(4):
+            vals = [sectors.get(sector, eq_w) for sectors in data.values()]
+            sector_max[sector] = max(vals)
+
+        header_cells = "".join(
+            f'<th class="wt-pct">{_SECTOR_LABELS[s]}<br>'
+            f'<span style="font-weight:400;color:#999">{_SECTOR_HOURS[s]}</span></th>'
+            for s in range(4)
+        )
+        table_rows = []
+        prev_group = None
+        for mem_id in sorted(data):
+            sectors = data[mem_id]
+            name = member_names[(model_id, mem_id)]
+            group = _group_label(name)
+            if group and group != prev_group:
+                table_rows.append(
+                    f'<tr class="weight-group-hdr">'
+                    f'<th colspan="5">{group}</th></tr>'
+                )
+                prev_group = group
+            cells = []
+            for sector in range(4):
+                w = sectors.get(sector, eq_w)
+                spread = sector_max[sector] - eq_w
+                if spread > 0 and w > eq_w:
+                    opacity = min((w - eq_w) / spread, 1.0) * 0.45
+                else:
+                    opacity = 0.0
+                color = f'background:rgba(59,91,219,{opacity:.3f})' if opacity > 0.01 else ''
+                style = f' style="{color}"' if color else ''
+                cells.append(f'<td class="wt-pct"{style}>{w:.1%}</td>')
+            table_rows.append(
+                f'<tr>'
+                f'<th><span class="model-id-cell">{mem_id}</span> {name}</th>'
+                f'{"".join(cells)}'
+                f'</tr>'
+            )
+        thead = f'<thead><tr><th>Member</th>{header_cells}</tr></thead>'
+        return thead, "".join(table_rows)
+
     for model_id in sorted(avg_weights):
         if model_id == _EXT_CORRECTED_ID:
             continue
@@ -694,49 +753,52 @@ def _weights_section_html(
         n = len(members_data)
         equal_w = 1.0 / n
         tuned = model_id in tuned_ids
+        table_html = None
 
         if sectored:
-            # per-sector columns: compute max weight per sector for coloring
-            sector_max = {}
-            for sector in range(4):
-                vals = [sectors.get(sector, equal_w) for sectors in members_data.values()]
-                sector_max[sector] = max(vals)
+            thead, table_rows_html = _sectored_table(model_id, members_data, equal_w)
 
-            header_cells = "".join(
-                f'<th class="wt-pct">{_SECTOR_LABELS[s]}<br>'
-                f'<span style="font-weight:400;color:#999">{_SECTOR_HOURS[s]}</span></th>'
-                for s in range(4)
-            )
-            table_rows = []
-            prev_group = None
-            for mem_id in sorted(members_data):
-                sectors = members_data[mem_id]
-                name = member_names[(model_id, mem_id)]
-                group = _group_label(name)
-                if group and group != prev_group:
-                    table_rows.append(
-                        f'<tr class="weight-group-hdr">'
-                        f'<th colspan="5">{group}</th></tr>'
-                    )
-                    prev_group = group
-                cells = []
-                for sector in range(4):
-                    w = sectors.get(sector, equal_w)
-                    spread = sector_max[sector] - equal_w
-                    if spread > 0 and w > equal_w:
-                        opacity = min((w - equal_w) / spread, 1.0) * 0.45
-                    else:
-                        opacity = 0.0
-                    color = f'background:rgba(59,91,219,{opacity:.3f})' if opacity > 0.01 else ''
-                    style = f' style="{color}"' if color else ''
-                    cells.append(f'<td class="wt-pct"{style}>{w:.1%}</td>')
-                table_rows.append(
-                    f'<tr>'
-                    f'<th><span class="model-id-cell">{mem_id}</span> {name}</th>'
-                    f'{"".join(cells)}'
-                    f'</tr>'
+            if model_id == _ENSEMBLE_ID and _BIAS_CORRECTION_ID in members_data:
+                # purely visual counterfactual: what would the other members'
+                # weights be if ensemble_bias_correction weren't a member,
+                # renormalized so they still sum to 1. Does not touch the
+                # actual weights table or how tune/blend_cells compute this.
+                w101 = {
+                    s: members_data[_BIAS_CORRECTION_ID].get(s, equal_w)
+                    for s in range(4)
+                }
+                members_without = {}
+                for mem_id, sectors in members_data.items():
+                    if mem_id == _BIAS_CORRECTION_ID:
+                        continue
+                    without_sectors = {}
+                    for s in range(4):
+                        w = sectors.get(s, equal_w)
+                        denom = 1 - w101[s]
+                        without_sectors[s] = w / denom if denom > 0 else w
+                    members_without[mem_id] = without_sectors
+                equal_w_without = 1.0 / len(members_without)
+                thead_wo, rows_wo = _sectored_table(model_id, members_without, equal_w_without)
+
+                table_html = (
+                    f'<input type="checkbox" id="wt101-toggle-{model_id}" class="wt101-checkbox">'
+                    f'<div class="wt101-toggle-bar">'
+                    f'<label for="wt101-toggle-{model_id}" class="mae-raw-btn">'
+                    f'Exclude ensemble_bias_correction (model 101)</label>'
+                    f'</div>'
+                    f'<div class="table-scroll wt101-view-with">'
+                    f'<table class="weight-table">{thead}<tbody>{table_rows_html}</tbody></table>'
+                    f'</div>'
+                    f'<div class="table-scroll wt101-view-without">'
+                    f'<table class="weight-table">{thead_wo}<tbody>{rows_wo}</tbody></table>'
+                    f'</div>'
                 )
-            thead = f'<thead><tr><th>Member</th>{header_cells}</tr></thead>'
+            else:
+                table_html = (
+                    f'<div class="table-scroll">'
+                    f'<table class="weight-table">{thead}<tbody>{table_rows_html}</tbody></table>'
+                    f'</div>'
+                )
         else:
             # no sector data — single avg weight column (legacy / untuned fallback)
             all_weights_flat = [
@@ -769,6 +831,11 @@ def _weights_section_html(
                     f'</tr>'
                 )
             thead = '<thead><tr><th>Member</th><th>Avg weight</th></tr></thead>'
+            table_html = (
+                f'<div class="table-scroll">'
+                f'<table class="weight-table">{thead}<tbody>{"".join(table_rows)}</tbody></table>'
+                f'</div>'
+            )
 
         untrained_note = (
             '' if tuned
@@ -779,17 +846,11 @@ def _weights_section_html(
             f'<h3>{model_names[model_id]}{untrained_note}'
             f' <span class="model-id-cell">(model {model_id})</span></h3>'
             f'<p class="window-label">equal weight: {equal_w:.1%} per member</p>'
-            f'<div class="table-scroll">'
-            f'<table class="weight-table">'
-            f'{thead}'
-            f'<tbody>{"".join(table_rows)}</tbody>'
-            f'</table>'
-            f'</div>'
+            f'{table_html}'
             f'</div>'
         )
         blocks.append((model_id, block_inner))
 
-    _ENSEMBLE_ID = 100
     ensemble_blocks = [b for mid, b in blocks if mid == _ENSEMBLE_ID]
     other_blocks = [(mid, b) for mid, b in blocks if mid != _ENSEMBLE_ID]
 

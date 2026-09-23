@@ -26,16 +26,23 @@ import models.bogo as bogo
 import models.climatological_mean as climatological_mean
 import models.climo_deviation as climo_deviation
 import models.diurnal_curve as diurnal_curve
+import models.diurnal_rate_anomaly as diurnal_rate_anomaly
 import models.ensemble as barogram_ensemble
+import models.ensemble_bias_correction as ensemble_bias_correction
 import models.external_corrected as external_corrected
 import models.inverse_pressure_transfer as inverse_pressure_transfer
+import models.moisture_trajectory as moisture_trajectory
 import models.nws as nws_model
 import models.persistence as persistence
 import models.pressure_consensus_transfer as pressure_consensus_transfer
 import models.pressure_damped_diurnal as pressure_damped_diurnal
 import models.pressure_tendency as pressure_tendency
+import models.pressure_trajectory as pressure_trajectory
 import models.pressure_trend_cascade as pressure_trend_cascade
+import models.radiational_cooling as radiational_cooling
+import models.regime_stability as regime_stability
 import models.solar_ramp as solar_ramp
+import models.storm_trajectory as storm_trajectory
 import models.surface_signs as surface_signs
 import models.synoptic_state_machine as synoptic_state_machine
 import models.tempest_forecast as tempest_forecast_model
@@ -86,11 +93,18 @@ _MODELS = [
     frontal_trigger,
     dewpoint_tendency,
     solar_ramp,
+    regime_stability,
+    radiational_cooling,
+    diurnal_rate_anomaly,
+    storm_trajectory,
+    pressure_trajectory,
+    moisture_trajectory,
     pressure_consensus_transfer,  # reads pressure predictions written above, this run
     inverse_pressure_transfer,    # reads temp/dewpoint predictions written above, this run
     nws_model,
     tempest_forecast_model,
     external_corrected,
+    ensemble_bias_correction,     # must run right before barogram_ensemble: recomputes its raw blend
     barogram_ensemble,  # must be last: reads base model rows from current run
 ]
 
