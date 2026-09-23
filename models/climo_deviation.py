@@ -5,6 +5,9 @@
 # decay groups: forecast = future_baseline + deviation * exp(-k * lead_hours).
 # member_id=0 is the performance-weighted mean of all members when weights are
 # available, otherwise equal-weighted.
+# member 55 (self_correction): standard self-correction member
+# (models/_self_correction.py) -- member_id=0 minus this model's own learned
+# historical bias.
 
 import datetime as dt
 import math
@@ -13,14 +16,18 @@ import time
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, MEMBERS as _BASE_MEMBERS, VARIABLES, weighted_mean as _weighted_mean
 from models._utils import _sector
 
 MODEL_ID = 4
 MODEL_NAME = "climo_deviation"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_MATCH_HISTORY = True
+
+_SELF_CORRECTION_MEMBER = 55
 
 # (id_offset, decay_k or None, amp_factor or None, member name prefix)
 _GROUPS = [
@@ -42,7 +49,7 @@ def _amp_factor(valid_hour: float, beta: float) -> float:
         return 1.0 + beta * math.sin(math.pi * (valid_hour - 6.0) / 14.0)
     return 1.0
 
-def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
+def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_history=None,
         default_matches=None) -> list[dict]:
     climo_cache: dict[tuple[int, int], list] = {}
 
@@ -98,7 +105,8 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
         all_member_ids = [offset + mid for offset, k, amp, prefix in _GROUPS for mid, _, _ in _BASE_MEMBERS]
         for variable in VARIABLES:
             cell_confidences = _confidence.member_confidences(
-                member_history, default_matches, all_member_ids, variable, lead
+                member_history, default_matches,
+                all_member_ids + [_SELF_CORRECTION_MEMBER], variable, lead
             )
             for mid in all_member_ids:
                 rows.append({
@@ -146,6 +154,21 @@ def run(obs, issued_at: int, *, conn_in, weights=None, member_history=None,
                 "value": mean,
                 "spread": spread,
                 "confidence": group_confidence,
+            })
+
+            corrected = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
             })
 
     return rows

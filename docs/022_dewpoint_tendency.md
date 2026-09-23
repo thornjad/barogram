@@ -25,6 +25,7 @@ functions directly — none of that numerics is pressure-specific.
 | 1 | linear_1h | 1h | none |
 | 2 | linear_3h | 3h | none |
 | 3 | linear_3h_hl45 | 3h | 45-minute half-life |
+| 4 | self_correction | — | standard self-correction member, see [self_correction.md](self_correction.md) |
 
 ## Algorithm
 

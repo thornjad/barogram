@@ -24,6 +24,7 @@ kind of fixed-lag-free regression pressure_tendency does for pressure.
 | 0 | — | weighted mean of 1-2 |
 | 1 | solar_temp_transfer | trailing-1h delta in solar_radiation, transfer function conditioned by time-of-day sector |
 | 2 | dewpoint_depression_ramp | trailing-1h delta in dewpoint depression (temp - dewpoint), pooled transfer function |
+| 3 | self_correction | standard self-correction member, see [self_correction.md](self_correction.md) |
 
 ## Algorithm
 

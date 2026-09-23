@@ -22,11 +22,14 @@
 #                                change in dewpoint depression (temp - dewpoint) --
 #                                a widening depression is a heating/mixing signal
 #                                independent of the solar sensor
+#   3  self_correction           standard self-correction member (models/_self_correction.py):
+#                                member_id=0 minus this model's own learned historical bias
 
 import statistics
 
 import db
 import models._confidence as _confidence
+import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS
 from models._utils import _sector
 from models.pressure_tendency import _find_nearest_ts, _ols1
@@ -34,6 +37,7 @@ from models.pressure_tendency import _find_nearest_ts, _ols1
 MODEL_ID = 23
 MODEL_NAME = "solar_ramp"
 NEEDS_CONN_IN = True
+NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
 NEEDS_ALL_OBS = True
 NEEDS_MATCH_HISTORY = True
@@ -51,6 +55,8 @@ _MEMBERS = [
     (2, "dewpoint_depression_ramp"),
 ]
 _ALL_MEMBER_IDS = [mid for mid, _ in _MEMBERS]
+_SELF_CORRECTION_MEMBER = 3
+_CONFIDENCE_MEMBER_IDS = _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER]
 
 
 def _depression(row):
@@ -131,7 +137,7 @@ def _build_transfer_fns(all_obs):
     return result_1, result_2
 
 
-def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
+def run(obs, issued_at, *, conn_in, conn_out=None, weights=None, all_obs=None,
         member_history=None, default_matches=None):
     if all_obs is None:
         all_obs = db.tempest_obs_in_range(conn_in, 0, issued_at)
@@ -164,7 +170,7 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
 
     cell_confidences_by_lead = {
         lead: _confidence.member_confidences(
-            member_history, default_matches, _ALL_MEMBER_IDS, VARIABLE, lead
+            member_history, default_matches, _CONFIDENCE_MEMBER_IDS, VARIABLE, lead
         )
         for lead in LEAD_HOURS
     }
@@ -222,6 +228,21 @@ def run(obs, issued_at, *, conn_in, weights=None, all_obs=None,
             "value": mean,
             "spread": spread,
             "confidence": group_confidence,
+        })
+
+        corrected = _self_correction.corrected_value(
+            conn_out, MODEL_ID, VARIABLE, lead, mean, issued_at
+        )
+        rows.append({
+            "model_id": MODEL_ID,
+            "model": MODEL_NAME,
+            "member_id": _SELF_CORRECTION_MEMBER,
+            "issued_at": issued_at,
+            "valid_at": valid_at,
+            "lead_hours": lead,
+            "variable": VARIABLE,
+            "value": corrected,
+            "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
         })
 
     return rows

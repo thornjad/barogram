@@ -29,6 +29,7 @@ Comparing member groups against each other reveals how quickly carrying the anom
 | 28–36           | k=0.10 |
 | 37–45           | a03 (amplifying, beta=0.30) |
 | 46–54           | a06 (amplifying, beta=0.60) |
+| 55              | self_correction (standard self-correction member, see [self_correction.md](self_correction.md)) |
 
 The a03/a06 groups were added after the original three decay rates all carried the
 anomaly toward zero and none tested whether it should instead grow — see

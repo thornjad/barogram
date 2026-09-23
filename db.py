@@ -391,6 +391,27 @@ def model_error_history(conn: sqlite3.Connection, model_id: int, member_id: int,
     ).fetchall()
 
 
+def model_signed_error_history(conn: sqlite3.Connection, model_id: int, member_id: int,
+                                variable: str, lead_hours: int, since: int) -> list:
+    """Every scored (value, observed, error) row for one (model_id, member_id,
+    variable, lead_hours) cell, since a cutoff.
+
+    Unlike model_error_history (unsigned mae, every cell at once), this keeps
+    error's sign and scopes to a single cell -- what a bias-correction model
+    needs to learn the mean signed error to counteract, not just how large
+    errors tend to be.
+    """
+    return conn.execute(
+        """
+        select value, observed, error, issued_at
+        from forecasts
+        where model_id = ? and member_id = ? and variable = ? and lead_hours = ?
+          and issued_at >= ? and error is not null and scored_at is not null
+        """,
+        (model_id, member_id, variable, lead_hours, since),
+    ).fetchall()
+
+
 def confidence_calibration_rows(conn: sqlite3.Connection, since: int | None = None) -> list:
     """Every scored row that has a real confidence value: (model_id, member_id,
     variable, lead_hours, confidence, mae). Feeds cmd_calibration's decile
