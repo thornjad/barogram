@@ -114,8 +114,8 @@ _spread: dict[tuple[str, int], float] = {}
 
 def set_spread(spread: dict[tuple[str, int], float]) -> None:
     """Call once per forecast run before computing any confidence. A
-    (variable, lead_hours) cell missing from `spread` (no matched day had
-    both a before and after observation to measure) means no yardstick is
+    (variable, lead_hours) cell missing from `spread` (fewer than 2 matched
+    days had an observation near the target time) means no yardstick is
     known yet for that cell -- confidence_for_cell treats that the same as
     too-thin own history: zero confidence, not a guess."""
     global _spread
@@ -123,33 +123,44 @@ def set_spread(spread: dict[tuple[str, int], float]) -> None:
 
 
 def matched_day_spreads(conn_in, matched_ts: list[int]) -> dict[tuple[str, int], float]:
-    """Population stdev of what reality actually did, lead_hours later, on
-    each matched day -- one number per (variable, lead_hours), shared by
-    every model that uses the same matched_ts (the shared analog-day set),
-    since "how much did days like today actually vary, lead_hours out"
-    doesn't depend on which model is asking.
+    """Population stdev of what the actual value looked like, lead_hours
+    out, on each matched day -- one number per (variable, lead_hours),
+    shared by every model that uses the same matched_ts (the shared
+    analog-day set), since "how much does the value vary at that point,
+    on days like today" doesn't depend on which model is asking.
 
-    For each matched day, needs a snapshot near that day's own moment and
-    one lead_hours later; a day missing either (too close to "now" to have
-    a real outcome yet, or a data gap) is skipped for that cell rather than
-    raising. A cell needs at least 2 matched days with a usable pair to
-    report a stdev at all -- one sample has no spread to speak of.
+    Deliberately the spread of the raw value at the target time, not the
+    spread of the change from now to then (an earlier design used the
+    latter). A change-based spread shrinks mechanically at short lead
+    hours -- barely any time for two readings to drift apart -- and grows
+    at long lead purely because more time has passed, independent of
+    whether models actually get less accurate that far out. That mismatch
+    made every model look artificially unconfident at short leads and
+    artificially confident at long ones. Real data confirmed it: change
+    spread roughly tripled from 1h to 6h+ while real historical error
+    barely moved. Raw-value spread doesn't have this problem -- it reflects
+    how variable the atmosphere itself is at that time/season, which
+    doesn't inflate just because a longer lead was picked (see the
+    2026-09-24 confidence message-board thread).
+
+    A matched day missing an observation near the target time (too close
+    to "now" to have a real outcome yet, or a data gap) is skipped for that
+    cell rather than raising. A cell needs at least 2 matched days with a
+    usable reading to report a stdev at all -- one sample has no spread to
+    speak of.
     """
-    deltas: dict[tuple[str, int], list[float]] = defaultdict(list)
+    values: dict[tuple[str, int], list[float]] = defaultdict(list)
     for ts in matched_ts:
-        before = db.nearest_tempest_obs(conn_in, ts, window_sec=1800)
-        if before is None:
-            continue
         for lead_hours in range(1, 25):
             after = db.nearest_tempest_obs(conn_in, ts + lead_hours * 3600, window_sec=1800)
             if after is None:
                 continue
             for variable, col in _VARIABLE_COLUMN.items():
-                b, a = before[col], after[col]
-                if b is not None and a is not None:
-                    deltas[(variable, lead_hours)].append(a - b)
+                v = after[col]
+                if v is not None:
+                    values[(variable, lead_hours)].append(v)
     spread = {}
-    for key, vals in deltas.items():
+    for key, vals in values.items():
         if len(vals) < 2:
             continue
         mean = sum(vals) / len(vals)
@@ -222,10 +233,10 @@ def blended_confidence(matched_errors: list[float], spread: float | None,
                         k: int) -> float:
     """
     Returns 0.0 when spread is None or <= 0 -- no natural-variability
-    yardstick to measure against at all (too few matched days had both a
-    before and after observation to compute one; see matched_day_spreads).
-    No basis to claim anything but zero confidence; this function never
-    returns None. Otherwise:
+    yardstick to measure against at all (too few matched days had an
+    observation near the target time to compute one; see
+    matched_day_spreads). No basis to claim anything but zero confidence;
+    this function never returns None. Otherwise:
 
         matched_avg = sum(matched_errors) / len(matched_errors)
         z = matched_avg / spread

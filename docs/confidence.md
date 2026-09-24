@@ -47,10 +47,19 @@ trust = n / (n + _CONFIDENCE_PSEUDOCOUNT)     # n = matched-and-scored sample co
 confidence = trust * raw
 ```
 
-`spread` is the natural day-to-day variability of what reality actually did, lead_hours
+`spread` is the natural variability of what the value actually looks like, lead_hours
 out, on days that looked like today — the population stdev of matched days' own
-before/after deltas (`matched_day_spreads`), recomputed fresh every forecast run from
-the same shared matched-day set every model already uses. `z` compares this member's
+observed value at the target time (`matched_day_spreads`), recomputed fresh every
+forecast run from the same shared matched-day set every model already uses.
+Deliberately the spread of the raw value, not the spread of the change from now to
+then (a 2026-09-23 design used the latter): change-based spread shrinks mechanically
+at short lead hours (barely any time for two readings to drift apart) and grows at
+long lead purely because more time passed, independent of whether models actually get
+less accurate that far out — real data showed it roughly tripling from 1h to 6h+ while
+historical error barely moved, making every model look artificially unconfident at
+short leads and artificially confident at long ones. Raw-value spread doesn't inflate
+with lead just because a longer lead was picked (see the 2026-09-24 confidence
+message-board thread). `z` compares this member's
 typical error on days like today against that natural variability: near 0 means the
 error is small next to normal wobble, past ~1–2 means it's large next to what genuinely
 different weather looks like. `raw`'s curve (steep, squared-exponential decay) beat
