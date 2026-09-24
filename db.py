@@ -942,6 +942,42 @@ def sync_ensemble_members(conn: sqlite3.Connection) -> None:
         )
 
 
+def find_orphan_members(conn: sqlite3.Connection) -> list[dict]:
+    """(model_id, member_id) pairs scored in forecasts with no members table row.
+
+    Diagnostic only -- reports orphans without inserting the missing member row,
+    since a concurrent session may already be mid-fix on a specific one.
+    """
+    rows = conn.execute(
+        """
+        select f.model_id, f.model, f.member_id, count(*) as n
+        from forecasts f
+        left join members mem on mem.model_id = f.model_id and mem.member_id = f.member_id
+        where mem.model_id is null
+        group by f.model_id, f.model, f.member_id
+        order by f.model_id, f.member_id
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def next_member_ids(conn: sqlite3.Connection) -> list[dict]:
+    """Next free member_id per model that already has rows in members."""
+    rows = conn.execute(
+        """
+        select mem.model_id, m.name, max(mem.member_id) as max_member_id
+        from members mem
+        join models m on m.id = mem.model_id
+        group by mem.model_id, m.name
+        order by mem.model_id
+        """
+    ).fetchall()
+    return [
+        {"model_id": r["model_id"], "model": r["name"], "next_member_id": r["max_member_id"] + 1}
+        for r in rows
+    ]
+
+
 def ensemble_inputs(conn: sqlite3.Connection, issued_at: int) -> list:
     """Fetch member_id=0 rows from base models for a given forecast run.
 
@@ -1300,6 +1336,17 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None:
             "insert or replace into metadata (key, value) values ('schema_version', ?)",
             (str(highest),),
         )
+
+
+def next_migration_number(migrations_dir: Path) -> int:
+    """Next free migration number, based on the highest-numbered file on disk."""
+    migration_files = [
+        f for f in migrations_dir.glob("[0-9][0-9][0-9]_*.sql")
+        if "sync-conflict" not in f.name
+    ]
+    if not migration_files:
+        return 1
+    return max(int(f.name[:3]) for f in migration_files) + 1
 
 
 def recent_misses(

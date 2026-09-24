@@ -789,6 +789,38 @@ def cmd_calibration(args, conf):
               "error than a lower one -- confidence isn't cleanly tracking real accuracy yet")
 
 
+def cmd_doctor(args, conf):
+    """Diagnostic checks to reduce collisions between concurrent sessions.
+
+    Detects the orphaned-members gap (a scored forecast member with no row in
+    members) without fixing it -- another session may already be mid-fix on a
+    specific one -- and prints the next free migration number and next free
+    member_id per model, so a session can check-and-reserve in one step
+    instead of racing manual `ls migrations | tail` / `grep MODEL_ID` checks.
+    """
+    migrations_dir = Path(__file__).parent / "migrations"
+    conn_out = db.open_output_db(conf.output_db)
+    db.run_migrations(conn_out, migrations_dir)
+
+    print("consistency check -- forecasts members missing from members table")
+    orphans = db.find_orphan_members(conn_out)
+    if not orphans:
+        print("clean -- no orphaned members")
+    else:
+        print(f"{'model_id':>8}  {'model':<28} {'member_id':>9} {'rows':>10}")
+        for o in orphans:
+            print(f"{o['model_id']:>8}  {o['model']:<28} {o['member_id']:>9} {o['n']:>10}")
+
+    print()
+    print(f"next free migration number: {db.next_migration_number(migrations_dir):03d}")
+
+    print()
+    print("next free member_id per model:")
+    print(f"{'model_id':>8}  {'model':<28} {'next_member_id':>14}")
+    for row in db.next_member_ids(conn_out):
+        print(f"{row['model_id']:>8}  {row['model']:<28} {row['next_member_id']:>14}")
+
+
 def cmd_tune_similarity(args, conf):
     conn_in = db.open_input_db(conf.input_db)
     print("similarity-match backtest -- full history, walk-forward, no future leakage")
@@ -898,6 +930,10 @@ def main():
         "tune-similarity",
         help="backtest candidate analog-matching weight vectors against held-out skill",
     )
+    subparsers.add_parser(
+        "doctor",
+        help="check for orphaned members and report next free migration/member_id",
+    )
 
     args = parser.parse_args()
 
@@ -927,6 +963,8 @@ def main():
         cmd_calibration(args, conf)
     elif args.command == "tune-similarity":
         cmd_tune_similarity(args, conf)
+    elif args.command == "doctor":
+        cmd_doctor(args, conf)
 
 
 if __name__ == "__main__":

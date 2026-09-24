@@ -67,6 +67,7 @@ dashboard     generate dashboard.html from latest forecast run
 conditions    show latest observed conditions from the input database
 query         run a SQL query against barogram.db or the input database
 insights      emit forecast + accuracy summary as JSON (or --format table)
+doctor        check for orphaned members, report next free migration/member_id
 ```
 
 There is no `run` subcommand — `make run` composes `score`, `forecast`, `dashboard`,
@@ -113,6 +114,7 @@ uv run barogram dashboard
 uv run barogram query "select model, avg(mae) from forecasts where scored_at is not null group by model"
 uv run barogram query --input "select date(timestamp, 'unixepoch', 'localtime') as day, avg(air_temp) from tempest_obs group by day order by day desc limit 7"
 uv run barogram query --format json "select * from forecasts order by issued_at desc limit 20"
+uv run barogram doctor
 uv run barogram --config /path/to/barogram.toml conditions
 uv run barogram --help
 ```
