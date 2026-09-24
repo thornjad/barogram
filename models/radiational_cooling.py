@@ -78,12 +78,12 @@ _VARIABLES = {"temperature": "air_temp", "dewpoint": "dew_point"}
 
 
 def _is_night(row):
-    sr = row["solar_radiation"]
+    sr = row.get("solar_radiation")
     return sr is None or sr <= _SOLAR_FLOOR_W
 
 
 def _wind_calm_category(window_obs):
-    vals = [r["wind_avg"] for r in window_obs if r["wind_avg"] is not None]
+    vals = [r.get("wind_avg") for r in window_obs if r.get("wind_avg") is not None]
     if len(vals) < _MIN_WIND_SAMPLES:
         return None
     mean = sum(vals) / len(vals)
@@ -113,7 +113,7 @@ def _lull_frequency_category(freq):
 
 
 def _dp_depression_category(row):
-    t, d = row["air_temp"], row["dew_point"]
+    t, d = row.get("air_temp"), row.get("dew_point")
     if t is None or d is None:
         return None
     depression = t - d
