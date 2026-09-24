@@ -47,6 +47,7 @@ These three step outside the recency-weighting family. Each replaces or conditio
 | 11 | harmonic_regression   | Low-order Fourier fit (2 annual harmonics × 2 diurnal harmonics, plus intercept) to the full `air_temp` history, projected forward — a smooth continuous alternative to the discrete bucket. Temperature only; dewpoint and pressure are left unfit since the signal was only proposed for `air_temp` |
 | 12 | continuous_doy_phase  | Bucket mean with the hard month match replaced by a von Mises (circular Gaussian) kernel over day-of-year phase (κ=8, ~20-day effective smoothing radius), so there's no step artifact at month boundaries — most visible historically around the equinoxes |
 | 13 | self_correction | Standard self-correction member, see [self_correction.md](self_correction.md) |
+| 14 | self_correction_fast | Same mechanism, 14-day window instead of the default 60, see [self_correction.md](self_correction.md) |
 
 Sector climatology needs `wind_direction` on the bucket rows, so `db.climo_bucket_obs` now selects it alongside the existing columns. Harmonic regression and the day-of-year kernel both need the full station history rather than a single (month, hour) bucket, so the model now sets `NEEDS_ALL_OBS`.
 

@@ -21,6 +21,11 @@
 #   13  self_correction        standard self-correction member
 #                              (models/_self_correction.py) -- member_id=0 minus
 #                              this model's own learned historical bias
+#   14  self_correction_fast   same mechanism, 14-day window instead of the
+#                              default 60 -- this model's own seasonal-transition
+#                              bias findings (warm/moist lag behind an active
+#                              drift) traced to the 60-day window lagging, not a
+#                              fix to the mechanism itself
 
 import datetime as dt
 import math
@@ -44,7 +49,9 @@ NEEDS_MATCH_HISTORY = True
 
 _ALL_MEMBER_IDS = [mid for mid, _, _ in _MEMBERS] + [10, 11, 12]
 _SELF_CORRECTION_MEMBER = 13
-_CONFIDENCE_MEMBER_IDS = _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER]
+_SELF_CORRECTION_FAST_MEMBER = 14
+_SELF_CORRECTION_FAST_WINDOW_DAYS = 14
+_CONFIDENCE_MEMBER_IDS = _ALL_MEMBER_IDS + [_SELF_CORRECTION_MEMBER, _SELF_CORRECTION_FAST_MEMBER]
 
 # member 10: sector climatology
 _MIN_SECTOR_SAMPLES = 8
@@ -273,6 +280,22 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, all_obs=No
                 "variable": variable,
                 "value": corrected,
                 "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
+            })
+
+            corrected_fast = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at,
+                window_days=_SELF_CORRECTION_FAST_WINDOW_DAYS
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_FAST_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected_fast,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_FAST_MEMBER),
             })
 
     return rows

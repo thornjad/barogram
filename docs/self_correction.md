@@ -20,10 +20,22 @@ worse and fades toward zero weight — it never overrides member_id=0's own valu
 
 ## Gating
 
-Gated behind `_MIN_SAMPLES` (3) scored rows in the trailing `_WINDOW_DAYS` (60): a
-cell with too little scored history yet returns `value=None` rather than applying a
-correction learned from noise, the same cold-start behavior every newly added
-member gets.
+Gated behind `_MIN_SAMPLES` (3) scored rows in the trailing window: a cell with too
+little scored history yet returns `value=None` rather than applying a correction
+learned from noise, the same cold-start behavior every newly added member gets.
+
+## Window
+
+`corrected_value` takes an optional `window_days` argument, defaulting to
+`_WINDOW_DAYS` (60). A model may add a second member calling it with a shorter
+window (e.g. 14 days) to react faster to an active drift than the 60-day default
+allows -- the default stays 60 for every existing caller that doesn't pass it.
+
+`climo_deviation` (member 56) and `weighted_climatological_mean` (member 14) each
+add a `self_correction_fast` member using `window_days=14`, since this project's
+own seasonal-transition findings (models 2/3/4's warm/moist bias) traced to the
+default window lagging an active drift, specifically on these two models. Not a
+blanket rollout -- other models keep the single 60-day member.
 
 ## Eligibility
 
@@ -54,6 +66,10 @@ Batch B (migration `065_batch_b_self_correction_members.sql`):
 This closes out every model on the original eligibility list — no remaining
 eligible models unwired.
 
+Fast-window variant (migration `066_self_correction_fast_window_members.sql`):
+`weighted_climatological_mean` (member 14), `climo_deviation` (member 56) —
+`window_days=14`, see [Window](#window) above.
+
 ## Adding it to another existing model
 
 1. `import models._self_correction as _self_correction`
@@ -64,7 +80,9 @@ eligible models unwired.
    from that mean and must never feed back into it.
 4. Right after building a cell's member_id=0 row, call
    `_self_correction.corrected_value(conn_out, MODEL_ID, variable, lead, mean, issued_at)`
-   and append a row with the new member_id and that value.
+   and append a row with the new member_id and that value. Pass `window_days=N` to
+   add a fast-window variant as an additional member instead of (or alongside) the
+   default-window one.
 5. Register the member in a new migration:
    `insert or ignore into members (model_id, member_id, name) values (<id>, <mid>, 'self_correction');`
 

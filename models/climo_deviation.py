@@ -8,6 +8,10 @@
 # member 55 (self_correction): standard self-correction member
 # (models/_self_correction.py) -- member_id=0 minus this model's own learned
 # historical bias.
+# member 56 (self_correction_fast): same mechanism, 14-day window instead of
+# the default 60 -- this model's own seasonal-transition bias findings
+# (warm/moist lag behind an active drift) traced to the 60-day window lagging,
+# not a fix to the mechanism itself.
 
 import datetime as dt
 import math
@@ -28,6 +32,8 @@ NEEDS_WEIGHTS = True
 NEEDS_MATCH_HISTORY = True
 
 _SELF_CORRECTION_MEMBER = 55
+_SELF_CORRECTION_FAST_MEMBER = 56
+_SELF_CORRECTION_FAST_WINDOW_DAYS = 14
 
 # (id_offset, decay_k or None, amp_factor or None, member name prefix)
 _GROUPS = [
@@ -106,7 +112,7 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_his
         for variable in VARIABLES:
             cell_confidences = _confidence.member_confidences(
                 member_history, default_matches,
-                all_member_ids + [_SELF_CORRECTION_MEMBER], variable, lead
+                all_member_ids + [_SELF_CORRECTION_MEMBER, _SELF_CORRECTION_FAST_MEMBER], variable, lead
             )
             for mid in all_member_ids:
                 rows.append({
@@ -169,6 +175,22 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_his
                 "variable": variable,
                 "value": corrected,
                 "confidence": cell_confidences.get(_SELF_CORRECTION_MEMBER),
+            })
+
+            corrected_fast = _self_correction.corrected_value(
+                conn_out, MODEL_ID, variable, lead, mean, issued_at,
+                window_days=_SELF_CORRECTION_FAST_WINDOW_DAYS
+            )
+            rows.append({
+                "model_id": MODEL_ID,
+                "model": MODEL_NAME,
+                "member_id": _SELF_CORRECTION_FAST_MEMBER,
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_hours": lead,
+                "variable": variable,
+                "value": corrected_fast,
+                "confidence": cell_confidences.get(_SELF_CORRECTION_FAST_MEMBER),
             })
 
     return rows

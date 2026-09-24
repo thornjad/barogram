@@ -18,7 +18,8 @@ _WINDOW_DAYS = 60
 
 
 def corrected_value(conn_out, model_id: int, variable: str, lead_hours: int,
-                     raw_value: float | None, issued_at: int) -> float | None:
+                     raw_value: float | None, issued_at: int,
+                     window_days: int = _WINDOW_DAYS) -> float | None:
     """Bias-corrected reading of model_id's own member_id=0 value for one
     (variable, lead_hours) cell.
 
@@ -28,7 +29,7 @@ def corrected_value(conn_out, model_id: int, variable: str, lead_hours: int,
     """
     if raw_value is None or conn_out is None:
         return None
-    since = issued_at - _WINDOW_DAYS * 86400
+    since = issued_at - window_days * 86400
     history = db.model_signed_error_history(conn_out, model_id, 0, variable, lead_hours, since)
     if len(history) < _MIN_SAMPLES:
         return None
