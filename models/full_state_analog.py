@@ -209,7 +209,7 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_his
             for cand in candidates:
                 d = _distance(obs_vec, cand, features, sigmas)
                 if d is not None:
-                    d *= 1.0 + 0.2 * _month_diff(obs["timestamp"], cand["timestamp"])
+                    d *= 1.0 + 0.3 * _month_diff(obs["timestamp"], cand["timestamp"]) ** 2
                 cands_with_dist.append((d, cand))
         else:
             cands_with_dist = [

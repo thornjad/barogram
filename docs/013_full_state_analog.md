@@ -62,7 +62,7 @@ lightning is present, while a synoptic member homes in on pressure-flow patterns
 | 4 | solar-thermo | 5 | temp, dp, solar, uv | radiation-driven thermal signature |
 | 5 | synoptic | 5 | pressure, wind_avg, wind_dir | flow pattern only |
 | 6 | precip-signal | 5 | dp, precip_accum, lightning | moisture + convective activity |
-| 7 | full-seasonal | 5 | all 10 | penalizes analogs from distant calendar months (×1+0.2×month_diff) |
+| 7 | full-seasonal | 5 | all 10 | penalizes analogs from distant calendar months (×1+0.3×month_diff²), same coefficient as analog's member 8 |
 | 8 | full-dist-weighted | 10 | all 10 | inverse-distance-weighted final value |
 | 9 | full-k3 | 3 | all 10 | tightest K, most local |
 | 10 | full-k15 | 15 | all 10 | |

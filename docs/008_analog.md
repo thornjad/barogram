@@ -30,7 +30,7 @@ Sigma is computed from the candidate pool at each forecast issuance. When sigma 
 | 5 | k5-moisture | 5 | [2, 2, 1, 0.5] | temperature and dewpoint emphasized; targets airmass character |
 | 6 | k5-synoptic | 5 | [1, 0.5, 2, 1.5] | pressure and wind emphasized; targets synoptic regime |
 | 7 | k10-dist-weighted | 10 | [1, 1, 1, 1] | inverse-distance weighted mean; closer analogs count proportionally more |
-| 8 | k5-seasonal | 5 | [1, 1, 1, 1] | distances penalized by calendar-month difference (γ=0.2 per month); prefers same-season analogs |
+| 8 | k5-seasonal | 5 | [1, 1, 1, 1] | distances penalized by squared calendar-month difference (γ=0.3, quadratic); prefers same-season analogs |
 | 9 | self_correction | — | — | standard self-correction member, see [self_correction.md](self_correction.md) |
 
 ## Limitations
@@ -38,7 +38,7 @@ Sigma is computed from the candidate pool at each forecast issuance. When sigma 
 - **Data starvation**: Performance is poor until a year or more of history accumulates. With only weeks of data, K=3 and K=5 may be using the only available candidates.
 - **No synoptic context**: The model matches on the current point-in-time observation state. It cannot distinguish a morning reading that will evolve into severe weather from one that will remain benign, unless such evolution is well-represented in the analog pool.
 - **Time-of-day alignment**: Analogs are drawn from the same time of day, so the diurnal phase is implicitly preserved. This is appropriate but means the model has no mechanism to correct for diurnal timing errors.
-- **Seasonal penalty is weak**: The γ=0.2 per-month penalty in the seasonal member is intentionally gentle. With limited history it mostly behaves like the equal-weight members; the benefit emerges after a full annual cycle.
+- **Seasonal penalty**: The γ=0.3 quadratic per-month penalty (×1+0.3×month_diff²) in the seasonal member steepens fast with distance (2.2× at 2 months off, 11.8× at 6). With limited history it still falls back toward the equal-weight members when nothing better exists, but off-season analogs lose out as soon as same-season candidates are available. Strengthened 2026-09-24 after live measurement showed the prior γ=0.2 linear penalty too weak at ~5 months of history (see full_state_analog's member 7 note).
 
 ## Confidence
 
