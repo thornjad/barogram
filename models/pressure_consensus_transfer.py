@@ -22,6 +22,7 @@ import statistics
 
 import db
 import models._confidence as _confidence
+import models._pressure_sanity as _pressure_sanity
 import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
@@ -92,6 +93,8 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None,
         if best_p is None and sources:
             best_p = sources[0]["value"]
 
+        mean_p = _pressure_sanity.clamp(mean_p)
+        best_p = _pressure_sanity.clamp(best_p)
         preds = {1: mean_p, 2: mean_p, 3: best_p}
 
         cell_confidences_by_variable = {

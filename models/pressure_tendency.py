@@ -40,6 +40,7 @@ import time
 import db
 import fmt
 import models._confidence as _confidence
+import models._pressure_sanity as _pressure_sanity
 import models._pressure_tide as _pressure_tide
 import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
@@ -568,6 +569,7 @@ def run(obs, issued_at, *, conn_in, conn_out=None, weights=None, all_obs=None,
                 if col == "station_pressure":
                     raw = _poly_eval(coefs, float(lead))
                     val = _apply_mean_reversion(raw, p_mean, float(lead)) if p_mean is not None else raw
+                    val = _pressure_sanity.clamp(val)
                 else:
                     tf = transfer_fns.get((col, lead))
                     obs_val = obs[col]

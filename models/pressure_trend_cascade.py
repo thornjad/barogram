@@ -31,6 +31,7 @@ import statistics
 
 import db
 import models._confidence as _confidence
+import models._pressure_sanity as _pressure_sanity
 import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
@@ -235,7 +236,7 @@ def run(obs, issued_at, *, conn_in, conn_out=None, weights=None, all_obs=None, m
         preds: dict[int, float | None] = {}
         if coefs_lin is not None and p_mean is not None and p_now is not None:
             raw = _poly_eval(coefs_lin, lead_f)
-            preds[1] = _apply_mean_reversion(raw, p_mean, lead_f)
+            preds[1] = _pressure_sanity.clamp(_apply_mean_reversion(raw, p_mean, lead_f))
         else:
             preds[1] = None
 
@@ -243,9 +244,9 @@ def run(obs, issued_at, *, conn_in, conn_out=None, weights=None, all_obs=None, m
             # analytic integral of an exponentially decaying rate: total predicted
             # delta = rate0 * (1 - exp(-lambda*lead)) / lambda
             delta = rate0 * (1.0 - math.exp(-_DAMP_LAMBDA * lead_f)) / _DAMP_LAMBDA
-            preds[3] = p_now + delta
+            preds[3] = _pressure_sanity.clamp(p_now + delta)
             fast_delta = rate0 * (1.0 - math.exp(-_FAST_DAMP_LAMBDA * lead_f)) / _FAST_DAMP_LAMBDA
-            preds[4] = p_now + fast_delta
+            preds[4] = _pressure_sanity.clamp(p_now + fast_delta)
         else:
             preds[3] = None
             preds[4] = None

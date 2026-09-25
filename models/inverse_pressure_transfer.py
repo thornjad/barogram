@@ -23,6 +23,7 @@ import statistics
 
 import db
 import models._confidence as _confidence
+import models._pressure_sanity as _pressure_sanity
 import models._self_correction as _self_correction
 from models._climo_weights import LEAD_HOURS, VARIABLES
 from models._utils import _sector
@@ -134,7 +135,7 @@ def run(obs, issued_at, *, conn_in, conn_out, weights=None, all_obs=None,
             if tf is None or delta is None or p_now is None:
                 return None
             slope, intercept = tf
-            return p_now + slope * delta + intercept
+            return _pressure_sanity.clamp(p_now + slope * delta + intercept)
 
         pred_temp = _infer("air_temp", temp_delta)
         pred_dew = _infer("dew_point", dew_delta)
