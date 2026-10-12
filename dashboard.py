@@ -245,6 +245,8 @@ h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .acc-ok { color: #555; }
 .acc-low { color: #8b4400; }
 .acc-poor { color: #8b2020; }
+.acc-spark { text-align: center; min-width: 58px; color: #555; }
+.acc-spark svg { display: block; margin: 0 auto; }
 .acc-cell.acc-best { background: #d7ecd7; }
 .acc-cell.acc-worst { background: #f0d8d8; }
 .acc-lead-table th.model-name-cell { text-align: left; font-weight: 500; padding-right: 16px; }
@@ -1899,7 +1901,7 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
     model_order = sorted(model_data.keys(), key=_sort_key)
     lts = sorted(lead_times)
 
-    header = "<th>#</th><th>Model</th>" + "".join(f"<th>+{lt}h</th>" for lt in lts)
+    header = "<th>#</th><th>Model</th>" + "".join(f"<th>+{lt}h</th>" for lt in lts) + "<th>Trend</th>"
     body_rows = []
     for name in model_order:
         meta = model_meta[name]
@@ -1936,6 +1938,7 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
                 f'<td class="acc-cell{cls}" data-lead="{lt}"'
                 f' data-mid="{meta["model_id"]}"{data_attrs}>{display}</td>'
             )
+        cells += '<td class="acc-spark"></td>'
         mbtn = ""
         if member_models and name in member_models:
             mbtn = f' <button class="member-btn" data-model="{name}">members</button>'
@@ -1946,7 +1949,7 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
         )
         if member_models and name in member_models:
             safe = name.replace("_", "-").replace(" ", "-")
-            n_cols = 2 + len(lts)
+            n_cols = 3 + len(lts)
             body_rows.append(
                 f'<tr class="member-detail-row" id="mdr-{safe}" style="display:none">'
                 f'<td colspan="{n_cols}" id="md-{safe}"></td>'
@@ -1989,7 +1992,7 @@ def _confidence_lead_table_html(rows: list, lead_times: list) -> str:
     model_order = sorted(model_data.keys(), key=_sort_key)
     lts = sorted(lead_times)
 
-    header = "<th>#</th><th>Model</th>" + "".join(f"<th>+{lt}h</th>" for lt in lts)
+    header = "<th>#</th><th>Model</th>" + "".join(f"<th>+{lt}h</th>" for lt in lts) + "<th>Trend</th>"
     body_rows = []
     for name in model_order:
         meta = model_meta[name]
@@ -2026,6 +2029,7 @@ def _confidence_lead_table_html(rows: list, lead_times: list) -> str:
                 f'<td class="acc-cell{cls}" data-lead="{lt}"'
                 f' data-mid="{meta["model_id"]}"{data_attrs}>{display}</td>'
             )
+        cells += '<td class="acc-spark"></td>'
         body_rows.append(
             f'<tr{row_cls}>'
             f'<td class="model-id-cell">{meta["model_id"]}</td>'
@@ -2658,8 +2662,35 @@ document.getElementById('run-browser-deselect-all').addEventListener('click', fu
 
 def _accuracy_table_js() -> str:
     return """\
+// dimensionless trend line across lead times: min-max scaled per row, no axes
+function sparkSvg(vals) {
+    var w = 48, h = 18, pad = 3;
+    var pts = [];
+    vals.forEach(function(v, i) { if (v !== null && !isNaN(v)) pts.push([i, v]); });
+    if (pts.length < 2) return '';
+    var ys = pts.map(function(p) { return p[1]; });
+    var lo = Math.min.apply(null, ys), hi = Math.max.apply(null, ys);
+    var span = hi - lo;
+    var step = (w - 2 * pad) / (vals.length - 1);
+    var xy = pts.map(function(p) {
+        var y = span < 1e-9 ? h / 2 : h - pad - (p[1] - lo) / span * (h - 2 * pad);
+        return [(pad + p[0] * step).toFixed(1), y.toFixed(1)];
+    });
+    return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">'
+        + '<polyline points="' + xy.map(function(p) { return p.join(','); }).join(' ')
+        + '" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+}
+
 function updateAccTable(varName) {
     document.querySelectorAll('.acc-lead-table').forEach(function(table) {
+        table.querySelectorAll('td.acc-spark').forEach(function(sp) {
+            var vals = [];
+            sp.parentNode.querySelectorAll('.acc-cell').forEach(function(c) {
+                var raw = c.getAttribute('data-' + varName);
+                vals.push(raw === '' || raw === null ? null : parseFloat(raw));
+            });
+            sp.innerHTML = sparkSvg(vals);
+        });
         var byLead = {};
         table.querySelectorAll('.acc-cell').forEach(function(cell) {
             var raw = cell.getAttribute('data-' + varName);
