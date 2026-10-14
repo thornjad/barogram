@@ -71,7 +71,7 @@ def test_confidence_present_with_real_member_history():
     assert row_1["confidence"] is not None
 
 
-def test_confidence_none_without_member_history():
+def test_confidence_zero_without_member_history():
     conn_in = make_input_db()
     obs = make_obs(ts=_ISSUED_AT)
 
@@ -79,5 +79,5 @@ def test_confidence_none_without_member_history():
 
     row_0 = _row(rows, 0)
     row_1 = _row(rows, 1)
-    assert row_0["confidence"] is None
-    assert row_1["confidence"] is None
+    assert row_0["confidence"] == 0.0
+    assert row_1["confidence"] == 0.0

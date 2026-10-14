@@ -28,18 +28,18 @@ def _insert_obs(conn, ts: int, air_temp=20.0, dew_point=12.0,
 
 # --- confidence_for_cell ---
 
-def test_confidence_for_cell_no_history_returns_none():
-    assert confidence.confidence_for_cell([], "temperature", 24, [1000]) is None
+def test_confidence_for_cell_no_history_returns_zero():
+    assert confidence.confidence_for_cell([], "temperature", 24, [1000]) == 0.0
 
 
-def test_confidence_for_cell_too_little_history_returns_none():
-    # exactly _MIN_HISTORY_DAYS distinct days, not more — must still return None
+def test_confidence_for_cell_too_little_history_returns_zero():
+    # exactly _MIN_HISTORY_DAYS distinct days, not more — must still return 0.0
     base = 10_000_000
     history = [
         _row("temperature", 24, base + d * _DAY, 1.0)
         for d in range(confidence._MIN_HISTORY_DAYS)
     ]
-    assert confidence.confidence_for_cell(history, "temperature", 24, [base]) is None
+    assert confidence.confidence_for_cell(history, "temperature", 24, [base]) == 0.0
 
 
 def test_confidence_for_cell_filters_wrong_cell():
@@ -129,12 +129,12 @@ def test_confidence_for_cell_ramp_uses_fixed_pseudocount_not_sample_count():
 
 # --- blended_confidence ---
 
-def test_blended_confidence_none_overall_avg():
-    assert confidence.blended_confidence([1.0], None, 20) is None
+def test_blended_confidence_none_spread_is_zero():
+    assert confidence.blended_confidence([1.0], None, 20) == 0.0
 
 
-def test_blended_confidence_zero_overall_avg():
-    assert confidence.blended_confidence([1.0], 0.0, 20) is None
+def test_blended_confidence_zero_spread_is_zero():
+    assert confidence.blended_confidence([1.0], 0.0, 20) == 0.0
 
 
 def test_blended_confidence_empty_matched_is_zero():
@@ -356,9 +356,9 @@ def test_find_default_matches_uses_battery_when_present():
 
 # --- member_confidences ---
 
-def test_member_confidences_degrades_to_none_without_history():
+def test_member_confidences_degrades_to_zero_without_history():
     result = confidence.member_confidences(None, None, [1, 2, 3], "temperature", 24)
-    assert result == {1: None, 2: None, 3: None}
+    assert result == {1: 0.0, 2: 0.0, 3: 0.0}
 
 
 def test_member_confidences_per_member_lookup():
@@ -367,8 +367,8 @@ def test_member_confidences_per_member_lookup():
     confidence.set_spread({("temperature", 24): 1.0})
     member_history = {1: good_history, 2: []}
     result = confidence.member_confidences(member_history, [base], [1, 2], "temperature", 24)
-    assert result[1] is not None
-    assert result[2] is None
+    assert result[1] > 0.0
+    assert result[2] == 0.0
 
 
 # --- average_confidence ---

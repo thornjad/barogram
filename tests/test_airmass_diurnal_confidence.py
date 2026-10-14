@@ -76,6 +76,10 @@ def test_clearness_and_sector_members_differ():
 def test_confidence_shifts_value_versus_weights_alone():
     conn_in = _make_rich_input_db()
     obs = _make_obs()
+    # a cooler observed temp keeps member 1 and 4 apart: at the default 21.6
+    # the seasonal-swing ceiling clamps both to the same bound, which would
+    # make the confidence-weighted mean identical regardless of confidence
+    obs["air_temp"] = 13.0
     valid_at = obs["timestamp"] + _LEAD * 3600
     sector = _sector(valid_at)
 

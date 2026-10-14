@@ -60,10 +60,10 @@ def test_confidence_present_with_real_member_history():
     assert _row(rows)["confidence"] is not None
 
 
-def test_confidence_none_without_member_history():
+def test_confidence_zero_without_member_history():
     conn_in = make_input_db()
     obs = make_obs(ts=_ISSUED_AT)
 
     rows = climo_mean_mod.run(obs, _ISSUED_AT, conn_in=conn_in)
 
-    assert _row(rows)["confidence"] is None
+    assert _row(rows)["confidence"] == 0.0

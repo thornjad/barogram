@@ -64,7 +64,7 @@ def test_confidence_present_with_real_member_history():
     assert _row(rows)["confidence"] is not None
 
 
-def test_confidence_none_without_member_history():
+def test_confidence_zero_without_member_history():
     rows = _run()
 
-    assert _row(rows)["confidence"] is None
+    assert _row(rows)["confidence"] == 0.0

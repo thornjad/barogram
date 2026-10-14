@@ -165,9 +165,9 @@ def test_run_attaches_per_member_confidence_and_averages_for_member_zero(monkeyp
     assert zero_row["confidence"] == expected
 
 
-def test_run_without_member_history_degrades_confidence_to_none(monkeypatch):
+def test_run_without_member_history_degrades_confidence_to_zero(monkeypatch):
     """No member_history/default_matches (today's calling convention) leaves
-    every confidence None, same as every other model in this plan."""
+    every confidence 0.0, same as every other model in this plan."""
     conn_in = make_input_db()
     conn_out = make_output_db()
     obs = make_obs(ts=_ISSUED_AT)
@@ -180,4 +180,4 @@ def test_run_without_member_history_degrades_confidence_to_none(monkeypatch):
     rows = ec_mod.run(obs, _ISSUED_AT, conn_in=conn_in, conn_out=conn_out, conf=conf)
 
     assert len(rows) > 0
-    assert all(r["confidence"] is None for r in rows)
+    assert all(r["confidence"] == 0.0 for r in rows)
