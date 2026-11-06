@@ -2129,7 +2129,7 @@ def _overall_accuracy_html(rows: list) -> str:
 def _skill_timeseries_html() -> str:
     """Collapsed section holding the single all-time ensemble skill chart."""
     return "\n".join([
-        '<details class="collapsible-section" id="skill-timeseries-section">',
+        '<details class="collapsible-section" id="skill-timeseries-section" open>',
         '<summary class="obs-subhead">Ensemble Skill Over All Time</summary>',
         '<p class="chart-legend-note">barogram_ensemble forecast skill vs. climatological mean '
         '(0% line), one point per day snapshotted at 11:00 Central. Same calculation as the '
