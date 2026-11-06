@@ -720,137 +720,89 @@ def score_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list
     ).fetchall()
 
 
-def skill_timeseries_multi(
+def ensemble_skill_daily(
     conn: sqlite3.Connection,
-    since_epochs: list,
+    now: int,
+    windows: tuple[int, ...] = (14, 90),
+    snapshot_hour: int = 11,
+    key_leads: tuple[int, ...] = (1, 6, 12, 18, 24),
+    model_id: int = 100,
 ) -> dict:
-    """Per-run avg skill for ensemble/nws/tempest vs climo, across multiple time windows.
+    """Daily trailing-window forecast skill for one model vs climatological_mean (id 2).
 
-    Skill is computed per (variable, lead_hours) pair first, then averaged — matching
-    the table calculation exactly. Mixing MAE across variables before computing skill
-    is wrong because temperature (°C) and pressure (hPa) are on different scales.
-    Grouped by individual forecast run (issued_at), not calendar day, so every run in
-    the window shows as its own point instead of being averaged into one per day.
+    One point per day, snapshotted at snapshot_hour Central (DST-aware). Each point pools
+    every scored run issued in the trailing N days up to that snapshot, then computes skill
+    the same way the overall-skill table does: pooled MAE per (variable, lead) vs climo,
+    skill per pair, averaged over key_leads x variables. A point only appears once its full
+    window of history exists.
 
-    Returns {since_epoch: list of row dicts with keys day, model_id, model, avg_skill}
-    ("day" holds a run timestamp label, kept as that key name for compatibility with
-    _skill_timeseries_data). Since = 0 is the all-time sentinel; issued_at >= 0 is
-    always true for any valid epoch.
+    Returns {"days": ["YYYY-MM-DD", ...], "series": {window_days: [skill | None, ...]}}.
     """
-    result = {}
-    for since in since_epochs:
-        active_vars = ("temperature", "dewpoint", "pressure")
+    from collections import defaultdict
+    from zoneinfo import ZoneInfo
 
-        active_placeholder = ",".join("?" * len(active_vars))
-        run_rows = conn.execute(
-            f"""
-            select
-                datetime(issued_at, 'unixepoch', 'localtime') as run,
-                model_id,
-                model,
-                variable,
-                lead_hours,
-                avg(mae) as avg_mae
-            from forecasts
-            where scored_at is not null
-              and member_id = 0
-              and variable in ({active_placeholder})
-              and issued_at >= ?
-            group by run, model_id, model, variable, lead_hours
-            order by run
-            """,
-            (*active_vars, since),
-        ).fetchall()
-
-        climo_by_run: dict[tuple[str, str, int], float] = {}
-        for r in run_rows:
-            if r["model_id"] == 2:
-                climo_by_run[(r["run"], r["variable"], r["lead_hours"])] = r["avg_mae"]
-
-        agg: dict[tuple[str, int], dict] = {}
-        for r in run_rows:
-            climo_mae = climo_by_run.get((r["run"], r["variable"], r["lead_hours"]))
-            if climo_mae is None or climo_mae <= 0:
-                continue
-            skill = (1.0 - r["avg_mae"] / climo_mae) * 100.0
-            key = (r["run"], r["model_id"])
-            slot = agg.setdefault(key, {"sum": 0.0, "n": 0, "model": r["model"]})
-            slot["sum"] += skill
-            slot["n"] += 1
-
-        out = [
-            {"day": run, "model_id": mid, "model": slot["model"], "avg_skill": slot["sum"] / slot["n"]}
-            for (run, mid), slot in agg.items()
-            if slot["n"] > 0
-        ]
-        out.sort(key=lambda r: (r["day"], r["model_id"]))
-        result[since] = out
-    return result
-
-
-def skill_timeseries_last_n_runs(conn: sqlite3.Connection, n: int) -> list:
-    """Per-run avg skill for ensemble/nws/tempest vs climo, over the last n scored runs.
-
-    Same skill calculation as skill_timeseries_multi (per variable/lead_hours skill,
-    then averaged) but grouped by run instead of by calendar day, so "last N runs"
-    reflects exactly N forecast runs rather than a time window that may span more.
-
-    Returns a list of row dicts with keys day, model_id, model, avg_skill — "day" here
-    is a run timestamp label, kept as that key name for compatibility with
-    _skill_timeseries_data.
-    """
-    active_vars = ("temperature", "dewpoint", "pressure")
-    active_placeholder = ",".join("?" * len(active_vars))
-    run_rows = conn.execute(
+    central = ZoneInfo("America/Chicago")
+    lead_ph = ",".join("?" * len(key_leads))
+    rows = conn.execute(
         f"""
-        with recent as (
-            select distinct issued_at
-            from forecasts
-            where scored_at is not null
-            order by issued_at desc
-            limit ?
-        )
-        select
-            datetime(f.issued_at, 'unixepoch', 'localtime') as run,
-            f.model_id,
-            f.model,
-            f.variable,
-            f.lead_hours,
-            avg(f.mae) as avg_mae
-        from forecasts f
-        join recent r on r.issued_at = f.issued_at
-        where f.scored_at is not null
-          and f.member_id = 0
-          and f.variable in ({active_placeholder})
-        group by run, f.model_id, f.model, f.variable, f.lead_hours
-        order by run
+        select issued_at, model_id, variable, lead_hours, sum(mae) as s, count(mae) as n
+        from forecasts
+        where scored_at is not null and member_id = 0
+          and model_id in (2, ?)
+          and variable in ('temperature', 'dewpoint', 'pressure')
+          and lead_hours in ({lead_ph})
+        group by issued_at, model_id, variable, lead_hours
         """,
-        (n, *active_vars),
+        (model_id, *key_leads),
     ).fetchall()
+    if not rows:
+        return {"days": [], "series": {w: [] for w in windows}}
 
-    climo_by_run: dict[tuple[str, str, int], float] = {}
-    for r in run_rows:
-        if r["model_id"] == 2:
-            climo_by_run[(r["run"], r["variable"], r["lead_hours"])] = r["avg_mae"]
+    def snapshot(d: datetime.date) -> datetime.datetime:
+        return datetime.datetime(d.year, d.month, d.day, snapshot_hour, tzinfo=central)
 
-    agg: dict[tuple[str, int], dict] = {}
-    for r in run_rows:
-        climo_mae = climo_by_run.get((r["run"], r["variable"], r["lead_hours"]))
-        if climo_mae is None or climo_mae <= 0:
+    now_dt = datetime.datetime.fromtimestamp(now, central)
+    last_day = now_dt.date() if now_dt >= snapshot(now_dt.date()) else now_dt.date() - datetime.timedelta(days=1)
+
+    # bucket d holds runs in (snapshot(d-1), snapshot(d)]
+    buckets: dict = defaultdict(lambda: defaultdict(lambda: [0.0, 0]))
+    for r in rows:
+        t = datetime.datetime.fromtimestamp(r["issued_at"], central)
+        d = t.date() if t <= snapshot(t.date()) else t.date() + datetime.timedelta(days=1)
+        if d > last_day:
             continue
-        skill = (1.0 - r["avg_mae"] / climo_mae) * 100.0
-        key = (r["run"], r["model_id"])
-        slot = agg.setdefault(key, {"sum": 0.0, "n": 0, "model": r["model"]})
-        slot["sum"] += skill
-        slot["n"] += 1
+        slot = buckets[d][(r["model_id"], r["variable"], r["lead_hours"])]
+        slot[0] += r["s"]
+        slot[1] += r["n"]
 
-    out = [
-        {"day": run, "model_id": mid, "model": slot["model"], "avg_skill": slot["sum"] / slot["n"]}
-        for (run, mid), slot in agg.items()
-        if slot["n"] > 0
-    ]
-    out.sort(key=lambda r: (r["day"], r["model_id"]))
-    return out
+    first_day = min(buckets)
+    one = datetime.timedelta(days=1)
+
+    def skill_for(day, w):
+        tot: dict = defaultdict(lambda: [0.0, 0])
+        for i in range(w):
+            for k, (s, n) in buckets.get(day - i * one, {}).items():
+                tot[k][0] += s
+                tot[k][1] += n
+        skills = []
+        for (mid, var, lead), (s, n) in tot.items():
+            if mid != model_id or n == 0:
+                continue
+            c = tot.get((2, var, lead))
+            if not c or c[1] == 0 or c[0] == 0:
+                continue
+            skills.append((1.0 - (s / n) / (c[0] / c[1])) * 100.0)
+        return sum(skills) / len(skills) if skills else None
+
+    days, d = [], first_day
+    while d <= last_day:
+        days.append(d)
+        d += one
+    series = {
+        w: [skill_for(day, w) if (day - first_day).days >= w - 1 else None for day in days]
+        for w in windows
+    }
+    return {"days": [d.isoformat() for d in days], "series": series}
 
 
 def bias_timeseries(conn: sqlite3.Connection, since: int | None = None) -> list:

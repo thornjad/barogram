@@ -2126,140 +2126,54 @@ def _overall_accuracy_html(rows: list) -> str:
     )
 
 
-def _trend_values(ys: list) -> list | None:
-    """Least-squares linear trend over ys (integer x-indices); returns y for every index."""
-    pairs = [(i, y) for i, y in enumerate(ys) if y is not None]
-    if len(pairs) < 2:
-        return None
-    n = len(pairs)
-    xs = [p[0] for p in pairs]
-    yv = [p[1] for p in pairs]
-    x_mean = sum(xs) / n
-    y_mean = sum(yv) / n
-    num = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, yv))
-    den = sum((x - x_mean) ** 2 for x in xs)
-    if den == 0:
-        return None
-    slope = num / den
-    intercept = y_mean - slope * x_mean
-    return [round(intercept + slope * i, 2) for i in range(len(ys))]
-
-
-def _skill_timeseries_data(rows: list) -> dict:
-    """Pivot per-run avg_skill rows into per-model series for all models."""
-    from collections import defaultdict
-    by_day: dict = defaultdict(dict)
-    model_names: dict = {}
-    for r in rows:
-        by_day[r["day"]][r["model_id"]] = r["avg_skill"]
-        model_names[r["model_id"]] = r["model"]
-
-    days = sorted(by_day.keys())
-    models: dict = {}
-    for mid, name in model_names.items():
-        series = [by_day[d].get(mid) for d in days]
-        models[mid] = {"name": name, "skill": series}
-
-    ens = models.get(100)
-    if ens:
-        ens["trend"] = _trend_values(ens["skill"]) or []
-
-    return {"days": days, "models": models}
-
-
 def _skill_timeseries_html() -> str:
-    """Heading + window-toggled chart containers + all-models toggle for skill-over-time."""
-    windows = [
-        ("14d", ""),
-        ("120d", ' style="display:none"'),
-        ("alltime", ' style="display:none"'),
-        ("10r", ' style="display:none"'),
-    ]
-    parts = [
+    """Collapsed section holding the single all-time ensemble skill chart."""
+    return "\n".join([
         '<details class="collapsible-section" id="skill-timeseries-section">',
-        '<summary class="obs-subhead">Skill Over Time</summary>',
-        '<div class="mae-filter-bar"><button id="skill-all-models-toggle" class="mae-raw-btn">All models</button></div>',
-        '<p class="chart-legend-note">Per-run forecast skill vs. climatological mean (0% line). '
-        'Averaged across all variables. Default: ensemble, NWS, Tempest Forecast.</p>',
-    ]
-    for wid, hidden in windows:
-        parts.append(
-            f'<div id="skill-timeseries-{wid}"{hidden}>'
-            f'<div class="chart-container"><div id="skill-timeseries-chart-{wid}"></div></div>'
-            f'</div>'
-        )
-    parts.append('</details>')
-    return "\n".join(parts)
+        '<summary class="obs-subhead">Ensemble Skill Over All Time</summary>',
+        '<p class="chart-legend-note">barogram_ensemble forecast skill vs. climatological mean '
+        '(0% line), one point per day snapshotted at 11:00 Central. Same calculation as the '
+        'overall skill table: pooled over the trailing 14 days (the table number) and the '
+        'trailing 90 days (long-term trend). Zoom and pan to inspect any range.</p>',
+        '<div class="chart-container"><div id="skill-timeseries-chart"></div></div>',
+        '</details>',
+    ])
 
 
-def _skill_timeseries_js(data_14d: dict, data_120d: dict, data_alltime: dict, data_10r: dict) -> str:
-    """Plotly + toggle logic for the four skill-over-time charts."""
+def _skill_timeseries_js(data: dict) -> str:
+    """Plotly render of the daily 14-day and 90-day ensemble skill series."""
     import json as _json
-    windows = [("14d", data_14d), ("120d", data_120d), ("alltime", data_alltime), ("10r", data_10r)]
-    data_by_window: dict = {}
-    for wid, d in windows:
-        data_by_window[wid] = d
     data_j = _json.dumps({
-        wid: {"days": d["days"], "models": {str(mid): m for mid, m in d["models"].items()}}
-        for wid, d in data_by_window.items()
+        "days": data["days"],
+        "d14": [None if v is None else round(v, 2) for v in data["series"][14]],
+        "d90": [None if v is None else round(v, 2) for v in data["series"][90]],
     })
-    return f"""const _skillRawData = {data_j};
-const SKILL_DEFAULT_MIDS = [100, 200, 201, 202];
-const SKILL_KNOWN_COLORS = {{100: '#1f77b4', 200: '#ff7f0e', 201: '#2ca02c', 202: '#9467bd'}};
-const SKILL_EXTRA_PALETTE = ['#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
-let skillShowAll = false;
+    return f"""const _skillData = {data_j};
 
-function renderSkillTimeseries(wid) {{
-    const raw = _skillRawData[wid];
-    if (!raw) return;
-    const days = raw.days;
-    const models = raw.models;
-    const allMids = Object.keys(models).map(Number);
-    // climatological_mean is always at 0% by definition — exclude from all-models view
-    const nonClimo = allMids.filter(function(m) {{ return models[String(m)].name !== 'climatological_mean'; }});
-    const show = skillShowAll ? nonClimo : nonClimo.filter(function(m) {{ return SKILL_DEFAULT_MIDS.includes(m); }});
-    let extIdx = 0;
-    const traces = [];
-    show.slice().sort(function(a, b) {{ return a - b; }}).forEach(function(mid) {{
-        const color = SKILL_KNOWN_COLORS[mid] || SKILL_EXTRA_PALETTE[extIdx++ % SKILL_EXTRA_PALETTE.length];
-        const mdata = models[String(mid)];
-        traces.push({{x: days, y: mdata.skill, name: mdata.name, type: 'scatter',
-            mode: 'lines+markers', connectgaps: false,
-            line: {{color: color}}, marker: {{size: 4}}}});
-    }});
-    const ens = models['100'];
-    if (ens && ens.trend && ens.trend.length) {{
-        traces.push({{x: days, y: ens.trend, name: 'ensemble trend', type: 'scatter',
-            mode: 'lines', connectgaps: true, showlegend: true,
-            line: {{color: '#1f77b4', dash: 'dash', width: 1.5}}}});
-    }}
-    Plotly.react('skill-timeseries-chart-' + wid, traces, {{
+function renderSkillTimeseries() {{
+    const traces = [
+        {{x: _skillData.days, y: _skillData.d14, name: '14-day skill', type: 'scatter',
+            mode: 'lines', connectgaps: false, line: {{color: '#1f77b4', width: 1.5}}}},
+        {{x: _skillData.days, y: _skillData.d90, name: '90-day skill', type: 'scatter',
+            mode: 'lines', connectgaps: false, line: {{color: '#1f77b4', width: 1.5, dash: 'dash'}}}}
+    ];
+    Plotly.react('skill-timeseries-chart', traces, {{
         height: 340, margin: {{t: 30, b: 100, l: 50, r: 16}},
         font: {{ color: plotBg().font }}, paper_bgcolor: plotBg().paper, plot_bgcolor: plotBg().plot,
         yaxis: {{title: 'Skill (%)', zeroline: true, zerolinecolor: '#888', zerolinewidth: 2}},
-        xaxis: {{type: 'date'}},
-        legend: {{orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{size: 10}}}},
-        shapes: [{{type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0, y1: 0,
-            line: {{color: '#888', width: 2, dash: 'dash'}}}}]
+        xaxis: {{type: 'date', autorange: true}},
+        legend: {{orientation: 'h', x: 0, y: -0.18, xanchor: 'left', yanchor: 'top', font: {{size: 10}}}}
     }}, {{responsive: true}});
 }}
 
-['14d', '120d', 'alltime', '10r'].forEach(function(wid) {{ renderSkillTimeseries(wid); }});
-
-document.getElementById('skill-all-models-toggle').addEventListener('click', function() {{
-    skillShowAll = !skillShowAll;
-    this.classList.toggle('active', skillShowAll);
-    ['14d', '120d', 'alltime', '10r'].forEach(function(wid) {{ renderSkillTimeseries(wid); }});
-}});
+renderSkillTimeseries();
 
 const skillSection = document.getElementById('skill-timeseries-section');
 if (skillSection) {{
     skillSection.addEventListener('toggle', function() {{
         if (skillSection.open) {{
-            ['14d', '120d', 'alltime', '10r'].forEach(function(wid) {{
-                const c = document.getElementById('skill-timeseries-chart-' + wid);
-                if (c) Plotly.Plots.resize(c);
-            }});
+            const c = document.getElementById('skill-timeseries-chart');
+            if (c) Plotly.Plots.resize(c);
         }}
     }});
 }}
@@ -2741,19 +2655,13 @@ document.querySelectorAll('.acc-filter-btn').forEach(function(btn) {
 
 function updateAccWindow(win) {
     ['14d', '120d', 'alltime', '10r'].forEach(function(w) {
-        var el = document.getElementById('skill-timeseries-' + w);
-        if (el) el.style.display = (w === win) ? '' : 'none';
-        el = document.getElementById('acc-overall-' + w);
+        var el = document.getElementById('acc-overall-' + w);
         if (el) el.style.display = (w === win) ? '' : 'none';
         el = document.getElementById('acc-lead-' + w);
         if (el) el.style.display = (w === win) ? '' : 'none';
     });
     var activeBtn = document.querySelector('.acc-filter-btn.active');
     if (activeBtn) updateAccTable(activeBtn.dataset.var);
-    window.setTimeout(function() {
-        var c = document.getElementById('skill-timeseries-chart-' + win);
-        if (c) Plotly.Plots.resize(c);
-    }, 0);
 }
 
 document.querySelectorAll('.acc-window-btn').forEach(function(btn) {
@@ -2924,15 +2832,9 @@ def generate(
     acc_rows_alltime = [r for r in _acc[0] if r["lead_hours"] in _KEY_LEADS]
     acc_rows_10r = [r for r in db.accuracy_by_lead(conn_out, 10) if r["lead_hours"] in _KEY_LEADS]
     acc_count_10r = db.accuracy_run_count_last_n(conn_out, 10)
-    _skill_ts = db.skill_timeseries_multi(conn_out, [_14d, _120d, 0])
-    _skill_ts_10r = db.skill_timeseries_last_n_runs(conn_out, 10)
+    _skill_ts = db.ensemble_skill_daily(conn_out, now)
     skill_ts_html = _skill_timeseries_html()
-    skill_ts_js = _skill_timeseries_js(
-        _skill_timeseries_data(_skill_ts[_14d]),
-        _skill_timeseries_data(_skill_ts[_120d]),
-        _skill_timeseries_data(_skill_ts[0]),
-        _skill_timeseries_data(_skill_ts_10r),
-    )
+    skill_ts_js = _skill_timeseries_js(_skill_ts)
     all_models = db.list_models(conn_out)
     run_browser_forecast_rows = db.run_browser_forecasts(conn_out, _14d)
     run_browser_obs_rows = db.run_browser_obs(conn_in, _14d, now)
