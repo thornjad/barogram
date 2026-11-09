@@ -23,4 +23,5 @@ include = [
     "*.py",
     "models/*.py",
     "migrations/*.sql",
+    "vendor/*.js",
 ]

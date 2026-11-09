@@ -2741,6 +2741,17 @@ def _recent_misses_html(rows: list) -> str:
     return "".join(sections)
 
 
+_PLOTLY_CDN_TAG = '<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2/plotly.min.js"></script>'
+_PLOTLY_VENDORED = Path(__file__).parent / "vendor" / "plotly.min.js"
+
+
+def _inline_plotly(html: str) -> str:
+    """Replace the plotly cdn tag with the vendored copy so dashboard.html is standalone."""
+    js = _PLOTLY_VENDORED.read_text(encoding="utf-8").replace("</script", "<\\/script")
+    head, sep, tail = html.partition(_PLOTLY_CDN_TAG)
+    return f"{head}<script>{js}</script>{tail}" if sep else html
+
+
 def _write_fragment(html: str, out_dir: Path) -> None:
     css_start = html.index("<style>\n") + len("<style>\n")
     css_end = html.index("\n</style>")
@@ -3103,5 +3114,6 @@ function plotBg() {{
 </html>
 """
 
-    output_path.write_text(html, encoding="utf-8")
+    output_path.write_text(_inline_plotly(html), encoding="utf-8")
+    # fragment keeps the cdn tag: the host site embeds it and shouldn't carry 4.5MB inline
     _write_fragment(html, output_path.parent)
