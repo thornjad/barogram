@@ -19,11 +19,15 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 | `insights`   | Emit forecast + accuracy summary as JSON (or `--format table`) |
 | `calibration` | Check whether confidence deciles actually track lower forecast error |
 | `tune-similarity` | Backtest candidate analog-matching feature-weight vectors against held-out skill |
+| `doctor` | Check for orphaned members and report next free migration/member_id |
 
 There is no `run` subcommand. `make run` composes the full cycle — `score`, then
 `forecast`, then `dashboard`, then `prune` — as separate steps, and stops if `forecast`
-exits non-zero (it does so only when no forecast rows were written), so a stale or empty
-forecast never reaches the dashboard or publish step. `make tune` runs `score`, then the
+exits non-zero, so a stale or empty forecast never reaches the dashboard or publish step.
+`forecast` exits 1 if the input DB is missing/invalid, if the latest Tempest observation
+is over an hour old (`_STALE_OBS_THRESHOLD_SEC`), or if zero forecast rows were written
+overall — a single model raising an exception is caught, logged, and skipped, it does not
+abort the run by itself. `make tune` runs `score`, then the
 skill-weight tuning step (`make tune-weights`, i.e. `barogram tune`), then `barogram
 calibration` — this is the target the weekly launchd job already calls, so calibration's
 report lands in that job's existing log without needing a scheduler change. `make full` runs
@@ -63,7 +67,7 @@ Flags: `--input` targets wxlog; `--format json` emits JSON instead of a table.
    - `MODEL_ID: int` — next unused ID
    - `MODEL_NAME: str`
    - `NEEDS_CONN_IN = True` if the model needs historical input DB access, else omit
-   - `NEEDS_CONN_OUT = True` if the model needs output DB access (ensemble, external_corrected, pressure_consensus_transfer, inverse_pressure_transfer), else omit
+   - `NEEDS_CONN_OUT = True` if the model needs output DB access, else omit. Needed by nearly every base model now (all but `persistence`, `climatological_mean`, `nws`, `tempest_forecast`), mainly to add a standard self-correction member via `models/_self_correction.py` — see [Standard self-correction member](docs/self_correction.md) and "Adding it to another existing model" there
    - `NEEDS_WEIGHTS = True` if the model accepts skill-score member weights, else omit
    - `NEEDS_CONF = True` if the model needs the barogram config (e.g. external API URLs), else omit
    - `NEEDS_ALL_OBS = True` if the model needs the full Tempest obs history for the run (shared/computed once, not per-model), else omit
@@ -71,9 +75,14 @@ Flags: `--input` targets wxlog; `--format json` emits JSON instead of a table.
    - `NEEDS_MATCH_HISTORY = True` if the model feeds per-cell confidence — nearly every model does. Adds two kwargs: `member_history` (scored error history per member, for `models/_confidence.py`'s `confidence_for_cell`) and `default_matches` (shared analog-day matches computed once via `_confidence.find_default_matches`)
    - `run(obs, issued_at, *, conn_in=None, conn_out=None, weights=None, conf=None, all_obs=None, location=None, member_history=None, default_matches=None) -> list[dict]` returning forecast dicts — accept only the kwargs your `NEEDS_*` flags request
 
-2. Add an `insert or ignore` for the model row to `migrations/001_baseline.sql` (models
-   table) and a row for each member to the members table. Single-member models need one
-   members row: `(model_id, 0, null)`.
+2. Add a new numbered migration file in `migrations/` (never edit `001_baseline.sql` —
+   every model added since baseline landed as its own file, e.g.
+   `migrations/067_trend_climo_blend.sql`) with an `insert or ignore` for the model row
+   (models table) and a row for each member (members table). Single-member models need
+   one members row: `(model_id, 0, null)`. A migration that permanently retires a model
+   uses `delete from members where model_id = ...` / `delete from models where id = ...`
+   (see `migrations/037_remove_precip.sql`) — a removed model's ID is gone from the live
+   `models` table and should not reappear in the inventory below.
 
 3. Add the model to `_MODELS` in `barogram.py`.
 
@@ -111,8 +120,8 @@ A multi-member model produces one batch of rows per member (member_id 1+), plus 
 member_id=0 row per (lead_hours, variable) holding the ensemble mean as `value` and the
 ensemble spread as `spread`. All members share the same `issued_at`.
 
-Register each `(model_id, member_id, name)` pair in the members table in
-`migrations/001_baseline.sql`. Member names should be short descriptive labels
+Register each `(model_id, member_id, name)` pair in the members table via that model's
+own numbered migration file (not `001_baseline.sql`). Member names should be short descriptive labels
 (e.g. `"week-heavy"`, `"exponential"`). The member_id=0 row has `name=null`.
 
 ## SQL style
@@ -148,10 +157,24 @@ lowercase as well.
 | 21  | frontal_trigger              | base     | done   |
 | 22  | dewpoint_tendency            | base     | done   |
 | 23  | solar_ramp                   | base     | done   |
+| 24  | regime_stability             | base     | done   |
+| 25  | diurnal_rate_anomaly         | base     | done   |
+| 26  | storm_trajectory             | base     | done   |
+| 27  | pressure_trajectory          | base     | done   |
+| 28  | radiational_cooling          | base     | done   |
+| 29  | moisture_trajectory          | base     | done   |
+| 30  | trend_climo_blend            | base     | done   |
 | 100 | barogram_ensemble            | ensemble | done   |
+| 101 | ensemble_bias_correction     | base     | done   |
 | 200 | nws                          | external | done   |
 | 201 | tempest_forecast             | external | done   |
 | 202 | external_corrected           | external | done   |
+
+ID 11 (`airmass_precip`) was a precip-probability model, fully removed along with the
+`precip_prob` variable in `migrations/037_remove_precip.sql` — its ID is retired, not
+gapped by accident, and should not be reused. Generated from the live `models` table
+(`uv run barogram query "select id, name, type from models order by id"`), not from a raw
+grep of `insert or ignore` lines across migrations, which misses later `delete`s.
 
 ## Database schemas
 
@@ -277,8 +300,9 @@ node screenshots/capture.js
 - `sync.py` — Syncthing API integration; polls for idle state before each run
 - `similarity_tune.py` — backtests candidate analog-matching feature-weight vectors, adjacent to but separate from `tune`'s ensemble skill-score weighting
 - `migrations/` — numbered SQL files, run automatically at startup
-- `models/` — one file per model, plus shared helpers `_confidence.py` (per-cell confidence), `_similarity.py` (analog-day matching), `_climo_weights.py`, `_utils.py`
-- `docs/` — one Markdown doc per model plus `README.md` index and `database.md` (schema evolution rules)
+- `models/` — one file per model, plus shared helpers `_confidence.py` (per-cell confidence), `_similarity.py` (analog-day matching), `_climo_weights.py`, `_utils.py`, `_self_correction.py` (standard self-correction member template), `_pressure_sanity.py` (clamps predicted pressure to physical range), `_pressure_tide.py` (learns/removes the station's solar pressure tide)
+- `docs/` — one Markdown doc per model plus `README.md` index, `database.md` (schema evolution rules), `confidence.md`, `tune.md`, `self_correction.md`; `docs/plans/` holds past implementation-plan writeups, reference only
+- `tests/` — pytest suite (49 files); run with `make test` or `uv run pytest tests/`
 
 ## Config
 
@@ -288,7 +312,14 @@ node screenshots/capture.js
 [barogram]
 input_db = "/path/to/wxlog-read-only.db"
 output_db = "/path/to/barogram.db"
+
+[tempest]
+station_id = ""  # WeatherFlow station ID; required for the tempest_forecast model (201)
+token = ""       # API token from swd.weatherflow.com; required for tempest_forecast
 ```
+
+`tempest_forecast` silently abstains (no rows) if `station_id`/`token` are unset — the
+`[tempest]` block is optional for every other command but required for that one model.
 
 ## Setup on a new machine
 
