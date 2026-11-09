@@ -83,4 +83,8 @@ When a sector has fewer than `--min-runs` scored rows, the blend collapses to th
 Huber loss entirely. The pooled fraction is permanent — it does not shrink to zero as data
 accumulates — so the all-sector signal always contributes a small stabilizing influence.
 
+A member that falls back to its pooled loss is scored against the reference's pooled loss, not the reference's sector loss, so both sides cover the same span of hours.
+
+A member with fewer than `--min-total-runs` (default 30) scored rows across all sectors skips skill scoring and sits at the floor weight (`--floor / n_members`). This matters for conditional models such as `storm_trajectory`, which only forecast when a storm is detected: its few scored rows were mostly overnight, where errors are small, and scoring that pooled loss against the reference's afternoon loss gave it the top ensemble weight. It leaves the floor once it has enough history.
+
 The `mae` column in the forecasts table stores absolute error. `tune` uses the `error` column (signed linear difference) for all Huber loss computations. The `mae` column is used only by the dashboard for display.

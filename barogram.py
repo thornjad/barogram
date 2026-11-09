@@ -630,7 +630,9 @@ def cmd_tune(args, conf):
 
     # pooled Huber loss across all sectors; only qualifying cells
     pooled_huber = {}
+    pooled_n = {}
     for (model_id, member_id, variable, lead_hours), errors in _pooled_error_lists.items():
+        pooled_n[(model_id, member_id, variable, lead_hours)] = len(errors)
         if len(errors) >= args.min_runs:
             delta = huber_deltas.get(variable, 1.0)
             h = _mean_huber(errors, delta)
@@ -660,11 +662,20 @@ def cmd_tune(args, conf):
     all_skills = {model_id: {} for model_id in weighted_model_ids}
     for (model_id, variable, lead_hours), pooled_by_member in pooled_groups.items():
         for sector in range(4):
+            # members with too little total history sit at the floor: their pooled loss
+            # covers a different mix of hours than the reference's, so a skill score
+            # against it is not comparable (e.g. a storm-only model scored mostly overnight)
+            sparse = {mid for mid in pooled_by_member
+                      if pooled_n[(model_id, mid, variable, lead_hours)] < args.min_total_runs}
             blended = {}
+            sector_scored = set()
             for mid, p_h in pooled_by_member.items():
+                if mid in sparse:
+                    continue
                 s_data = sector_huber.get((model_id, mid, variable, lead_hours, sector))
                 if s_data and s_data[1] >= args.min_runs and s_data[0] > 0:
                     blended[mid] = (1 - args.pool_alpha) * s_data[0] + args.pool_alpha * p_h
+                    sector_scored.add(mid)
                 else:
                     # sparse sector: fall back to pooled even when pool_alpha=0
                     blended[mid] = p_h
@@ -678,11 +689,13 @@ def cmd_tune(args, conf):
                     ref_loss = p_ref
             else:
                 ref_loss = None
-            n_members = len(blended)
+            n_members = len(pooled_by_member)
             min_w = args.floor / n_members
             sub_w = min_w * args.subfloor_fraction
             if ref_loss is not None:
-                cell_skills = {mid: 1.0 - h / ref_loss for mid, h in blended.items()}
+                # pooled-fallback members compare against the pooled reference, not the sector one
+                cell_skills = {mid: 1.0 - h / (ref_loss if mid in sector_scored else p_ref)
+                               for mid, h in blended.items()}
                 proportional = {mid: s for mid, s in cell_skills.items() if s > 0}
                 prop_total = sum(proportional.values())
                 fractions = ({mid: s / prop_total for mid, s in proportional.items()}
@@ -696,7 +709,7 @@ def cmd_tune(args, conf):
                         raw_final[mid] = min_w
                     else:
                         raw_final[mid] = sub_w
-            else:
+            elif blended:
                 print(f"warning: no reference loss for {variable} lead={lead_hours}h "
                       f"sector={sector}, using inverse-Huber")
                 raw = {mid: 1.0 / h for mid, h in blended.items()}
@@ -704,6 +717,12 @@ def cmd_tune(args, conf):
                 fractions = {mid: w / raw_total for mid, w in raw.items()}
                 cell_skills = {mid: None for mid in blended}
                 raw_final = {mid: max(f, min_w) for mid, f in fractions.items()}
+            else:
+                cell_skills = {}
+                raw_final = {}
+            for mid in sparse:
+                raw_final[mid] = min_w
+                cell_skills[mid] = None
             if bogo.MODEL_ID in raw_final:
                 raw_final[bogo.MODEL_ID] = sub_w
             total_w = sum(raw_final.values())
@@ -902,6 +921,11 @@ def main():
     p.add_argument(
         "--min-runs", type=int, default=3, metavar="N",
         help="min scored rows per (member, variable, lead) to include (default: 3)",
+    )
+    p.add_argument(
+        "--min-total-runs", type=int, default=30, metavar="N",
+        help="min scored rows across all sectors for a member to earn a skill-based "
+             "weight; members below this sit at the floor (default: 30)",
     )
     p.add_argument(
         "--floor", type=float, default=0.08, metavar="F",
