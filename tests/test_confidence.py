@@ -469,3 +469,48 @@ def test_inject_all_confidences_unknown_uses_zero_not_neutral_fallback():
     mean, group_conf = confidence._inject(pairs, weights, confidences)
     assert abs(mean - 15.0) < 1e-9
     assert group_conf is None
+
+
+# --- CellHistory ---
+
+def _naive_confidence_for_cell(history, variable, lead_hours, matched_ts, spread):
+    """The pre-CellHistory implementation: filter the whole history per call."""
+    cell_rows = [r for r in history if r["variable"] == variable and r["lead_hours"] == lead_hours]
+    if not cell_rows:
+        return 0.0
+    if len({r["issued_at"] // 86400 for r in cell_rows}) <= confidence._MIN_HISTORY_DAYS:
+        return 0.0
+    seen_days = set()
+    errors = []
+    for ts in matched_ts:
+        if ts // 86400 in seen_days:
+            continue
+        seen_days.add(ts // 86400)
+        errors.extend(
+            r["mae"] for r in cell_rows
+            if abs(r["issued_at"] - ts) <= confidence._MATCH_HOUR_TOLERANCE_SEC
+        )
+    return confidence.blended_confidence(errors, spread, confidence._CONFIDENCE_PSEUDOCOUNT)
+
+
+def test_cell_history_matches_naive_filter_across_cells(monkeypatch):
+    import random
+    rng = random.Random(7)
+    base = 10_000_000
+    history = [
+        _row(rng.choice(["temperature", "dewpoint"]), rng.choice([1, 6]),
+             base + d * _DAY + rng.randrange(0, _DAY, 600), rng.uniform(0.1, 4.0))
+        for d in range(60) for _ in range(6)
+    ]
+    # repeated and same-day matches: the day dedupe must keep only the first
+    matched = [base + 20 * _DAY + 3600, base + 20 * _DAY + 7200,
+               base + 33 * _DAY + 40_000, base + 50 * _DAY]
+    monkeypatch.setattr(confidence, "_spread", {
+        (v, l): 2.5 for v in ("temperature", "dewpoint") for l in (1, 6)
+    })
+    indexed = confidence.CellHistory(history)
+    for variable in ("temperature", "dewpoint", "pressure"):
+        for lead in (1, 6, 24):
+            expected = _naive_confidence_for_cell(history, variable, lead, matched, 2.5 if variable != "pressure" and lead != 24 else None)
+            assert confidence.confidence_for_cell(indexed, variable, lead, matched) == expected
+            assert confidence.confidence_for_cell(history, variable, lead, matched) == expected

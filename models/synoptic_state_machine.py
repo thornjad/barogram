@@ -59,6 +59,8 @@
 
 import statistics
 
+import numpy as np
+
 import db
 import models._confidence as _confidence
 import models._self_correction as _self_correction
@@ -389,41 +391,69 @@ def _signals_at(ts, sorted_ts, by_ts, solar_climo):
     return states
 
 
-def _build_conditionals(all_obs: list, solar_climo: dict) -> tuple[dict, dict, list]:
-    """Single-pass scan over all historical obs building conditional delta tables.
+def _future_index(ts_arr: np.ndarray, offset: int, max_delta: int) -> np.ndarray:
+    """Vectorized _find_nearest_ts: for each timestamp, the index of the obs nearest
+    ts + offset within max_delta seconds, or -1. Ties go to the earlier obs, as in
+    _find_nearest_ts."""
+    n = len(ts_arr)
+    target = ts_arr + offset
+    hi = np.searchsorted(ts_arr, target, side="left")
+    lo = hi - 1
+    d_lo = target - ts_arr[np.clip(lo, 0, n - 1)]
+    d_hi = ts_arr[np.clip(hi, 0, n - 1)] - target
+    lo_ok = (lo >= 0) & (d_lo <= max_delta)
+    hi_ok = (hi < n) & (d_hi <= max_delta)
+    use_hi = hi_ok & (~lo_ok | (d_hi < d_lo))
+    return np.where(use_hi, hi, np.where(lo_ok, lo, -1))
 
-    Computes all member state tuples simultaneously per timestamp to avoid redundant
-    scans over the full history.
+
+def _build_conditionals(all_obs: list, solar_climo: dict) -> tuple[dict, dict, list]:
+    """Scan all historical obs building conditional delta tables: for every
+    (member, state, variable, lead) cell, the mean of (future value - value now) over
+    the timestamps where the member was in that state.
+
+    State tuples for every member are computed once per timestamp; the per-cell sums
+    are then one np.bincount per (variable, lead) over all members at once, instead of
+    a python append per (timestamp, lead, member, variable).
 
     Returns (conds, by_ts, sorted_ts) so the caller can reuse the index for
     the live signal window lookup without rebuilding it.
     """
     by_ts = {row["timestamp"]: row for row in all_obs}
     sorted_ts = sorted(by_ts)
-    accum: dict = {}
+    n = len(sorted_ts)
+    if n == 0:
+        return {}, by_ts, sorted_ts
+    ts_arr = np.array(sorted_ts)
 
+    # intern each (member, state) to a dense id; id_rows[i] lists every member's id at
+    # timestamp i, with -1 for a member with no state there
+    state_ids: dict = {}
+    id_rows = []
     for ts in sorted_ts:
-        states = _signals_at(ts, sorted_ts, by_ts, solar_climo)
+        id_rows.append([
+            -1 if state is None else state_ids.setdefault((mid, state), len(state_ids))
+            for mid, state in _signals_at(ts, sorted_ts, by_ts, solar_climo).items()
+        ])
+    n_ids = len(state_ids)
+    codes = np.array(id_rows, dtype=np.int64).T.reshape(-1, n)
+    codes[codes < 0] = n_ids   # sentinel bucket for "no state"
+    id_keys = list(state_ids)
 
+    conds = {}
+    for col in VARIABLES.values():
+        now = np.array([np.nan if by_ts[t][col] is None else by_ts[t][col] for t in sorted_ts])
         for lead in LEAD_HOURS:
-            ts_fut = _find_nearest_ts(sorted_ts, ts + lead * 3600, _FUTURE_LOOKUP_SEC)
-            if ts_fut is None:
-                continue
-            row_fut = by_ts[ts_fut]
-            for mid, state in states.items():
-                if state is None:
-                    continue
-                for col in VARIABLES.values():
-                    v_now = by_ts[ts][col]
-                    v_fut = row_fut[col]
-                    if v_now is not None and v_fut is not None:
-                        accum.setdefault((mid, state, col, lead), []).append(v_fut - v_now)
-
-    conds = {
-        k: sum(v) / len(v)
-        for k, v in accum.items()
-        if len(v) >= _MIN_SAMPLES
-    }
+            idx = _future_index(ts_arr, lead * 3600, _FUTURE_LOOKUP_SEC)
+            delta = np.where(idx >= 0, now[np.clip(idx, 0, n - 1)], np.nan) - now
+            ok = ~np.isnan(delta)
+            masked = np.where(ok[None, :], codes, n_ids)
+            weights = np.broadcast_to(np.where(ok, delta, 0.0), masked.shape)
+            sums = np.bincount(masked.ravel(), weights=weights.ravel(), minlength=n_ids + 1)
+            counts = np.bincount(masked.ravel(), minlength=n_ids + 1)
+            for i in np.flatnonzero(counts[:n_ids] >= _MIN_SAMPLES):
+                mid, state = id_keys[i]
+                conds[(mid, state, col, lead)] = float(sums[i] / counts[i])
     return conds, by_ts, sorted_ts
 
 

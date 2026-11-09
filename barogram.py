@@ -254,7 +254,9 @@ def cmd_forecast(args, conf):
                 since = issued_at - _confidence._CONFIDENCE_WINDOW_DAYS * 86400
                 member_ids = db.member_ids_for_model(conn_out, model.MODEL_ID)
                 kwargs["member_history"] = {
-                    mid: db.model_error_history(conn_out, model.MODEL_ID, mid, since)
+                    mid: _confidence.CellHistory(
+                        db.model_error_history(conn_out, model.MODEL_ID, mid, since)
+                    )
                     for mid in member_ids
                 }
                 kwargs["default_matches"] = shared_default_matches

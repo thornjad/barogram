@@ -4,6 +4,8 @@ import datetime
 import math
 from collections import defaultdict
 
+import numpy as np
+
 import db
 import models._similarity as _similarity
 
@@ -169,7 +171,41 @@ def matched_day_spreads(conn_in, matched_ts: list[int]) -> dict[tuple[str, int],
     return spread
 
 
-def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
+class CellHistory:
+    """A member's scored history grouped by (variable, lead_hours) cell, so
+    confidence_for_cell reads a cell's rows directly instead of filtering the
+    member's whole history once per cell (72 cells x every row, per member).
+
+    Build one per member per run and pass it wherever a history list goes; a
+    plain list is wrapped on the fly with the same result, only slower."""
+
+    def __init__(self, rows):
+        groups: dict[tuple[str, int], tuple[list, list]] = {}
+        for r in rows:
+            g = groups.get((r["variable"], r["lead_hours"]))
+            if g is None:
+                g = groups[(r["variable"], r["lead_hours"])] = ([], [])
+            g[0].append(r["issued_at"])
+            g[1].append(r["mae"])
+        self._groups = groups
+        self._arrays: dict[tuple[str, int], tuple] = {}
+
+    def cell(self, variable: str, lead_hours: int):
+        """(issued_at array, mae array, distinct calendar days) for the cell, rows
+        in original history order, or None when the cell has no rows."""
+        key = (variable, lead_hours)
+        arrays = self._arrays.get(key)
+        if arrays is None:
+            g = self._groups.get(key)
+            if g is None:
+                return None
+            issued = np.array(g[0])
+            arrays = self._arrays[key] = (issued, np.array(g[1], dtype=float),
+                                          np.unique(issued // 86400).size)
+        return arrays
+
+
+def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead_hours: int,
                          matched_ts: list[int]) -> float:
     """
     history is every scored row for one (model_id, member_id) pair (dicts
@@ -208,24 +244,27 @@ def confidence_for_cell(history: list[dict], variable: str, lead_hours: int,
     multiple cells must key that storage by (variable, lead_hours)
     together, never by variable alone.
     """
-    cell_rows = [r for r in history if r["variable"] == variable and r["lead_hours"] == lead_hours]
-    if not cell_rows:
+    cell = (history if isinstance(history, CellHistory) else CellHistory(history)).cell(variable, lead_hours)
+    if cell is None:
         return 0.0
-    distinct_days = len({r["issued_at"] // 86400 for r in cell_rows})
+    issued, mae, distinct_days = cell
     if distinct_days <= _MIN_HISTORY_DAYS:
         return 0.0
     spread = _spread.get((variable, lead_hours))
     seen_days: set[int] = set()
-    matched_errors: list[float] = []
+    match_ts = []
     for ts in matched_ts:
         day = ts // 86400
         if day in seen_days:
             continue
         seen_days.add(day)
-        matched_errors.extend(
-            r["mae"] for r in cell_rows
-            if abs(r["issued_at"] - ts) <= _MATCH_HOUR_TOLERANCE_SEC
-        )
+        match_ts.append(ts)
+    matched_errors: list[float] = []
+    if match_ts:
+        # one (matched ts x run) mask; boolean indexing reads it matched-ts-major, then
+        # in history order, the same order a per-ts scan of the cell's rows would append
+        near = np.abs(issued[None, :] - np.array(match_ts)[:, None]) <= _MATCH_HOUR_TOLERANCE_SEC
+        matched_errors = np.broadcast_to(mae, near.shape)[near].tolist()
     return blended_confidence(matched_errors, spread, _CONFIDENCE_PSEUDOCOUNT)
 
 
