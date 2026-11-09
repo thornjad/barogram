@@ -13,7 +13,7 @@ _DAY = 86400
 
 def _conn_before_068(tmp_path):
     for f in _MIGRATIONS.glob("[0-9][0-9][0-9]_*.sql"):
-        if not f.name.startswith("068_"):
+        if f.name < "068_":
             shutil.copy(f, tmp_path / f.name)
     conn = sqlite3.connect(":memory:", isolation_level=None)
     conn.row_factory = sqlite3.Row
