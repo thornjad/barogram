@@ -30,6 +30,7 @@
 | 27 | pressure_trajectory | [027_pressure_trajectory.md](027_pressure_trajectory.md) |
 | 28 | radiational_cooling | [028_radiational_cooling.md](028_radiational_cooling.md) |
 | 29 | moisture_trajectory | [029_moisture_trajectory.md](029_moisture_trajectory.md) |
+| 30 | trend_climo_blend | [030_trend_climo_blend.md](030_trend_climo_blend.md) |
 | 100 | barogram_ensemble | [100_barogram_ensemble.md](100_barogram_ensemble.md) |
 | 101 | ensemble_bias_correction | [101_ensemble_bias_correction.md](101_ensemble_bias_correction.md) |
 | 200 | nws | — |

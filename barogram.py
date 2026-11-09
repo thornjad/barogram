@@ -48,6 +48,7 @@ import models.storm_trajectory as storm_trajectory
 import models.surface_signs as surface_signs
 import models.synoptic_state_machine as synoptic_state_machine
 import models.tempest_forecast as tempest_forecast_model
+import models.trend_climo_blend as trend_climo_blend
 import models.weighted_climatological_mean as weighted_climatological_mean
 import models.wind_veer_detector as wind_veer_detector
 import models._confidence as _confidence
@@ -101,6 +102,7 @@ _MODELS = [
     storm_trajectory,
     pressure_trajectory,
     moisture_trajectory,
+    trend_climo_blend,
     pressure_consensus_transfer,  # reads pressure predictions written above, this run
     inverse_pressure_transfer,    # reads temp/dewpoint predictions written above, this run
     nws_model,
