@@ -723,8 +723,6 @@ def cmd_tune(args, conf):
             for mid in sparse:
                 raw_final[mid] = min_w
                 cell_skills[mid] = None
-            if bogo.MODEL_ID in raw_final:
-                raw_final[bogo.MODEL_ID] = sub_w
             total_w = sum(raw_final.values())
             final = {mid: w / total_w for mid, w in raw_final.items()}
             for mid, w in final.items():

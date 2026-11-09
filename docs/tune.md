@@ -44,9 +44,8 @@ each variable, pooled across all non-external models.
 Members with positive skill receive weight proportional to their skill (with a floor).
 Members whose skill equals zero (the reference model itself) receive a floor weight
 proportional to `--floor / n_members`. Members with negative skill receive a subfloor
-weight (`--floor * --subfloor-fraction / n_members`). The `bogo` model is unconditionally
-pinned to subfloor regardless of its apparent skill, because its sparse scoring history
-can produce statistically noisy positive skill estimates. All weights are normalized to sum
+weight (`--floor * --subfloor-fraction / n_members`). No model is pinned or treated specially:
+`bogo` is weighted on its own merits like every other member. All weights are normalized to sum
 to 1 within each (model, variable, lead_hours, sector) cell.
 
 ## Sector-aware weighting
