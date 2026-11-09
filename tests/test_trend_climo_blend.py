@@ -228,7 +228,7 @@ def test_self_correction_member_applies_learned_bias():
 
     lead = 6
     valid_at = _ISSUED_AT + lead * 3600
-    # seed this model's own member_id=0 scored history: consistently forecast
+    # seed this model's own raw mix (member -1) scored history: consistently forecast
     # 3.0 too high, so the learned bias correction should subtract ~3.0
     for d in range(1, 6):
         past_issued = _ISSUED_AT - d * 86400
@@ -237,7 +237,7 @@ def test_self_correction_member_applies_learned_bias():
             """insert into forecasts
                (model_id, model, member_id, issued_at, valid_at, lead_hours, variable,
                 value, observed, error, mae, scored_at)
-               values (30, 'trend_climo_blend', 0, ?, ?, ?, 'temperature', 18.0, 15.0, 3.0, 3.0, ?)""",
+               values (30, 'trend_climo_blend', -1, ?, ?, ?, 'temperature', 18.0, 15.0, 3.0, 3.0, ?)""",
             (past_issued, past_valid, lead, past_issued + 1),
         )
 

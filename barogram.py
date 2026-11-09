@@ -31,7 +31,6 @@ import models.climo_deviation as climo_deviation
 import models.diurnal_curve as diurnal_curve
 import models.diurnal_rate_anomaly as diurnal_rate_anomaly
 import models.ensemble as barogram_ensemble
-import models.ensemble_bias_correction as ensemble_bias_correction
 import models.external_corrected as external_corrected
 import models.inverse_pressure_transfer as inverse_pressure_transfer
 import models.moisture_trajectory as moisture_trajectory
@@ -109,7 +108,6 @@ _MODELS = [
     nws_model,
     tempest_forecast_model,
     external_corrected,
-    ensemble_bias_correction,     # must run right before barogram_ensemble: recomputes its raw blend
     barogram_ensemble,  # must be last: reads base model rows from current run
 ]
 

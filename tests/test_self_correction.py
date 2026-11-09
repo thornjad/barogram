@@ -4,6 +4,7 @@ from tests.conftest import make_output_db
 _ISSUED_AT = 1_700_000_000
 
 
+# models 4 and 5 store a raw mix (member -1), which is where their bias is learned from
 def _seed_history(conn, model_id, variable, lead_hours, value, observed, issued_at):
     valid_at = issued_at + lead_hours * 3600
     error = value - observed
@@ -12,7 +13,7 @@ def _seed_history(conn, model_id, variable, lead_hours, value, observed, issued_
         insert into forecasts
             (model_id, model, member_id, issued_at, valid_at, lead_hours, variable,
              value, observed, error, mae, scored_at)
-        values (?, 'test_model', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, 'test_model', -1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (model_id, issued_at, valid_at, lead_hours, variable, value, observed, error,
          abs(error), issued_at + 1),

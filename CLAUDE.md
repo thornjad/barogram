@@ -173,7 +173,7 @@ lowercase as well.
 | 29  | moisture_trajectory          | base     | done   |
 | 30  | trend_climo_blend            | base     | done   |
 | 100 | barogram_ensemble            | ensemble | done   |
-| 101 | ensemble_bias_correction     | base     | done   |
+| 101 | ensemble_bias_correction     | base     | retired: now barogram_ensemble's self_correction member 101 |
 | 200 | nws                          | external | done   |
 | 201 | tempest_forecast             | external | done   |
 | 202 | external_corrected           | external | done   |

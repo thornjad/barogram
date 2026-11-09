@@ -695,8 +695,8 @@ def _weights_section_html(
 
     _EXT_CORRECTED_ID = 202
 
-    # ensemble_bias_correction (model 101) has no weight table of its own --
-    # it re-enters barogram_ensemble as member 101, so its tuned weight lives
+    # the ensemble's self-correction is member 101 of barogram_ensemble (it was
+    # the separate model 101 before it was folded in), so its tuned weight lives
     # in avg_weights[100][101]. Surfaced via the exclude-101 toggle on model
     # 100's own block below, not a separate pinned block.
     _ENSEMBLE_ID = 100
@@ -762,7 +762,7 @@ def _weights_section_html(
 
             if model_id == _ENSEMBLE_ID and _BIAS_CORRECTION_ID in members_data:
                 # purely visual counterfactual: what would the other members'
-                # weights be if ensemble_bias_correction weren't a member,
+                # weights be if the self-correction weren't a member,
                 # renormalized so they still sum to 1. Does not touch the
                 # actual weights table or how tune/blend_cells compute this.
                 w101 = {
@@ -786,7 +786,7 @@ def _weights_section_html(
                     f'<input type="checkbox" id="wt101-toggle-{model_id}" class="wt101-checkbox">'
                     f'<div class="wt101-toggle-bar">'
                     f'<label for="wt101-toggle-{model_id}" class="mae-raw-btn">'
-                    f'Exclude ensemble_bias_correction (model 101)</label>'
+                    f'Exclude self-correction (member 101)</label>'
                     f'</div>'
                     f'<div class="table-scroll wt101-view-with">'
                     f'<table class="weight-table">{thead}<tbody>{table_rows_html}</tbody></table>'

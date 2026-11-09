@@ -1,9 +1,8 @@
 # standard self-correction member: a model's own member_id=0 forecast plus a
 # learned bias from that same model's own historical scored error at
-# (variable, lead_hours) -- the same idea models/external_corrected.py and
-# models/ensemble_bias_correction.py already use, generalized into a shared
-# helper so any base model can add it as one more ordinary member instead of
-# duplicating the bias math. It must be called with the model's OWN raw mix
+# (variable, lead_hours) -- the same idea models/external_corrected.py uses,
+# generalized into a shared helper so any model (the ensemble included) can add
+# it as one more ordinary member instead of duplicating the bias math. It must be called with the model's OWN raw mix
 # (the value it would output without self-correction), never another model's --
 # the whole point is a model learning to counteract its own systematic error.
 #

@@ -26,8 +26,18 @@ loop so all base model rows are committed before it reads them.
 | 9 | surface_signs | model 9 member_id=0 |
 | 10 | synoptic_state_machine | model 10 member_id=0 |
 | 12 | bogo | model 12 member_id=0 |
+| 101 | self_correction | model 100's own self-correction (the former model 101), not a contributing model |
 
 Members are discovered dynamically via `db.sync_ensemble_members` — new base models are added automatically when they first run. member_id equals the contributing model's MODEL_ID.
+
+## Self-correction and the final member 0
+
+Member 0 as `run()` produces it is the raw blend of the contributing base models. Member 101 is the
+ensemble's self-correction member: the raw blend minus a bias learned from the `raw_mix` history
+(member -1) of this model. `sc_blend.apply` then stores the raw blend as `raw_mix` and replaces member 0
+with the raw blend blended with member 101 at its stored tune weight, exactly as for every base model
+(see [self_correction.md](self_correction.md)). Model 100's `raw_mix` history starts empty at the cutover,
+so member 101 has no value for the first day or two and member 0 is the raw blend meanwhile.
 
 ## Weighting
 

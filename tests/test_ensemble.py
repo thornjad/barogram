@@ -210,3 +210,100 @@ def test_member_rows_carry_their_own_confidence():
     rows = ens.run(obs, _ISSUED_AT, conn_out=conn)
     member_row = next(r for r in rows if r["member_id"] == 1)
     assert abs(member_row["confidence"] - 0.42) < 1e-9
+
+
+# --- self-correction (member 101, formerly model 101) ---
+
+def _register_sc(conn):
+    conn.execute("insert or ignore into members (model_id, member_id, name) "
+                 "values (100, 101, 'self_correction')")
+    conn.execute("insert or ignore into members (model_id, member_id, name) "
+                 "values (100, -1, 'raw_mix')")
+
+
+def _seed_raw_mix_history(conn, bias, runs=5, variable="temperature", lead_hours=6):
+    for d in range(1, runs + 1):
+        issued = _ISSUED_AT - d * 86400
+        conn.execute(
+            """
+            insert into forecasts
+                (model_id, model, member_id, issued_at, valid_at, lead_hours, variable,
+                 value, observed, error, mae, scored_at)
+            values (100, 'barogram_ensemble', -1, ?, ?, ?, ?, ?, 15.0, ?, ?, ?)
+            """,
+            (issued, issued + lead_hours * 3600, lead_hours, variable, 15.0 + bias, bias,
+             abs(bias), issued + 1),
+        )
+
+
+def test_ensemble_emits_its_own_self_correction_member():
+    conn = make_output_db()
+    _register_sc(conn)
+    _seed(conn, 1, "persistence", "temperature", 10.0)
+    _seed(conn, 2, "climatological_mean", "temperature", 20.0)
+    _seed_raw_mix_history(conn, bias=2.0)
+
+    rows = ens.run(make_obs(), _ISSUED_AT, conn_out=conn)
+
+    mean_row = next(r for r in rows if r["member_id"] == 0)
+    sc_row = next(r for r in rows if r["member_id"] == 101)
+    # learned from the raw mix history (+2.0 hot), not from the final member 0
+    assert abs(sc_row["value"] - (mean_row["value"] - 2.0)) < 1e-9
+    assert sc_row["valid_at"] == mean_row["valid_at"]
+
+
+def test_self_correction_is_none_without_enough_history():
+    conn = make_output_db()
+    _register_sc(conn)
+    _seed(conn, 1, "persistence", "temperature", 10.0)
+
+    rows = ens.run(make_obs(), _ISSUED_AT, conn_out=conn)
+
+    assert next(r for r in rows if r["member_id"] == 101)["value"] is None
+
+
+def test_self_correction_member_does_not_change_the_raw_blend():
+    conn = make_output_db()
+    _register_sc(conn)
+    _seed(conn, 1, "persistence", "temperature", 10.0)
+    _seed(conn, 2, "climatological_mean", "temperature", 20.0)
+    _seed_raw_mix_history(conn, bias=2.0)
+
+    rows = ens.run(make_obs(), _ISSUED_AT, conn_out=conn)
+
+    # member 0 is the blend of the base models only; sc_blend adds the correction later
+    assert abs(next(r for r in rows if r["member_id"] == 0)["value"] - 15.0) < 1e-9
+
+
+def test_self_correction_confidence_comes_from_its_own_history():
+    conn = make_output_db()
+    _register_sc(conn)
+    _seed(conn, 1, "persistence", "temperature", 10.0)
+
+    rows = ens.run(make_obs(), _ISSUED_AT, conn_out=conn,
+                   member_history={101: []}, default_matches=[])
+
+    # no history yet: the confidence is the zero the other members report, not missing
+    assert next(r for r in rows if r["member_id"] == 101)["confidence"] == 0.0
+
+
+def test_sc_blend_gives_the_ensemble_a_final_member_zero_and_a_raw_mix():
+    import db
+    import sc_blend
+
+    conn = make_output_db()
+    _register_sc(conn)
+    _seed(conn, 1, "persistence", "temperature", 10.0)
+    _seed(conn, 2, "climatological_mean", "temperature", 20.0)
+    _seed_raw_mix_history(conn, bias=2.0)
+    s = ens._sector(_VALID_AT)
+    weights = {(1, "temperature", 6, s): 0.4, (2, "temperature", 6, s): 0.4,
+               (101, "temperature", 6, s): 0.2}
+
+    rows = ens.run(make_obs(), _ISSUED_AT, conn_out=conn, weights=weights)
+    out = sc_blend.apply(rows, sc_members=[(101, "self_correction")], weights=weights)
+
+    final = next(r for r in out if r["member_id"] == 0)
+    raw = next(r for r in out if r["member_id"] == db.RAW_MIX_ID)
+    assert abs(raw["value"] - 15.0) < 1e-9
+    assert abs(final["value"] - (0.8 * 15.0 + 0.2 * 13.0)) < 1e-9
