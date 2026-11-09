@@ -441,6 +441,41 @@ def member_ids_for_model(conn: sqlite3.Connection, model_id: int) -> list[int]:
     ]
 
 
+# a model's output without its self-correction, stored as its own scored member.
+# non-positive so everything that already skips aggregate rows (tune, the huber
+# delta pool, the dashboard member lists) skips it with no extra code.
+RAW_MIX_ID = -1
+
+
+def has_raw_mix(conn: sqlite3.Connection, model_id: int) -> bool:
+    """True when the model stores its raw mix and so takes part in the sc blend."""
+    return conn.execute(
+        "select 1 from members where model_id = ? and member_id = ? and name = 'raw_mix'",
+        (model_id, RAW_MIX_ID),
+    ).fetchone() is not None
+
+
+def sc_blend_models(conn: sqlite3.Connection) -> dict[int, list[tuple[int, str]]]:
+    """{model_id: [(sc_member_id, name), ...]} for every model that has a raw_mix member."""
+    rows = conn.execute(
+        """
+        select r.model_id, m.member_id, m.name
+        from members r
+        left join members m
+          on m.model_id = r.model_id and m.name in ('self_correction', 'self_correction_fast')
+        where r.member_id = ? and r.name = 'raw_mix'
+        order by r.model_id, m.member_id
+        """,
+        (RAW_MIX_ID,),
+    ).fetchall()
+    result: dict[int, list[tuple[int, str]]] = {}
+    for r in rows:
+        sc = result.setdefault(r["model_id"], [])
+        if r["member_id"] is not None:
+            sc.append((r["member_id"], r["name"]))
+    return result
+
+
 def reference_errors_by_sector(conn: sqlite3.Connection, model_ids: list,
                                 since: int | None = None) -> list:
     """Raw signed errors for member_id=0 rows of the given reference model IDs.

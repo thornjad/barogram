@@ -14,6 +14,7 @@ from pathlib import Path
 import config as cfg
 import dashboard as dash
 import score as scorer
+import sc_blend
 import db
 import fmt
 import sync as _sync
@@ -233,6 +234,7 @@ def cmd_forecast(args, conf):
             _confidence.matched_day_spreads(conn_in, shared_default_matches or [])
         )
 
+    sc_blend_models = db.sc_blend_models(conn_out)
     total_rows = 0
     failed = []
     for model in _MODELS:
@@ -259,6 +261,18 @@ def cmd_forecast(args, conf):
                 }
                 kwargs["default_matches"] = shared_default_matches
             rows = model.run(obs, issued_at, **kwargs)
+            if model.MODEL_ID in sc_blend_models:
+                # a blend bug must not drop the model's own forecast: fall back to its
+                # unblended rows and report it, instead of losing every registered model
+                try:
+                    rows = sc_blend.apply(
+                        rows, sc_members=sc_blend_models[model.MODEL_ID],
+                        weights=kwargs.get("weights"),
+                    )
+                except Exception as e:
+                    print(f"  {model.MODEL_NAME}: sc blend ERROR — {e}", file=sys.stderr)
+                    traceback.print_exc(file=sys.stderr)
+                    failed.append(f"{model.MODEL_NAME} (stage two)")
             db.insert_forecasts(conn_out, rows)
             total_rows += len(rows)
             print(f"  {model.MODEL_NAME}: {len(rows)} rows")

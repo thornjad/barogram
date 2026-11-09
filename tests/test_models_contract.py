@@ -47,6 +47,44 @@ def _make_seeded_output_db(issued_at: int):
     return conn
 
 
+def run_model(model, obs, issued_at, conn_in, conn_out, weights=None):
+    """Run one model the way cmd_forecast does, with canned external fetches."""
+    kwargs = {}
+    if getattr(model, "NEEDS_CONN_IN", False):
+        kwargs["conn_in"] = conn_in
+    if getattr(model, "NEEDS_CONN_OUT", False):
+        kwargs["conn_out"] = conn_out
+    if getattr(model, "NEEDS_WEIGHTS", False):
+        kwargs["weights"] = weights if weights is not None else {}
+    if getattr(model, "NEEDS_MATCH_HISTORY", False):
+        member_ids = db.member_ids_for_model(conn_out, model.MODEL_ID)
+        kwargs["member_history"] = {mid: [] for mid in member_ids}
+        kwargs["default_matches"] = []
+
+    if getattr(model, "NEEDS_CONF", False):
+        # models requiring external API credentials are tested with a
+        # mock fetch so CI doesn't need real credentials
+        kwargs["conf"] = SimpleNamespace(
+            tempest_station_id="99999", tempest_token="fake-token"
+        )
+        canned = {
+            issued_at + h * 3600: {
+                "temperature": 20.0,
+                "dewpoint": 14.0,
+            }
+            for h in range(1, 25)
+        }
+        mod = importlib.import_module(f"models.{model.MODEL_NAME}")
+        if hasattr(mod, "_fetch"):
+            with patch.object(mod, "_fetch", return_value=canned):
+                return model.run(obs, issued_at, **kwargs)
+        # multi-source models (e.g. external_corrected) import named fetchers
+        with patch.object(mod, "_fetch_nws", return_value=canned):
+            with patch.object(mod, "_fetch_tempest", return_value=canned):
+                return model.run(obs, issued_at, **kwargs)
+    return model.run(obs, issued_at, **kwargs)
+
+
 def test_all_models_satisfy_contract():
     obs = make_obs()
     issued_at = obs["timestamp"]
@@ -54,42 +92,7 @@ def test_all_models_satisfy_contract():
     seeded_conn_out = _make_seeded_output_db(issued_at)
 
     for model in barogram._MODELS:
-        kwargs = {}
-        if getattr(model, "NEEDS_CONN_IN", False):
-            kwargs["conn_in"] = conn_in
-        if getattr(model, "NEEDS_CONN_OUT", False):
-            kwargs["conn_out"] = seeded_conn_out
-        if getattr(model, "NEEDS_WEIGHTS", False):
-            kwargs["weights"] = {}
-        if getattr(model, "NEEDS_MATCH_HISTORY", False):
-            member_ids = db.member_ids_for_model(seeded_conn_out, model.MODEL_ID)
-            kwargs["member_history"] = {mid: [] for mid in member_ids}
-            kwargs["default_matches"] = []
-
-        if getattr(model, "NEEDS_CONF", False):
-            # models requiring external API credentials are tested with a
-            # mock fetch so CI doesn't need real credentials
-            kwargs["conf"] = SimpleNamespace(
-                tempest_station_id="99999", tempest_token="fake-token"
-            )
-            canned = {
-                issued_at + h * 3600: {
-                    "temperature": 20.0,
-                    "dewpoint": 14.0,
-                }
-                for h in range(1, 25)
-            }
-            mod = importlib.import_module(f"models.{model.MODEL_NAME}")
-            if hasattr(mod, "_fetch"):
-                with patch.object(mod, "_fetch", return_value=canned):
-                    rows = model.run(obs, issued_at, **kwargs)
-            else:
-                # multi-source models (e.g. external_corrected) import named fetchers
-                with patch.object(mod, "_fetch_nws", return_value=canned):
-                    with patch.object(mod, "_fetch_tempest", return_value=canned):
-                        rows = model.run(obs, issued_at, **kwargs)
-        else:
-            rows = model.run(obs, issued_at, **kwargs)
+        rows = run_model(model, obs, issued_at, conn_in, seeded_conn_out)
 
         assert len(rows) > 0, f"{model.MODEL_NAME}: run() returned no rows"
 

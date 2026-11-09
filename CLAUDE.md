@@ -67,7 +67,7 @@ Flags: `--input` targets wxlog; `--format json` emits JSON instead of a table.
    - `MODEL_ID: int` — next unused ID
    - `MODEL_NAME: str`
    - `NEEDS_CONN_IN = True` if the model needs historical input DB access, else omit
-   - `NEEDS_CONN_OUT = True` if the model needs output DB access, else omit. Needed by nearly every base model now (all but `persistence`, `climatological_mean`, `nws`, `tempest_forecast`), mainly to add a standard self-correction member via `models/_self_correction.py` — see [Standard self-correction member](docs/self_correction.md) and "Adding it to another existing model" there
+   - `NEEDS_CONN_OUT = True` if the model needs output DB access, else omit. Needed by nearly every base model now (all but `persistence`, `climatological_mean`, `nws`, `tempest_forecast`), mainly to add a standard self-correction member via `models/_self_correction.py` — see [Standard self-correction member](docs/self_correction.md) and "Adding it to another model" there (registering a `raw_mix` member at id `-1` turns on the blend of that member into member 0)
    - `NEEDS_WEIGHTS = True` if the model accepts skill-score member weights, else omit
    - `NEEDS_CONF = True` if the model needs the barogram config (e.g. external API URLs), else omit
    - `NEEDS_ALL_OBS = True` if the model needs the full Tempest obs history for the run (shared/computed once, not per-model), else omit
@@ -123,6 +123,14 @@ ensemble spread as `spread`. All members share the same `issued_at`.
 Register each `(model_id, member_id, name)` pair in the members table via that model's
 own numbered migration file (not `001_baseline.sql`). Member names should be short descriptive labels
 (e.g. `"week-heavy"`, `"exponential"`). The member_id=0 row has `name=null`.
+
+**What member_id=0 holds.** `run()` emits member 0 as the model's raw mix. For a model
+that stores a raw mix (a `raw_mix` member at id `-1` in `members`, which also turns the
+blend on), `sc_blend.apply` runs in `cmd_forecast` before the rows are inserted: it adds
+a `raw_mix` row (member -1, a copy of the raw mix) and replaces member 0 with the raw
+mix blended with the model's self-correction members at their stored tune weights. So
+the stored member 0 is the model's final output, and `raw_mix` is its output without
+self-correction. See [Standard self-correction member](docs/self_correction.md).
 
 ## SQL style
 
@@ -294,6 +302,7 @@ node screenshots/capture.js
 - `barogram.py` — CLI entry point; `_MODELS` list controls which models run
 - `db.py` — all database access; input DB is read-only, output DB is read-write
 - `config.py` — loads `barogram.toml`
+- `sc_blend.py` — blends a model's self-correction members into its member 0 (see docs/self_correction.md)
 - `score.py` — matches forecasts to observations within ±30 min
 - `dashboard.py` — generates `dashboard.html`
 - `fmt.py` — shared formatting helpers

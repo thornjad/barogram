@@ -3,9 +3,14 @@
 # (variable, lead_hours) -- the same idea models/external_corrected.py and
 # models/ensemble_bias_correction.py already use, generalized into a shared
 # helper so any base model can add it as one more ordinary member instead of
-# duplicating the bias math. It must be called with the model's OWN
-# member_id=0, never another model's -- the whole point is a model learning
-# to counteract its own systematic error.
+# duplicating the bias math. It must be called with the model's OWN raw mix
+# (the value it would output without self-correction), never another model's --
+# the whole point is a model learning to counteract its own systematic error.
+#
+# The bias is learned from the model's stored raw mix (member RAW_MIX_ID) when
+# the model has one, because its member 0 then holds the final value, which
+# already contains this correction and would teach it back to itself. A model
+# without a raw mix member still has a raw member 0 and learns from that.
 #
 # Gated behind _MIN_SAMPLES so a cell with too little scored history doesn't
 # apply a wild correction learned from noise; those cells get value=None,
@@ -20,7 +25,7 @@ _WINDOW_DAYS = 60
 def corrected_value(conn_out, model_id: int, variable: str, lead_hours: int,
                      raw_value: float | None, issued_at: int,
                      window_days: int = _WINDOW_DAYS) -> float | None:
-    """Bias-corrected reading of model_id's own member_id=0 value for one
+    """Bias-corrected reading of model_id's own raw mix value for one
     (variable, lead_hours) cell.
 
     Returns None when raw_value is None, conn_out isn't available, or fewer
@@ -30,7 +35,10 @@ def corrected_value(conn_out, model_id: int, variable: str, lead_hours: int,
     if raw_value is None or conn_out is None:
         return None
     since = issued_at - window_days * 86400
-    history = db.model_signed_error_history(conn_out, model_id, 0, variable, lead_hours, since)
+    source_member = db.RAW_MIX_ID if db.has_raw_mix(conn_out, model_id) else 0
+    history = db.model_signed_error_history(
+        conn_out, model_id, source_member, variable, lead_hours, since
+    )
     if len(history) < _MIN_SAMPLES:
         return None
     bias = sum(r["error"] for r in history) / len(history)
