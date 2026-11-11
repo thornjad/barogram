@@ -10,6 +10,7 @@ import datetime
 import math
 import random
 import statistics
+import zlib
 
 import db
 import models._confidence as _confidence
@@ -20,7 +21,8 @@ MODEL_NAME = "bogo"
 NEEDS_CONN_IN = True
 NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
-NEEDS_MATCH_HISTORY = True
+NEEDS_MATCH_HISTORY = True   # still required by the sc_blend contract; bogo does not use the
+                             # history for confidence (see _random_confidence)
 
 from models._climo_weights import LEAD_HOURS
 from models._utils import _sector
@@ -1072,6 +1074,14 @@ def _sine_integrator(members: dict) -> dict:
     return _clamp(result)
 
 
+def _random_confidence(issued_at: int, member_id: int, variable: str, lead_hours: int) -> float:
+    """A member's confidence: a random value from 0 to 1 inclusive, seeded from the run
+    so it is stable across processes and reproducible on a rerun. Unlike other models,
+    bogo's confidence does not come from how its errors looked on similar days."""
+    seed = zlib.crc32(f"{issued_at}:{member_id}:{variable}:{lead_hours}".encode())
+    return random.Random(seed).randint(0, 1000) / 1000
+
+
 def _ensemble_mean(members: dict, member_confidence: dict, weights, current_ts: int) -> tuple[dict, dict]:
     result = {}
     result_confidence = {}
@@ -1194,11 +1204,11 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_his
     mr[68] = _sine_reviewer(mr)
     mr[69] = _sine_integrator(mr)
 
+    # random is bogo's algorithm for confidence: each member states its own seeded random
+    # value, the way every other model's members state one from their evidence
     member_confidence = {
         mid: {
-            (lead, var): _confidence.confidence_for_cell(
-                (member_history or {}).get(mid, []), var, lead, (default_matches or [])
-            )
+            (lead, var): _random_confidence(issued_at, mid, var, lead)
             for lead in LEAD_HOURS for var in ["temperature", "dewpoint", "pressure"]
         }
         for mid in mr
@@ -1207,9 +1217,7 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_his
     mean_data, mean_confidence = _ensemble_mean(mr, member_confidence, weights, obs["timestamp"])
 
     self_correction_confidence = {
-        (lead, var): _confidence.confidence_for_cell(
-            (member_history or {}).get(_SELF_CORRECTION_MEMBER, []), var, lead, (default_matches or [])
-        )
+        (lead, var): _random_confidence(issued_at, _SELF_CORRECTION_MEMBER, var, lead)
         for lead in LEAD_HOURS for var in ["temperature", "dewpoint", "pressure"]
     }
 
