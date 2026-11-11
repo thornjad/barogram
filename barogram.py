@@ -51,6 +51,7 @@ import models.tempest_forecast as tempest_forecast_model
 import models.trend_climo_blend as trend_climo_blend
 import models.weighted_climatological_mean as weighted_climatological_mean
 import models.wind_veer_detector as wind_veer_detector
+import models._calibration as _calibration
 import models._confidence as _confidence
 import similarity_tune
 
@@ -187,6 +188,43 @@ def cmd_conditions(args, conf):
         print("no NWS observations found")
 
 
+_CALIB_WINDOW_DAYS = 365   # calibration learns from the last year of scored outcomes
+
+
+def _stamp_calibration(rows: list[dict], log: dict, table) -> tuple[int, int]:
+    """Attach each row's evidence-score bin (conf_bin) so scoring can tally its hit or
+    miss, and recalibrate aggregate rows. Returns (leaf rows labeled, aggregate rows).
+
+    A leaf row is stamped only when its confidence still equals what confidence_for_cell
+    logged for it (anything that rewrote it, or never went through
+    confidence_for_cell, stays unlabeled and out of the tally). A member 0 row that is
+    not a matching leaf is an aggregate (a model's blend, including the ensemble's
+    headline): its own group confidence is the score, and the tally says how often the
+    blend's value landed within tolerance at that group confidence."""
+    leaf = agg = 0
+    for row in rows:
+        conf = row.get("confidence")
+        member_id = row.get("member_id", 0)   # single-member models may omit it; insert defaults to 0
+        entry = log.get((row["model_id"], member_id, row["variable"], row["lead_hours"]))
+        if entry is not None and conf is not None and abs(conf - entry[1]) <= 1e-9:
+            if entry[0] is not None:   # no bin means a leaf with no evidence: stays 0.0, untallied
+                row["conf_bin"] = entry[0]
+                leaf += 1
+        elif member_id == 0 and row.get("value") is not None and conf is not None:
+            score_bin = _calibration.score_bin(conf)
+            row["conf_bin"] = _calibration.aggregate_bin(score_bin)
+            try:
+                calibrated = table.lookup(row["variable"], row["lead_hours"], _calibration.AGGREGATE_N_BIN,
+                                          _calibration.AGGREGATE_FORM_BIN, score_bin)
+            except Exception as e:
+                _confidence.report_lookup_error(e)
+                calibrated = None
+            if calibrated is not None:
+                row["confidence"] = calibrated
+            agg += 1
+    return leaf, agg
+
+
 def cmd_forecast(args, conf):
     _sync_check()
     issued_at = int(time.time())
@@ -231,11 +269,16 @@ def cmd_forecast(args, conf):
         _confidence.set_spread(
             _confidence.matched_day_spreads(conn_in, shared_default_matches or [])
         )
+    calib_table = _calibration.build_table(
+        *db.load_calib_counts(conn_out, issued_at // 86400 - _CALIB_WINDOW_DAYS)
+    )
+    _confidence.set_calibration(calib_table)
 
     sc_blend_models = db.sc_blend_models(conn_out)
     total_rows = 0
     failed = []
     for model in _MODELS:
+        _confidence.pop_issue_log()
         try:
             kwargs = {}
             if getattr(model, "NEEDS_CONF", False):
@@ -255,7 +298,8 @@ def cmd_forecast(args, conf):
                 member_ids = db.member_ids_for_model(conn_out, model.MODEL_ID)
                 kwargs["member_history"] = {
                     mid: _confidence.CellHistory(
-                        db.model_error_history(conn_out, model.MODEL_ID, mid, since)
+                        db.model_error_history(conn_out, model.MODEL_ID, mid, since),
+                        model_id=model.MODEL_ID, member_id=mid, now=issued_at,
                     )
                     for mid in member_ids
                 }
@@ -273,9 +317,10 @@ def cmd_forecast(args, conf):
                     print(f"  {model.MODEL_NAME}: sc blend ERROR — {e}", file=sys.stderr)
                     traceback.print_exc(file=sys.stderr)
                     failed.append(f"{model.MODEL_NAME} (stage two)")
+            leaf_labeled, agg_labeled = _stamp_calibration(rows, _confidence.pop_issue_log(), calib_table)
             db.insert_forecasts(conn_out, rows)
             total_rows += len(rows)
-            print(f"  {model.MODEL_NAME}: {len(rows)} rows")
+            print(f"  {model.MODEL_NAME}: {len(rows)} rows, labeled {leaf_labeled}, aggregate {agg_labeled}")
         except Exception as e:
             print(f"  {model.MODEL_NAME}: ERROR — {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
@@ -776,50 +821,45 @@ def cmd_tune(args, conf):
 
 
 def cmd_calibration(args, conf):
+    """Honesty report: do stated confidences match how often forecasts landed inside the
+    hit tolerance? Labeled rows (a measured confidence the tally can check) get a hit rate
+    per 10-point confidence band; rows the tally cannot check (BOGO's members, raw_mix,
+    copied ensemble rows, rows from before the calibration migration) are only counted.
+    Band counts double as the spread histogram. Reports facts; targets no shape."""
+    migrations_dir = Path(__file__).parent / "migrations"
     conn_out = db.open_output_db(conf.output_db)
+    db.run_migrations(conn_out, migrations_dir)
     rows = db.confidence_calibration_rows(conn_out)
     if not rows:
         print("no scored rows with a confidence value yet")
         return
 
-    # per-cell baseline error, same definition confidence_for_cell itself uses,
-    # so "relative error" below is comparable across variables/leads that
-    # otherwise live on very different error scales
-    cell_errors = defaultdict(list)
+    labeled = defaultdict(list)    # band -> [(stated confidence, hit)]
+    unlabeled = defaultdict(int)   # band -> count
     for r in rows:
-        cell_errors[(r["model_id"], r["member_id"], r["variable"], r["lead_hours"])].append(r["mae"])
-    cell_baseline = {k: sum(v) / len(v) for k, v in cell_errors.items()}
+        band = min(int(r["confidence"] * 10), 9)
+        if r["conf_bin"] is None:
+            unlabeled[band] += 1
+        else:
+            labeled[band].append((r["confidence"], _calibration.is_hit(r["variable"], r["lead_hours"], r["mae"])))
 
-    buckets = defaultdict(list)
-    for r in rows:
-        key = (r["model_id"], r["member_id"], r["variable"], r["lead_hours"])
-        baseline = cell_baseline[key]
-        if baseline <= 0:
+    print("confidence honesty -- labeled rows: stated confidence vs how often the forecast landed inside the hit band")
+    print(f"{'stated':>10}  {'rows':>9}  {'mean stated':>12}  {'hit rate':>9}")
+    for band in range(10):
+        obs = labeled.get(band)
+        if not obs:
             continue
-        rel_error = r["mae"] / baseline
-        decile = min(int(r["confidence"] * 10), 9)
-        buckets[decile].append(rel_error)
+        mean_stated = sum(c for c, _ in obs) / len(obs)
+        hit_rate = sum(1 for _, h in obs if h) / len(obs)
+        label = f"{band * 10}-{band * 10 + 10}%"
+        print(f"{label:>10}  {len(obs):9d}  {mean_stated:12.3f}  {hit_rate:9.3f}")
 
-    print("confidence calibration -- relative error = mae / that cell's own average error")
-    print(f"{'confidence':>12}  {'n':>7}  {'mean rel. error':>16}")
-    prev_mean = None
-    monotonic = True
-    for decile in range(10):
-        errs = buckets.get(decile, [])
-        if not errs:
-            continue
-        mean_err = sum(errs) / len(errs)
-        label = f"{decile * 10:2d}-{decile * 10 + 10:2d}%"
-        print(f"{label:>12}  {len(errs):7d}  {mean_err:16.3f}")
-        if prev_mean is not None and mean_err > prev_mean:
-            monotonic = False
-        prev_mean = mean_err
-
-    if monotonic:
-        print("\nmonotonic: higher confidence deciles show lower relative error, as expected")
-    else:
-        print("\nnot monotonic: at least one higher-confidence decile shows worse relative "
-              "error than a lower one -- confidence isn't cleanly tracking real accuracy yet")
+    print("\nunlabeled rows (not checkable against the tally): count per stated-confidence band")
+    print(f"{'stated':>10}  {'rows':>9}")
+    for band in range(10):
+        if unlabeled.get(band):
+            label = f"{band * 10}-{band * 10 + 10}%"
+            print(f"{label:>10}  {unlabeled[band]:9d}")
 
 
 def cmd_doctor(args, conf):

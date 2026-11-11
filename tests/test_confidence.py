@@ -54,12 +54,10 @@ def test_confidence_for_cell_filters_wrong_cell():
     assert result == 0.0
 
 
-def test_confidence_for_cell_counts_multiple_runs_within_tolerance_window():
-    """Two scored runs both within _MATCH_HOUR_TOLERANCE_SEC of the matched
-    day's own clock-time snapshot both get counted -- not just the nearest
-    one. Uses two in-window runs with DIFFERENT errors (0.0 and 8.0) so
-    aggregating both (average 4.0) is numerically distinguishable from
-    counting only one."""
+def test_confidence_for_cell_two_runs_near_one_matched_moment_count_once():
+    """Two scored runs both within _MATCH_HOUR_TOLERANCE_SEC of the same matched
+    moment are one piece of evidence, their errors averaged (0.0 and 8.0 give 4.0),
+    not two samples. Back-to-back runs must not inflate the evidence."""
     base = 10_000_000
     base -= base % _DAY  # day-align so hour offsets below can't cross midnight
     matched_day_start = base + 5 * _DAY
@@ -69,16 +67,11 @@ def test_confidence_for_cell_counts_multiple_runs_within_tolerance_window():
     overall_avg = sum(r["mae"] for r in history) / len(history)
     confidence.set_spread({("temperature", 24): overall_avg})
     result = confidence.confidence_for_cell(history, "temperature", 24, [matched_day_start])
-    assert result is not None
 
-    expected_both_counted = confidence.blended_confidence(
-        [0.0, 8.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
-    )
-    expected_nearest_only = confidence.blended_confidence(
-        [0.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
-    )
-    assert abs(result - expected_both_counted) < 1e-9
-    assert abs(result - expected_nearest_only) > 1e-6
+    expected_one_moment = confidence.blended_confidence([4.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT)
+    expected_two_samples = confidence.blended_confidence([0.0, 8.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT)
+    assert abs(result - expected_one_moment) < 1e-9
+    assert abs(result - expected_two_samples) > 1e-6
 
 
 def test_confidence_for_cell_excludes_runs_outside_hour_tolerance():
@@ -101,7 +94,7 @@ def test_confidence_for_cell_excludes_runs_outside_hour_tolerance():
         [0.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
     )
     expected_if_whole_day_counted = confidence.blended_confidence(
-        [0.0, 20.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
+        [10.0], overall_avg, confidence._CONFIDENCE_PSEUDOCOUNT
     )
     assert abs(result - expected_in_window_only) < 1e-9
     assert abs(result - expected_if_whole_day_counted) > 1e-6
@@ -514,3 +507,152 @@ def test_cell_history_matches_naive_filter_across_cells(monkeypatch):
             expected = _naive_confidence_for_cell(history, variable, lead, matched, 2.5 if variable != "pressure" and lead != 24 else None)
             assert confidence.confidence_for_cell(indexed, variable, lead, matched) == expected
             assert confidence.confidence_for_cell(history, variable, lead, matched) == expected
+
+
+# --- evidence score, labeling log, calibration lookup, recent form ---
+
+import models._calibration as calibration  # noqa: E402
+
+
+def _history_with_one_matched_moment(ids=None):
+    base = 10_000_000
+    base -= base % _DAY
+    matched = base + 5 * _DAY
+    rows = [_row("temperature", 24, base + d * _DAY, 10.0) for d in range(10) if d != 5]
+    rows.append(_row("temperature", 24, matched + 3600, 2.0))
+    return confidence.CellHistory(rows, **(ids or {})), matched
+
+
+def test_evidence_log_records_bin_and_result_keyed_by_ids():
+    hist, matched = _history_with_one_matched_moment({"model_id": 7, "member_id": 3})
+    result = confidence.confidence_for_cell(hist, "temperature", 24, [matched])
+
+    log = confidence.pop_issue_log()
+    conf_bin, logged = log[(7, 3, "temperature", 24)]
+    assert logged == result
+    n_b, f_b, _ = calibration.unpack(conf_bin)
+    assert (n_b, f_b) == (0, 1)       # one matched moment, no recent-form window
+    assert confidence.pop_issue_log() == {}   # popping empties it
+
+
+def test_history_without_ids_logs_nothing():
+    hist, matched = _history_with_one_matched_moment()
+    confidence.confidence_for_cell(hist, "temperature", 24, [matched])
+    assert confidence.pop_issue_log() == {}
+
+
+def test_zero_evidence_returns_zero_and_logs_a_binless_entry():
+    """A leaf with nothing to judge logs (None, 0.0) so cmd_forecast can tell it from an
+    aggregate (which is absent from the log) and leave its 0.0 alone."""
+    hist, _ = _history_with_one_matched_moment({"model_id": 7, "member_id": 3})
+    far_away = 10_000_000 + 400 * _DAY   # no scored run near this moment
+    assert confidence.confidence_for_cell(hist, "temperature", 24, [far_away]) == 0.0
+    assert confidence.pop_issue_log() == {(7, 3, "temperature", 24): (None, 0.0)}
+
+
+def test_every_zero_evidence_path_logs_the_binless_entry():
+    ids = {"model_id": 7, "member_id": 3}
+    no_cell = confidence.CellHistory([], **ids)
+    too_short = confidence.CellHistory([_row("temperature", 24, 10_000_000 + d * _DAY, 1.0) for d in range(3)], **ids)
+    for hist, matched in ((no_cell, [1000]), (too_short, [1000])):
+        assert confidence.confidence_for_cell(hist, "temperature", 24, matched) == 0.0
+        assert confidence.pop_issue_log() == {(7, 3, "temperature", 24): (None, 0.0)}
+    hist, matched = _history_with_one_matched_moment(ids)
+    confidence.set_spread({})   # no spread known
+    assert confidence.confidence_for_cell(hist, "temperature", 24, [matched]) == 0.0
+    assert confidence.pop_issue_log() == {(7, 3, "temperature", 24): (None, 0.0)}
+    hist, _ = _history_with_one_matched_moment(ids)
+    assert confidence.confidence_for_cell(hist, "temperature", 24, []) == 0.0   # no matches at all
+    assert confidence.pop_issue_log() == {(7, 3, "temperature", 24): (None, 0.0)}
+
+
+def test_last_logged_value_for_a_key_wins():
+    hist, matched = _history_with_one_matched_moment({"model_id": 7, "member_id": 3})
+    confidence.confidence_for_cell(hist, "temperature", 24, [matched])
+    second = confidence.confidence_for_cell(hist, "temperature", 24, [matched])
+    assert confidence.pop_issue_log()[(7, 3, "temperature", 24)][1] == second
+
+
+class _FixedTable:
+    def lookup(self, variable, lead_hours, n_bin, form_bin, score_bin):
+        return 0.42
+
+
+class _BrokenTable:
+    def lookup(self, *args):
+        raise RuntimeError("boom")
+
+
+def test_active_calibration_cell_replaces_the_fallback_formula():
+    hist, matched = _history_with_one_matched_moment({"model_id": 7, "member_id": 3})
+    confidence.set_calibration(_FixedTable())
+    result = confidence.confidence_for_cell(hist, "temperature", 24, [matched])
+    assert result == 0.42
+    assert confidence.pop_issue_log()[(7, 3, "temperature", 24)][1] == 0.42
+
+
+def test_lookup_exception_falls_back_to_the_old_formula_and_still_logs():
+    hist, matched = _history_with_one_matched_moment({"model_id": 7, "member_id": 3})
+    fallback = confidence.confidence_for_cell(hist, "temperature", 24, [matched])
+    confidence.pop_issue_log()
+
+    confidence.set_calibration(_BrokenTable())
+    result = confidence.confidence_for_cell(hist, "temperature", 24, [matched])
+
+    assert result == fallback
+    assert (7, 3, "temperature", 24) in confidence.pop_issue_log()
+
+
+def _form_rows(recent_mae, older_mae, now, blocks, extra_in_first_block=0, extra_mae=99.0):
+    """Lead-6 cell rows: a long older history plus one scored run in each of `blocks`
+    distinct 6-hour valid-time blocks inside the last 48 h."""
+    rows = [_row("temperature", 6, now - (3 + d) * _DAY, older_mae) for d in range(1, 60)]
+    for k in range(blocks):
+        valid = now - 2 * 3600 - k * 7 * 3600          # 7 h apart: always a new 6 h block
+        rows.append(_row("temperature", 6, valid - 6 * 3600, recent_mae))
+    first_valid = now - 2 * 3600
+    for i in range(extra_in_first_block):
+        rows.append(_row("temperature", 6, first_valid - 6 * 3600 + (i + 1) * 60, extra_mae))
+    return rows
+
+
+def test_form_bin_hot_when_recent_error_well_below_long_run():
+    now = 20_000_000
+    hist = confidence.CellHistory(_form_rows(1.0, 10.0, now, blocks=5), now=now)
+    assert hist.form_bin("temperature", 6) == 2
+
+
+def test_form_bin_cold_when_recent_error_well_above_long_run():
+    now = 20_000_000
+    hist = confidence.CellHistory(_form_rows(30.0, 2.0, now, blocks=5), now=now)
+    assert hist.form_bin("temperature", 6) == 0
+
+
+def test_form_bin_even_when_recent_error_matches_long_run():
+    now = 20_000_000
+    hist = confidence.CellHistory(_form_rows(10.0, 10.0, now, blocks=5), now=now)
+    assert hist.form_bin("temperature", 6) == 1
+
+
+def test_form_bin_even_with_fewer_than_three_blocks():
+    now = 20_000_000
+    hist = confidence.CellHistory(_form_rows(0.1, 10.0, now, blocks=2), now=now)
+    assert hist.form_bin("temperature", 6) == 1
+
+
+def test_form_back_to_back_runs_in_one_block_count_once():
+    now = 20_000_000
+    one_bad = confidence.CellHistory(_form_rows(10.0, 10.0, now, 4, extra_in_first_block=1), now=now)
+    five_bad = confidence.CellHistory(_form_rows(10.0, 10.0, now, 4, extra_in_first_block=5), now=now)
+    # the burst's block mean differs (more bad runs average higher), but a block is one
+    # data point: recent mean is the mean of four block means either way
+    assert one_bad.recent_mean("temperature", 6) < five_bad.recent_mean("temperature", 6)
+    plain = confidence.CellHistory(_form_rows(10.0, 10.0, now, 4), now=now)
+    assert plain.recent_mean("temperature", 6) == 10.0
+    # five bad runs in ONE block move the recent mean by at most that block's share
+    assert five_bad.recent_mean("temperature", 6) < (10.0 * 3 + 99.0) / 4 + 1e-9
+
+
+def test_form_bin_without_now_is_even():
+    rows = [_row("temperature", 6, 1_000_000 + d * _DAY, 1.0) for d in range(30)]
+    assert confidence.CellHistory(rows).form_bin("temperature", 6) == 1

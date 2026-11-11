@@ -2,17 +2,19 @@
 
 import datetime
 import math
+import sys
 from collections import defaultdict
 
 import numpy as np
 
 import db
+import models._calibration as _calibration
 import models._similarity as _similarity
 
 _CONFIDENCE_WINDOW_DAYS = 400    # independent of tune's own lookback window
-_CONFIDENCE_PSEUDOCOUNT = 8      # k in the n/(n+k) trust multiplier: trust reaches 0.5
-                                 # once n matched-and-scored days exist, and keeps
-                                 # climbing (never hard-caps) as n grows further
+_CONFIDENCE_PSEUDOCOUNT = 8      # k in the n/(n+k) trust multiplier of the cold-start
+                                 # fallback (blended_confidence), used only until the
+                                 # calibration table has data for a (variable, lead)
 _MIN_HISTORY_DAYS = 5            # a cell's history must span MORE than this many distinct days
 _MATCH_DISTANCE_THRESHOLD = 8.0  # analog candidates farther than this (in sigma-normalized
                                  # distance units, see _similarity.distance) aren't a real
@@ -27,6 +29,11 @@ _CONFIDENCE_FLOOR = 0.001        # 0.1%, not 10% -- a member reporting genuine 0
                                  # "I don't know what I'm doing" should count for almost
                                  # nothing, not a full tenth of a confident member's weight
 _TREND_WINDOW_SEC = 3 * 3600     # how far back each trend delta looks
+_FORM_WINDOW_SEC = 48 * 3600     # recent form looks at outcomes that landed in this window
+_FORM_BLOCK_SEC = 6 * 3600       # ... averaged per block so back-to-back runs count once
+_FORM_MIN_BLOCKS = 3             # fewer distinct blocks than this and form reads as even
+_FORM_HOT_RATIO = 0.8
+_FORM_COLD_RATIO = 1.25
 _MATCH_HOUR_TOLERANCE_SEC = 90 * 60  # a matched day's own nearest-clock-time snapshot
                                  # only pulls in this model's scored runs within this
                                  # window of it, not every run from that whole calendar
@@ -114,6 +121,34 @@ _spread: dict[tuple[str, int], float] = {}
 # message-board thread for the full reasoning).
 
 
+_calibration_table = None
+# set once per forecast run by set_calibration (cmd_forecast) from the calib_counts
+# tally; None until then (tests, a fresh database), which means every cell uses the
+# cold-start fallback formula.
+
+_issue_log: dict[tuple, tuple[int, float]] = {}
+# (model_id, member_id, variable, lead_hours) -> (conf_bin or None, confidence), written by
+# confidence_for_cell for histories that know their ids and read back by cmd_forecast,
+# which stamps conf_bin on the stored rows so scoring can tally each row's hit or miss
+# against the evidence score it had at issue time.
+
+_lookup_error_reported = False
+
+
+def set_calibration(table) -> None:
+    """Call once per forecast run before computing any confidence."""
+    global _calibration_table, _lookup_error_reported
+    _calibration_table = table
+    _lookup_error_reported = False
+
+
+def pop_issue_log() -> dict:
+    """Return and clear everything confidence_for_cell logged since the last pop."""
+    global _issue_log
+    log, _issue_log = _issue_log, {}
+    return log
+
+
 def set_spread(spread: dict[tuple[str, int], float]) -> None:
     """Call once per forecast run before computing any confidence. A
     (variable, lead_hours) cell missing from `spread` (fewer than 2 matched
@@ -179,7 +214,13 @@ class CellHistory:
     Build one per member per run and pass it wherever a history list goes; a
     plain list is wrapped on the fly with the same result, only slower."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, model_id: int | None = None, member_id: int | None = None,
+                 now: int | None = None):
+        # model_id/member_id let confidence_for_cell log its evidence score for this member
+        # (see _issue_log); now (the run's issued_at) anchors the recent-form window.
+        self.model_id = model_id
+        self.member_id = member_id
+        self.now = now
         groups: dict[tuple[str, int], tuple[list, list]] = {}
         for r in rows:
             g = groups.get((r["variable"], r["lead_hours"]))
@@ -189,6 +230,7 @@ class CellHistory:
             g[1].append(r["mae"])
         self._groups = groups
         self._arrays: dict[tuple[str, int], tuple] = {}
+        self._recent: dict[tuple[str, int], float | None] = {}
 
     def cell(self, variable: str, lead_hours: int):
         """(issued_at array, mae array, distinct calendar days) for the cell, rows
@@ -203,6 +245,44 @@ class CellHistory:
             arrays = self._arrays[key] = (issued, np.array(g[1], dtype=float),
                                           np.unique(issued // 86400).size)
         return arrays
+
+    def recent_mean(self, variable: str, lead_hours: int) -> float | None:
+        """Mean error of the cell's outcomes that landed in the last _FORM_WINDOW_SEC,
+        averaging within _FORM_BLOCK_SEC valid-time blocks first so a burst of
+        back-to-back runs is one data point. None when no anchor time was given or
+        fewer than _FORM_MIN_BLOCKS blocks have outcomes."""
+        key = (variable, lead_hours)
+        if key in self._recent:
+            return self._recent[key]
+        result = None
+        cell = self.cell(variable, lead_hours)
+        if cell is not None and self.now is not None:
+            issued, mae, _ = cell
+            valid = issued + lead_hours * 3600
+            mask = (valid >= self.now - _FORM_WINDOW_SEC) & (valid <= self.now)
+            if mask.any():
+                blocks, inverse = np.unique(valid[mask] // _FORM_BLOCK_SEC, return_inverse=True)
+                if blocks.size >= _FORM_MIN_BLOCKS:
+                    block_means = np.bincount(inverse, weights=mae[mask]) / np.bincount(inverse)
+                    result = float(block_means.mean())
+        self._recent[key] = result
+        return result
+
+    def form_bin(self, variable: str, lead_hours: int) -> int:
+        """0 cold, 1 even, 2 hot: recent error against this cell's long-run error."""
+        recent = self.recent_mean(variable, lead_hours)
+        cell = self.cell(variable, lead_hours)
+        if recent is None or cell is None:
+            return 1
+        overall = float(cell[1].mean())
+        if overall <= 0:
+            return 1
+        ratio = recent / overall
+        if ratio < _FORM_HOT_RATIO:
+            return 2
+        if ratio > _FORM_COLD_RATIO:
+            return 0
+        return 1
 
 
 def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead_hours: int,
@@ -224,7 +304,7 @@ def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead
     "actually good," and never a specific reference model's error either,
     which would tie confidence to that model's own lucky or unlucky
     stretches. A cell with no known spread yet gets the same 0.0 treatment
-    as too-thin history, via blended_confidence's own guard. Each timestamp in matched_ts
+    as too-thin history. Each timestamp in matched_ts
     is a matched day's own nearest-clock-time analog snapshot (see
     find_default_matches); only
     this model's scored runs within _MATCH_HOUR_TOLERANCE_SEC of that
@@ -236,21 +316,31 @@ def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead
     matched_ts may be empty (no analog day was close enough to count as a
     real match) or nonempty but yield zero usable evidence (matched days
     exist but this model has no scored run near their clock time) -- both
-    cases mean the same thing to blended_confidence: no evidence to judge
-    confidence from.
+    cases mean the same thing: no evidence to judge confidence from, so 0.0.
+
+    Runs within the tolerance window of one matched moment are averaged into
+    a single piece of evidence (n_ev counts moments, not runs), so back-to-back
+    runs never inflate it. The member's evidence score is exp(-2 z^2) of its
+    typical error on those moments against the spread; the confidence returned is
+    what the calibration table says such a score (given n_ev and recent form) was
+    worth in measured hit rate, or the cold-start fallback formula while the
+    table has no data for this (variable, lead_hours). See docs/confidence.md.
 
     IMPORTANT for every caller: this function's result is specific to one
     (variable, lead_hours) cell. Any caller storing results across
     multiple cells must key that storage by (variable, lead_hours)
     together, never by variable alone.
     """
-    cell = (history if isinstance(history, CellHistory) else CellHistory(history)).cell(variable, lead_hours)
+    hist = history if isinstance(history, CellHistory) else CellHistory(history)
+    cell = hist.cell(variable, lead_hours)
     if cell is None:
-        return 0.0
+        return _no_evidence(hist, variable, lead_hours)
     issued, mae, distinct_days = cell
     if distinct_days <= _MIN_HISTORY_DAYS:
-        return 0.0
+        return _no_evidence(hist, variable, lead_hours)
     spread = _spread.get((variable, lead_hours))
+    if spread is None or spread <= 0:
+        return _no_evidence(hist, variable, lead_hours)
     seen_days: set[int] = set()
     match_ts = []
     for ts in matched_ts:
@@ -259,13 +349,48 @@ def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead
             continue
         seen_days.add(day)
         match_ts.append(ts)
-    matched_errors: list[float] = []
-    if match_ts:
-        # one (matched ts x run) mask; boolean indexing reads it matched-ts-major, then
-        # in history order, the same order a per-ts scan of the cell's rows would append
-        near = np.abs(issued[None, :] - np.array(match_ts)[:, None]) <= _MATCH_HOUR_TOLERANCE_SEC
-        matched_errors = np.broadcast_to(mae, near.shape)[near].tolist()
-    return blended_confidence(matched_errors, spread, _CONFIDENCE_PSEUDOCOUNT)
+    if not match_ts:
+        return _no_evidence(hist, variable, lead_hours)
+    # one piece of evidence per matched moment that has any scored run near it: runs
+    # within the tolerance window of the same moment are averaged, never counted twice
+    near = np.abs(issued[None, :] - np.array(match_ts)[:, None]) <= _MATCH_HOUR_TOLERANCE_SEC
+    runs = near.sum(axis=1)
+    has_runs = runs > 0
+    if not has_runs.any():
+        return _no_evidence(hist, variable, lead_hours)
+    moment_errors = ((near * mae[None, :]).sum(axis=1)[has_runs] / runs[has_runs]).tolist()
+    n_ev = len(moment_errors)
+    z = (sum(moment_errors) / n_ev) / spread
+    score = math.exp(-2.0 * z * z)
+    conf_bin = _calibration.pack(_calibration.n_bin(n_ev), hist.form_bin(variable, lead_hours),
+                                 _calibration.score_bin(score))
+    result = None
+    if _calibration_table is not None:
+        try:
+            result = _calibration_table.lookup(variable, lead_hours, *_calibration.unpack(conf_bin))
+        except Exception as e:  # a lookup bug must not take every model down
+            report_lookup_error(e)
+    if result is None:
+        result = blended_confidence(moment_errors, spread, _CONFIDENCE_PSEUDOCOUNT)
+    if hist.model_id is not None and hist.member_id is not None:
+        _issue_log[(hist.model_id, hist.member_id, variable, lead_hours)] = (conf_bin, result)
+    return result
+
+
+def _no_evidence(hist: "CellHistory", variable: str, lead_hours: int) -> float:
+    """The 0.0 of a cell with nothing to judge. Logged with no bin when the history knows
+    its ids, so cmd_forecast can tell a leaf row that has no evidence from an aggregate
+    (rows absent from the log): a leaf's 0.0 must stay 0.0, never be recalibrated."""
+    if hist.model_id is not None and hist.member_id is not None:
+        _issue_log[(hist.model_id, hist.member_id, variable, lead_hours)] = (None, 0.0)
+    return 0.0
+
+
+def report_lookup_error(e: Exception) -> None:
+    global _lookup_error_reported
+    if not _lookup_error_reported:
+        _lookup_error_reported = True
+        print(f"confidence calibration lookup failed, keeping the uncalibrated value: {e!r}", file=sys.stderr)
 
 
 def blended_confidence(matched_errors: list[float], spread: float | None,
