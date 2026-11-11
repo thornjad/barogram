@@ -267,16 +267,34 @@ def climo_bucket_obs(
 
 
 def update_scored_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    """Write each row's score. A row carrying a "calib" dict (variable, lead_hours,
+    n_bin, form_bin, score_bin, day, hit) also adds its hit or miss to calib_counts,
+    but only when this update is the one that actually scored it, so two scorers that
+    selected the same unscored row cannot count it twice."""
     conn.execute("begin")
     try:
-        conn.executemany(
-            """
-            update forecasts
-            set observed = :observed, error = :error, mae = :mae, scored_at = :scored_at
-            where id = :id and scored_at is null
-            """,
-            rows,
-        )
+        for row in rows:
+            cur = conn.execute(
+                """
+                update forecasts
+                set observed = :observed, error = :error, mae = :mae, scored_at = :scored_at
+                where id = :id and scored_at is null
+                """,
+                row,
+            )
+            calib = row.get("calib")
+            if cur.rowcount == 1 and calib is not None:
+                conn.execute(
+                    """
+                    insert into calib_counts
+                        (variable, lead_hours, n_bin, form_bin, score_bin, day, hits, total)
+                    values
+                        (:variable, :lead_hours, :n_bin, :form_bin, :score_bin, :day, :hit, 1)
+                    on conflict (variable, lead_hours, n_bin, form_bin, score_bin, day)
+                    do update set hits = hits + excluded.hits, total = total + excluded.total
+                    """,
+                    calib,
+                )
         conn.execute("commit")
     except Exception:
         conn.execute("rollback")
@@ -414,21 +432,63 @@ def model_signed_error_history(conn: sqlite3.Connection, model_id: int, member_i
 
 def confidence_calibration_rows(conn: sqlite3.Connection, since: int | None = None) -> list:
     """Every scored row that has a real confidence value: (model_id, member_id,
-    variable, lead_hours, confidence, mae). Feeds cmd_calibration's decile
-    bucketing -- checks whether a higher claimed confidence actually tracks
-    lower real forecast error, the calibration measurement models/_confidence.py
-    itself has no way to validate on its own.
+    variable, lead_hours, confidence, mae, conf_bin). Feeds cmd_calibration's honesty
+    report -- stated confidence against how often the forecast landed inside the hit
+    band; conf_bin tells labeled rows (the tally can check them) from the rest.
     """
     since_clause = "and issued_at >= ?" if since is not None else ""
     return conn.execute(
         f"""
-        select model_id, member_id, variable, lead_hours, confidence, mae
+        select model_id, member_id, variable, lead_hours, confidence, mae, conf_bin
         from forecasts
         where confidence is not null and mae is not null and scored_at is not null
           {since_clause}
         """,
         (since,) if since is not None else (),
     ).fetchall()
+
+
+def load_calib_counts(conn: sqlite3.Connection, since_day: int) -> tuple[dict, dict]:
+    """The calibration tally since `since_day` (issue-day number), as the two dicts
+    models._calibration.build_table takes.
+
+    fine: {(variable, lead_hours, n_bin, form_bin, score_bin): (days, p_hat)}
+    coarse: {(variable, lead_hours, score_bin): (days, p_hat)}, per-day sums over the
+    leaf bins; n_bin 3 (aggregate rows) never enters it.
+
+    days counts distinct issue-days and p_hat is the mean of each day's hit rate, so a
+    day with thousands of rows weighs the same as a day with one.
+    """
+    fine = {
+        (r["variable"], r["lead_hours"], r["n_bin"], r["form_bin"], r["score_bin"]): (r["days"], r["p_hat"])
+        for r in conn.execute(
+            """
+            select variable, lead_hours, n_bin, form_bin, score_bin,
+                   count(*) as days, avg(hits * 1.0 / total) as p_hat
+            from calib_counts
+            where day >= ? and total > 0
+            group by variable, lead_hours, n_bin, form_bin, score_bin
+            """,
+            (since_day,),
+        )
+    }
+    coarse = {
+        (r["variable"], r["lead_hours"], r["score_bin"]): (r["days"], r["p_hat"])
+        for r in conn.execute(
+            """
+            select variable, lead_hours, score_bin, count(*) as days, avg(h * 1.0 / t) as p_hat
+            from (
+                select variable, lead_hours, score_bin, day, sum(hits) as h, sum(total) as t
+                from calib_counts
+                where day >= ? and n_bin < 3 and total > 0
+                group by variable, lead_hours, score_bin, day
+            )
+            group by variable, lead_hours, score_bin
+            """,
+            (since_day,),
+        )
+    }
+    return fine, coarse
 
 
 def member_ids_for_model(conn: sqlite3.Connection, model_id: int) -> list[int]:
@@ -1608,6 +1668,7 @@ def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
             "member_id": row.get("member_id", 0),
             "spread": row.get("spread"),
             "confidence": row.get("confidence"),
+            "conf_bin": row.get("conf_bin"),
         }
         for row in rows
     ]
@@ -1617,9 +1678,11 @@ def insert_forecasts(conn: sqlite3.Connection, rows: list[dict]) -> None:
         conn.executemany(
             """
             insert or ignore into forecasts
-                (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, spread, confidence)
+                (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, spread,
+                 confidence, conf_bin)
             values
-                (:model_id, :model, :member_id, :issued_at, :valid_at, :lead_hours, :variable, :value, :spread, :confidence)
+                (:model_id, :model, :member_id, :issued_at, :valid_at, :lead_hours, :variable, :value, :spread,
+                 :confidence, :conf_bin)
             """,
             normalized,
         )

@@ -186,3 +186,89 @@ def test_null_obs_column_is_skipped():
     result = score.run(conn_in, conn_out)
 
     assert result == {"scored": 0, "skipped": 1}
+
+
+# --- calibration counting ---
+
+def _insert_labeled(conn_out, conf_bin, variable="temperature", value=20.0, member_id=1, lead=6):
+    conn_out.execute(
+        """
+        insert into forecasts
+            (model_id, model, member_id, issued_at, valid_at, lead_hours, variable, value, conf_bin)
+        values (1, 'persistence', ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (member_id, _PAST - 3600, _PAST, lead, variable, value, conf_bin),
+    )
+
+
+def _counts(conn_out):
+    return {
+        (r["variable"], r["lead_hours"], r["n_bin"], r["form_bin"], r["score_bin"]): (r["hits"], r["total"])
+        for r in conn_out.execute("select * from calib_counts")
+    }
+
+
+def test_scoring_a_labeled_row_tallies_a_hit_once():
+    import models._calibration as cal
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    _insert_obs(conn_in, _PAST, air_temp=20.0)
+    _insert_labeled(conn_out, cal.pack(1, 2, 7), value=20.5)   # error 0.5, inside the 1.11 band
+
+    score.run(conn_in, conn_out)
+    score.run(conn_in, conn_out)   # a second pass must not count it again
+
+    assert _counts(conn_out) == {("temperature", 6, 1, 2, 7): (1, 1)}
+
+
+def test_scoring_a_labeled_miss_tallies_total_without_hit():
+    import models._calibration as cal
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    _insert_obs(conn_in, _PAST, air_temp=20.0)
+    _insert_labeled(conn_out, cal.pack(0, 1, 3), value=25.0)   # error 5.0, outside the band
+
+    score.run(conn_in, conn_out)
+
+    assert _counts(conn_out) == {("temperature", 6, 0, 1, 3): (0, 1)}
+
+
+def test_unlabeled_rows_add_nothing_to_the_tally():
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    _insert_obs(conn_in, _PAST, air_temp=20.0)
+    _insert_labeled(conn_out, None, value=20.0)
+
+    score.run(conn_in, conn_out)
+
+    assert _counts(conn_out) == {}
+
+
+def test_aggregate_row_counts_under_its_reserved_cell():
+    import models._calibration as cal
+    conn_in = make_input_db()
+    conn_out = make_output_db()
+    _insert_obs(conn_in, _PAST, air_temp=20.0)
+    _insert_labeled(conn_out, cal.aggregate_bin(4), value=20.2, member_id=0)
+
+    score.run(conn_in, conn_out)
+
+    assert _counts(conn_out) == {("temperature", 6, 3, 1, 4): (1, 1)}
+
+
+def test_overlapping_scorers_count_a_row_once():
+    """Two scorers that both selected the same unscored row: only the one whose update
+    actually changed the row may add to the tally."""
+    import db
+    import models._calibration as cal
+    conn_out = make_output_db()
+    _insert_labeled(conn_out, cal.pack(1, 1, 5), value=20.0)
+    row_id = conn_out.execute("select id from forecasts").fetchone()["id"]
+    scored = {"id": row_id, "observed": 20.0, "error": 0.0, "mae": 0.0, "scored_at": _NOW,
+              "calib": {"variable": "temperature", "lead_hours": 6, "n_bin": 1, "form_bin": 1,
+                        "score_bin": 5, "day": 1, "hit": 1}}
+
+    db.update_scored_forecasts(conn_out, [scored])
+    db.update_scored_forecasts(conn_out, [scored])
+
+    assert _counts(conn_out) == {("temperature", 6, 1, 1, 5): (1, 1)}
