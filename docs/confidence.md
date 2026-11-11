@@ -2,164 +2,89 @@
 
 ## What it is
 
-`weight` (see [tune.md](tune.md)) is a long-run skill score: how good a member has
-been on average. Confidence is a second, independent signal computed live at
-forecast time: given how similar current conditions are to specific days in a
-member's own scored history, and how well that member did on those specific days,
-how much should its number right now be trusted.
+`weight` (see [tune.md](tune.md)) is a long-run skill score, how good a member has been on average. Confidence is a second, independent signal computed live at forecast time. It answers a narrower question, which is how much to trust this member's number right now, given how it did the last times conditions looked like these.
 
-Every model and every member has a confidence value — every row in the `members`
-table, across every model. This count grows as models gain members (see
-[database.md](database.md)'s `members` table and `migrations/`), so treat any
-specific total as a snapshot, not a fixed fact. The meta-ensemble
-(`barogram_ensemble`) is just another model here, combining its members'
-confidence the same way every other multi-member model does.
+Confidence is each model's own statement about itself. Most models state it from evidence, using the shared method described below, and BOGO states a seeded random value because random is its algorithm for confidence (see "Models that state their own confidence"). Every row in `members` carries a confidence value on every forecast row. The meta-ensemble (`barogram_ensemble`) is another model here and combines its members' confidence the same way every other multi-member model does.
 
-## Computing confidence
+A confidence of 0.9 means that in situations like this one, forecasts from this kind of evidence landed inside the hit tolerance about 90% of the time, measured over many separate days. Nothing caps the number below 1 and nothing pushes it up. A cell with little history gets a low number or none, and 99% only appears once about 100 or more distinct days of near-perfect hits support it.
 
-Two models with their own existing pattern-matching (`analog`, `full_state_analog`)
-reuse the exact analog days they already selected for their own value forecast, per
-member. Every other model uses a shared default fingerprint (`air_temp`, `dew_point`,
-`station_pressure`, `wind_avg`, unweighted) computed once per forecast run.
+## Evidence score
 
-The fingerprint search itself (`find_default_matches`) only counts a historical day as
-a real match if it's within `_MATCH_DISTANCE_THRESHOLD` (sigma-normalized distance,
-see `_similarity.distance`) of current conditions, keeping at most the closest
-`_MATCH_MAX_CANDIDATES`. Conditions genuinely unlike anything recorded so far (a first
-winter cold snap against a spring/summer-only dataset, for example) can and should
-return zero matches — this isn't a fallback path, it's the expected outcome the first
-time a truly novel pattern shows up.
+A member's evidence score is how small its errors were on past situations like the current one. It is an internal measurement and is never reported on its own.
 
-For a `(model_id, member_id, variable, lead_hours)` cell, `models/_confidence.py`'s
-`confidence_for_cell` takes each matched day's own nearest-clock-time analog
-timestamp and pulls in only this member's scored runs within
-`_MATCH_HOUR_TOLERANCE_SEC` of it — not that day's entire scored history. Real forecast
-runs land roughly 3 hours apart, so this grabs the one relevant run per matched day
-without diluting the pool with runs from unrelated hours.
+**Matching.** Every run fingerprints its own current conditions and finds similar past moments. The shared fingerprint (`find_default_matches`, computed once per forecast run) compares 17 Tempest columns plus a 3 hour trend of each, weighted by `FEATURE_WEIGHTS` and `TREND_FEATURE_WEIGHTS`, using sigma-normalized distance (`_similarity.distance`). A past moment only counts as a match inside `_MATCH_DISTANCE_THRESHOLD`, and at most the closest `_MATCH_MAX_CANDIDATES` are kept, so conditions unlike anything recorded can and should return zero matches. Each match is one snapshot per past calendar day, the one nearest in clock time, which means a 9 am run and a 4 pm run match different moments. `analog` and `full_state_analog` reuse the days their own forecasts already selected instead of the shared set.
 
-`blended_confidence` computes this in two independent steps, not one blend:
+**Evidence from a member's history.** For a `(model_id, member_id, variable, lead_hours)` cell, `confidence_for_cell` in `models/_confidence.py` looks at this member's scored runs within `_MATCH_HOUR_TOLERANCE_SEC` of each matched moment. Runs near the same moment are averaged into one piece of evidence, so back-to-back runs never count twice. `n_ev` is the number of matched moments with any scored run near them, and `matched_avg` is the mean of those per-moment errors.
 
 ```
-matched_avg = mean(matched_errors)
 z     = matched_avg / spread
-raw   = exp(-2 * z * z)
-trust = n / (n + _CONFIDENCE_PSEUDOCOUNT)     # n = matched-and-scored sample count
-confidence = trust * raw
+score = exp(-2 * z * z)
 ```
 
-`spread` is the natural variability of what the value actually looks like, lead_hours
-out, on days that looked like today — the population stdev of matched days' own
-observed value at the target time (`matched_day_spreads`), recomputed fresh every
-forecast run from the same shared matched-day set every model already uses.
-Deliberately the spread of the raw value, not the spread of the change from now to
-then (a 2026-09-23 design used the latter): change-based spread shrinks mechanically
-at short lead hours (barely any time for two readings to drift apart) and grows at
-long lead purely because more time passed, independent of whether models actually get
-less accurate that far out — real data showed it roughly tripling from 1h to 6h+ while
-historical error barely moved, making every model look artificially unconfident at
-short leads and artificially confident at long ones. Raw-value spread doesn't inflate
-with lead just because a longer lead was picked (see the 2026-09-24 confidence
-message-board thread). `z` compares this member's
-typical error on days like today against that natural variability: near 0 means the
-error is small next to normal wobble, past ~1–2 means it's large next to what genuinely
-different weather looks like. `raw`'s curve (steep, squared-exponential decay) beat
-gentler alternatives (a normal-distribution survival function, a logistic) in a
-real-data backtest across the ensemble and its largest base model, by a wide and
-statistically significant margin — see the 2026-09-23 confidence message-board thread.
-This replaced an earlier design comparing matched-day error against a fixed
-reference-model baseline instead of reality's own spread, which was vulnerable to that
-reference model's own lucky or unlucky stretches. `trust` is a multiplier on `raw`, not
-a blend toward it: it scales confidence *down toward zero* as evidence thins, rather
-than blending it toward a neutral 0.5 guess the way an earlier version of this design
-did. This is deliberate and matches the intended meaning of the number: confidence is a
-model's own claim about whether to trust it right now, and a claim backed by only a
-sliver of evidence deserves to be muted, in *either* direction — a single lucky match
-can't manufacture high confidence any more than a single unlucky one can manufacture
-certainty of failure. `trust` has no hard ceiling and keeps climbing as `n` grows, so a
-well-evidenced signal can reach real confidence near either extreme, not just hover
-near the middle.
+`spread` is the natural variability of the value itself, lead hours out, on the matched days (`matched_day_spreads`, the population stdev of what the value actually was at the target time). It is the spread of the raw value and not of the change from now to then, because a change-based spread shrinks at short leads and grows at long ones purely from elapsed time, which made every model look unconfident at short leads and confident at long ones. `z` near 0 means the member's error is small next to normal variation, and past 1 or 2 means the error is large next to what genuinely different weather looks like. The steep squared-exponential curve beat gentler alternatives (a normal survival function, a logistic) in a real-data backtest of the ensemble.
 
-Zero usable evidence — no analog day matched closely enough, or matched days exist but
-this member has no scored run near their clock time; both mean the same thing — returns
-exactly `0.0` (`trust` is 0, so the formula already gives this without a special case
-needed at the trust step; matched_avg being undefined at n=0 is the only reason an early
-return still exists). A cell with too little history overall (5 distinct scored days
-or fewer) also returns `0.0`: no baseline exists yet to measure this forecast against,
-which is itself zero basis for claiming any confidence at all — not a separate "unknown"
-state, just the same "nothing to trust yet" answer arrived at from a different gap in
-the evidence. Every forecast row therefore carries a real confidence number; nothing in
-this pipeline returns `None`. Confidence lands in `[0, 1)` — it approaches but never
-reaches exactly `1.0`, since `trust` never reaches exactly 1 for finite n.
+**Bins.** The score is reduced to three small integers.
 
-Per-model feature weighting on the shared fingerprint (letting a model like
-`pressure_tendency` weight `station_pressure` higher when matching analog days) was
-considered and deferred: none of these models' members are structured around feature
-sensitivity the way `analog.py`'s own members are, so there's no verified case for it
-yet. `_similarity.distance` already accepts an optional weight vector, so this stays
-cheap to add later if a concrete case shows up.
+- `score_bin` is the score in tenths, 0 to 9.
+- `n_bin` records how much evidence stands behind it, 0 for 1 to 3 matched moments, 1 for 4 to 10, 2 for 11 or more.
+- `form_bin` records recent form, 0 cold, 1 even, 2 hot. It compares the cell's outcomes that landed in the last 48 hours against its long-run error. Outcomes are averaged within 6 hour valid-time blocks first, so a burst of back-to-back runs counts once, and fewer than 3 blocks reads as even. A ratio under 0.8 is hot and over 1.25 is cold. Only scored outcomes are used, so everything in the window was already observed when the run was issued, and form reads error, never confidence.
+
+`CellHistory.recent_mean` and `form_bin` compute this, cached per cell.
+
+Zero usable evidence returns exactly 0.0, as does a cell with 5 distinct scored days or fewer (`_MIN_HISTORY_DAYS`) or a cell with no known spread. Every forecast row therefore carries a real confidence number and nothing here returns `None`.
+
+## From score to confidence
+
+A forecast is a hit when its absolute error is inside a tolerance, 2 °F (1.11 °C) for temperature and dewpoint and 1.5 hPa for pressure, the same at every lead because an error of 10 degrees is 10 degrees at any lead (`models/_calibration.py`, `tolerance`). Long-lead confidence therefore comes out low, since forecasts really do land inside that band only about 20% of the time at lead 24.
+
+**The tally.** The `calib_counts` table holds, per `(variable, lead_hours, n_bin, form_bin, score_bin, day)`, how many forecasts of that kind were hits and how many there were. `day` is the issue day, so back-to-back runs on one day add to one row. The tally pools every labeled member of every model, because many members share one weather day and a per-member cell would be too thin to trust.
+
+**Lookup.** At each forecast start `db.load_calib_counts` reads the last 365 days and `models/_calibration.py` builds a lookup from it.
+
+- A cell becomes active at 14 distinct days. Its hit rate (`p_hat`) is the mean over days of each day's hit fraction, so a day with thousands of rows weighs the same as a day with one.
+- An active cell's value is `(p_hat * days + 1) / (days + 2)`, which makes the effective sample size distinct days. Fourteen days of perfect hits give 0.9375 and 98 days give 0.99.
+- For every `(variable, lead_hours, n_bin, form_bin)` a 10 entry vector over score bins is built from the active cells, merged with pool-adjacent-violators so confidence never falls as the score rises (a thin high estimate merges with its neighbors and cannot lift them). Inactive bins take the nearest lower active value.
+- A coarse series summed over `n_bin` and `form_bin` fills bins below the lowest active fine cell, never above that cell's value, and stands in entirely when no fine cell is active.
+- When nothing is active for a `(variable, lead_hours)`, the lookup returns `None` and `confidence_for_cell` uses the cold-start fallback, `blended_confidence`, which multiplies `score` by `n / (n + _CONFIDENCE_PSEUDOCOUNT)`. The fallback retires cell by cell as the tally fills, and a lookup error also falls back, reported once per run, so a bug cannot take every model down.
+
+Zero evidence is never looked up. A member with a single matched moment gets whatever rate single-moment evidence has actually delivered, which can be well above what the old formula gave it.
+
+## Labeling and counting
+
+The tally needs each forecast's evidence bins at the time it is scored, and the stored `confidence` cannot supply them. It is already the output of the lookup, and `prune` clears it after 30 days. So each stored row keeps `conf_bin`, one packed integer holding the three bins (`models/_calibration.py`, `pack` and `unpack`). `prune` leaves it alone, which means the tally can be rebuilt from rows if the tolerance or the bins ever change.
+
+`confidence_for_cell` logs `(conf_bin, confidence)` for histories that know their model and member ids (`CellHistory` carries them, set in `cmd_forecast`). A leaf with nothing to judge (every zero-evidence return) logs no bin, so its 0.0 is never mistaken for an aggregate and recalibrated. After the model runs and any self-correction blend, `_stamp_calibration` in `barogram.py` copies `conf_bin` onto a row only if its confidence still equals what was logged. A row some later step rewrote, or one that never went through `confidence_for_cell`, stays unlabeled and never enters the tally. `cmd_forecast` prints `labeled N, aggregate M` per model, so a model that quietly stops labeling stands out.
+
+When the scorer scores a labeled row it adds the hit or miss to `calib_counts` in the same transaction, and only if its own update was the one that scored the row, so two overlapping scorers cannot count a row twice. Any migration that resets `scored_at` to null must also clear `conf_bin` on those rows for the same reason.
+
+## Aggregate rows
+
+Member 0 of a multi-member model is a blend, and a weighted mean of its members' rates is not the rate of the blend. After labeling, every member 0 row with a value and a confidence that is not a matching leaf (this covers the self-correction blend and `barogram_ensemble`'s headline) is recalibrated. Its group confidence in tenths is the score bin, `conf_bin` is `100 + score_bin`, and the lookup uses the reserved `n_bin` 3 and `form_bin` 1 cell (fine series only). At scoring time the blend's own error decides hit or miss, so the tally learns how often the blend lands inside tolerance at each group confidence. Until that cell has 14 days, the row keeps its group confidence.
+
+Because base models store recalibrated member 0 confidence and the ensemble reads those stored values, the ensemble's inputs and its own headline are both on the measured scale.
+
+## Models that state their own confidence
+
+Every model builds its members' confidences itself and uses them to weight its own member 0 blend. Most call the shared `confidence_for_cell`. BOGO's members instead each state a seeded random value from 0 to 1 inclusive (`_random_confidence` in `models/bogo.py`, seeded from the run, member, variable and lead so a rerun gives the same numbers), and those values weight BOGO's own blend like any other model's. BOGO never calls `confidence_for_cell`, so its member rows are never labeled or counted, while its member 0 is an aggregate and is recalibrated through the pooled aggregate cell like every other model's.
 
 ## Injecting confidence into a combination
 
-Every weighted model in this plan (20 of the 25) shares one combination shape:
-`models/_confidence.py`'s `combine_pattern` drops only the members missing a weight,
-then multiplies each remaining member's weight by its own confidence (floored at
-`_CONFIDENCE_FLOOR = 0.001`, 0.1% — not 10% — so no member is ever driven to fully zero
-influence, but a member reporting genuine 0% confidence still counts for almost
-nothing, and defaulted to the group's own average when a member's confidence is
-unknown, or `0.0` when *no* member in the group has a known confidence at all — same
-"nothing to base trust on" case as the zero-evidence path above, not a neutral guess),
-renormalizes, and returns both the combined value and an influence-weighted group
-confidence.
+Every weighted model shares one combination shape. `combine_pattern` in `models/_confidence.py` drops only the members missing a weight, multiplies each remaining member's weight by its confidence (floored at `_CONFIDENCE_FLOOR = 0.001`, so a member reporting 0% still counts for almost nothing without being fully excluded), uses the group's own average for a member whose confidence is unknown or 0.0 when no member's is known, renormalizes, and returns the combined value with an influence-weighted group confidence.
 
-`combine_pattern` also fixed a real, pre-existing bug independent of confidence: 16
-of these 20 models used to fall back to a plain equal average for the *entire* group
-the moment any one member lacked a weight, instead of dropping just that member. The
-other 4 (`synoptic_state_machine`, `multivariate_trend`, `barogram_ensemble`, and
-`bogo` after gaining real weights for the first time under this work) already worked
-the drop-only-the-missing-member way.
-
-The remaining two shapes: `external_corrected` (Pattern C) blends two *sources*
-(NWS, Tempest) by inverse-MAE, with each source's inverse-MAE term additionally
-multiplied by that source's own confidence; and the four Pattern E models
-(`persistence`, `climatological_mean`, `nws`, `tempest_forecast`) have no combination
-step at all, confidence is computed and attached to whichever row(s) they emit,
-nothing is combined.
+`external_corrected` blends two sources (NWS, Tempest) by inverse MAE, with each source's term also multiplied by its confidence. The four models with no combination step (`persistence`, `climatological_mean`, `nws`, `tempest_forecast`) compute confidence and attach it to the rows they emit.
 
 ## Confidence compounding through model chains
 
-`pressure_consensus_transfer` and `inverse_pressure_transfer` read other base models'
-`member_id=0` pressure values, already confidence-adjusted, then apply their own
-confidence on top; their output flows into `barogram_ensemble`, applying confidence a
-third time. This is an accepted property of "no special case," not an oversight.
+`pressure_consensus_transfer` and `inverse_pressure_transfer` read other base models' member 0 pressure values, already confidence-adjusted, and apply their own confidence on top, and their output flows into `barogram_ensemble`, which applies confidence a third time. This is an accepted consequence of leaving the models uniform. It also means their member rows carry a small share of confidence's effect into `tune`'s `huber_delta_per_variable` pool (see [database.md](database.md)), about 0.37% of that pool, which is not filtered because those rows are the two models' own predictions.
 
-This also means their own `member_id > 0` rows carry a small, ongoing share of
-confidence's effect into `tune`'s `huber_delta_per_variable` pool (see
-[database.md](database.md)), measured at 0.37% of that pool. It isn't filtered out,
-since those rows are those two models' own genuine predictions, not mirrored
-duplicates the way `barogram_ensemble`'s rows are.
+## Reading the calibration report
 
-## What this doesn't do
+`uv run barogram calibration` prints, for labeled rows, each 10-point band of stated confidence with its row count, mean stated confidence and observed hit rate. A calibrated band has a hit rate close to its mean stated confidence. A second table counts unlabeled rows per band (BOGO's members, `raw_mix`, copied ensemble rows, rows from before the calibration migration), which are not checkable against the tally. The band counts also serve as the spread histogram of confidence across runs. The report states what happened and aims at no particular shape.
 
-**Calibration** (whether a member's confidence claims actually track its real error
-over time) is not built here. It's a second-order question needing real confidence
-history to design against, which is exactly why every `forecasts` row stores its own
-`confidence` value regardless of whether anything reads it yet.
+## Limits
 
-Confidence quality is expected to improve as scored history accumulates, the same way
-every model's own accuracy has. A newly added model or member starts at `0.0`
-confidence (too little history to judge at all, see the `_MIN_HISTORY_DAYS` gate above)
-and is floored to near-zero influence in any combination until it accumulates enough
-scored history of its own; this is expected graceful-cold-start behavior, not a
-shortfall.
-
-## Verifying the mechanism, not just the wiring
-
-A real, separate concern found during review: with only a handful of matched analog
-days per cell, a confidence estimate can be statistically indistinguishable from one
-computed against random, non-matching days. Before shipping the combination-changing
-parts of this work, a merge-time spot-check (not a permanent suite test) confirmed
-confidence actually varies across members for a mature cell, and that a member with
-visibly worse matched-day error came out with lower confidence, not flat or backwards.
-Barogram's history is short everywhere, the same constraint every model in this
-ensemble already works under; this is a sanity check that the mechanism points the
-right direction, not a statistical proof it already beats noise.
+- The tolerance is fixed. Raising it for longer leads would keep long-lead rates more discriminating but changes what a stated percentage means, and it is one function (`tolerance`) to change.
+- Calibration is pooled across models, so a model that overstates itself is only corrected through its own evidence score, not by a per-model offset. A per-model dimension would plug into the same table.
+- The tally covers the last 365 days. The score is relative to the season's variability while a hit is an absolute band, so a season very different from the tally's recent past will read slightly off until it fills in.
+- Long-lead confidences are low and compressed together, which narrows the ratio between members' confidences that weights the ensemble blend at those leads.
+- A newly added model or member starts at 0.0 (too little history) and counts for almost nothing in any combination until it has scored history of its own.
