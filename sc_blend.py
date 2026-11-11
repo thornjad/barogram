@@ -65,8 +65,9 @@ def apply(rows: list[dict], *, sc_members: list[tuple[int, str]],
         member_weights = {RAW_MIX_ID: w_raw, **{r["member_id"]: stored(r["member_id"]) for r in sc_pairs}}
         confidences = {RAW_MIX_ID: raw_row.get("confidence"),
                        **{r["member_id"]: r.get("confidence") for r in sc_pairs}}
-        value, confidence = _confidence.combine_pattern(pairs, member_weights, confidences)
+        # confidence only weights the value here. member 0's own confidence is never an average
+        # of its inputs' confidences; cmd_forecast computes it from member 0's own history.
+        value, _ = _confidence.combine_pattern(pairs, member_weights, confidences)
         raw_row["value"] = value
-        raw_row["confidence"] = confidence
 
     return out + additions

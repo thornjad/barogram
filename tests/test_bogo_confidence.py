@@ -43,7 +43,17 @@ def _seed_climo(conn_in, n=35, air_temp=15.0, dew_point=5.0, pressure=1010.0):
         _insert_obs(conn_in, ts, air_temp, dew_point, pressure)
 
 
-def test_higher_weighted_member_pulls_mean_toward_own_value():
+def _fake_own_confidence(monkeypatch):
+    """pin each member's confidence to a known number so the blend math can be checked exactly"""
+    def conf(mid):
+        return 0.1 + mid / 100.0
+    monkeypatch.setattr(bogo_mod, "_own_confidence",
+                        lambda member_history, default_matches, mid, var, lead: conf(mid))
+    return conf
+
+
+def test_higher_weighted_member_pulls_mean_toward_own_value(monkeypatch):
+    conf = _fake_own_confidence(monkeypatch)
     conn_in = make_input_db()
     _seed_climo(conn_in)
     obs = make_obs(ts=_ISSUED_AT)
@@ -56,84 +66,97 @@ def test_higher_weighted_member_pulls_mean_toward_own_value():
         (_CLIMATE_ANXIETY_MID, "temperature", _LEAD, sector): 1.0,
     }
     rows = bogo_mod.run(obs, _ISSUED_AT, conn_in=conn_in, weights=weights)
-    weatherperson_val = next(
-        r["value"] for r in rows
-        if r["member_id"] == _WEATHERPERSON_MID and r["lead_hours"] == _LEAD and r["variable"] == "temperature"
-    )
-    anxiety_val = next(
-        r["value"] for r in rows
-        if r["member_id"] == _CLIMATE_ANXIETY_MID and r["lead_hours"] == _LEAD and r["variable"] == "temperature"
-    )
     mean_row = next(
         r for r in rows if r["member_id"] == 0 and r["lead_hours"] == _LEAD and r["variable"] == "temperature"
     )
-
-    assert weatherperson_val == 15.0
-    assert anxiety_val == 18.0
-
-    # 3:1 weights, each scaled by that member's own random confidence (floored like
-    # combine_pattern does)
-    c8 = max(bogo_mod._random_confidence(_ISSUED_AT, _WEATHERPERSON_MID, "temperature", _LEAD), 0.001)
-    c12 = max(bogo_mod._random_confidence(_ISSUED_AT, _CLIMATE_ANXIETY_MID, "temperature", _LEAD), 0.001)
+    # 3:1 weights, each scaled by that member's own confidence
+    c8, c12 = conf(_WEATHERPERSON_MID), conf(_CLIMATE_ANXIETY_MID)
     expected = (3.0 * c8 * 15.0 + 1.0 * c12 * 18.0) / (3.0 * c8 + 1.0 * c12)
     assert abs(mean_row["value"] - expected) < 1e-9
     assert 15.0 <= mean_row["value"] <= 18.0
 
 
-def test_each_member_states_its_own_random_confidence_and_it_weights_bogos_blend():
-    """Random is bogo's algorithm for confidence: every member claims a seeded random
-    value, and, as in every model, those confidences weight bogo's own member 0 blend."""
+def test_member_confidences_are_stated_on_the_rows_and_member_zero_has_its_own(monkeypatch):
+    _fake_own_confidence(monkeypatch)
     conn_in = make_input_db()
     _seed_climo(conn_in)
     obs = make_obs(ts=_ISSUED_AT)
-    sector = bogo_mod._sector(_VALID_AT)
-    weights = {
-        (_WEATHERPERSON_MID, "temperature", _LEAD, sector): 1.0,
-        (_CLIMATE_ANXIETY_MID, "temperature", _LEAD, sector): 1.0,
-    }
 
-    rows = bogo_mod.run(obs, _ISSUED_AT, conn_in=conn_in, weights=weights)
+    rows = bogo_mod.run(obs, _ISSUED_AT, conn_in=conn_in, weights={})
 
-    def row(mid):
-        return next(r for r in rows if r["member_id"] == mid and r["lead_hours"] == _LEAD
-                    and r["variable"] == "temperature")
-
-    c8 = bogo_mod._random_confidence(_ISSUED_AT, _WEATHERPERSON_MID, "temperature", _LEAD)
-    c12 = bogo_mod._random_confidence(_ISSUED_AT, _CLIMATE_ANXIETY_MID, "temperature", _LEAD)
-    assert row(_WEATHERPERSON_MID)["confidence"] == c8
-    assert row(_CLIMATE_ANXIETY_MID)["confidence"] == c12
-
-    w8, w12 = max(c8, 0.001), max(c12, 0.001)     # combine_pattern floors confidence
-    expected = (w8 * 15.0 + w12 * 18.0) / (w8 + w12)
-    assert abs(row(0)["value"] - expected) < 1e-9
+    for r in rows:
+        assert r["confidence"] == 0.1 + r["member_id"] / 100.0   # member 0 is its own, not an average
 
 
-def test_random_confidence_is_in_range_reproducible_and_varies_by_member():
-    draws = [bogo_mod._random_confidence(_ISSUED_AT, mid, "temperature", _LEAD) for mid in range(1, 70)]
-    assert all(0.0 <= c <= 1.0 for c in draws)
-    assert draws == [bogo_mod._random_confidence(_ISSUED_AT, mid, "temperature", _LEAD) for mid in range(1, 70)]
-    assert len(set(draws)) > 30
+def test_random_matches_is_a_random_subset_of_the_shared_matches_with_similarity_one():
+    import random
+    matches = [(1_000 * i, 0.3) for i in range(1, 21)]
+    random.seed(3)
+    sizes = set()
+    for _ in range(400):
+        picked = bogo_mod._random_matches(matches)
+        sizes.add(len(picked))
+        assert {ts for ts, _ in picked} <= {ts for ts, _ in matches}
+        assert len({ts for ts, _ in picked}) == len(picked)
+        assert all(sim == 1.0 for _, sim in picked)
+    assert 0 in sizes and 20 in sizes and len(sizes) > 10   # empty, full and everything between
 
 
-def test_random_confidence_can_reach_both_ends_of_the_range():
-    draws = {bogo_mod._random_confidence(t, 1, "temperature", 1) for t in range(30_000)}
-    assert min(draws) == 0.0
-    assert max(draws) == 1.0
+def test_random_matches_differ_between_calls_unless_a_test_seeds_them():
+    import random
+    matches = [(1_000 * i, 1.0) for i in range(1, 100)]
+    assert any(bogo_mod._random_matches(matches) != bogo_mod._random_matches(matches) for _ in range(20))
+    random.seed(11)
+    first = bogo_mod._random_matches(matches)
+    random.seed(11)
+    assert bogo_mod._random_matches(matches) == first
 
 
-def test_bogo_members_never_enter_the_calibration_log():
+def test_bogo_confidence_comes_from_its_record_on_the_matches_it_picked(monkeypatch):
+    import models._confidence as confidence
+    base = 10_000_000
+    base -= base % 86400
+    matched = [(base + d * 86400 + 3600, 0.9) for d in range(60)]
+    good = confidence.CellHistory([{"variable": "temperature", "lead_hours": _LEAD, "issued_at": ts + 600, "mae": 0.0}
+                                   for ts, _ in matched])
+    bad = confidence.CellHistory([{"variable": "temperature", "lead_hours": _LEAD, "issued_at": ts + 600, "mae": 50.0}
+                                  for ts, _ in matched])
+    monkeypatch.setattr(bogo_mod, "_random_matches", lambda m: [(ts, 1.0) for ts, _ in m])   # pick everything
+
+    assert bogo_mod._own_confidence({5: good}, matched, 5, "temperature", _LEAD) > 0.0
+    assert bogo_mod._own_confidence({5: bad}, matched, 5, "temperature", _LEAD) < 1e-6
+    assert bogo_mod._own_confidence({}, matched, 5, "temperature", _LEAD) == 0.0   # no record, no confidence
+
+
+def test_bogo_member_zero_uses_its_own_history(monkeypatch):
     import models._confidence as confidence
     conn_in = make_input_db()
     _seed_climo(conn_in)
     obs = make_obs(ts=_ISSUED_AT)
-    history = {mid: confidence.CellHistory([], model_id=12, member_id=mid, now=_ISSUED_AT) for mid in range(0, 71)}
+    base = 10_000_000
+    base -= base % 86400
+    matched = [(base + d * 86400 + 3600, 1.0) for d in range(60)]
+    zero_hist = confidence.CellHistory([{"variable": "temperature", "lead_hours": _LEAD, "issued_at": ts + 600, "mae": 0.0}
+                                        for ts, _ in matched])
+    monkeypatch.setattr(bogo_mod, "_random_matches", lambda m: list(m))
+    history = {0: zero_hist}
 
-    bogo_mod.run(obs, _ISSUED_AT, conn_in=conn_in, weights={}, member_history=history, default_matches=[])
+    rows = bogo_mod.run(obs, _ISSUED_AT, conn_in=conn_in, weights={}, member_history=history, default_matches=matched)
 
-    assert confidence.pop_issue_log() == {}
+    zero = next(r for r in rows if r["member_id"] == 0 and r["lead_hours"] == _LEAD and r["variable"] == "temperature")
+    other = next(r for r in rows if r["member_id"] == 5 and r["lead_hours"] == _LEAD and r["variable"] == "temperature")
+    assert zero["confidence"] > 0.0 and other["confidence"] == 0.0
 
 
-def test_missing_weight_drops_only_that_member():
+def test_bogo_runs_without_history_or_matches():
+    conn_in = make_input_db()
+    _seed_climo(conn_in)
+    rows = bogo_mod.run(make_obs(ts=_ISSUED_AT), _ISSUED_AT, conn_in=conn_in, weights={})
+    assert rows and all(0.0 <= r["confidence"] <= 1.0 for r in rows)
+
+
+def test_missing_weight_drops_only_that_member(monkeypatch):
+    conf = _fake_own_confidence(monkeypatch)
     conn_in = make_input_db()
     _seed_climo(conn_in)
     obs = make_obs(ts=_ISSUED_AT)
@@ -151,12 +174,10 @@ def test_missing_weight_drops_only_that_member():
         if r["lead_hours"] == _LEAD and r["variable"] == "temperature" and r["member_id"] != 0
         and r["value"] is not None
     }
-    conf = {mid: max(bogo_mod._random_confidence(_ISSUED_AT, mid, "temperature", _LEAD), 0.001)
-            for mid in member_vals}
     weighted_without_anxiety = sum(
-        conf[mid] * v for mid, v in member_vals.items() if mid != _CLIMATE_ANXIETY_MID
-    ) / sum(conf[mid] for mid in member_vals if mid != _CLIMATE_ANXIETY_MID)
-    weighted_with_anxiety = sum(conf[mid] * v for mid, v in member_vals.items()) / sum(conf.values())
+        conf(mid) * v for mid, v in member_vals.items() if mid != _CLIMATE_ANXIETY_MID
+    ) / sum(conf(mid) for mid in member_vals if mid != _CLIMATE_ANXIETY_MID)
+    weighted_with_anxiety = sum(conf(mid) * v for mid, v in member_vals.items()) / sum(conf(mid) for mid in member_vals)
 
     assert abs(mean_row["value"] - weighted_without_anxiety) < 1e-6
     assert abs(mean_row["value"] - weighted_with_anxiety) > 1e-6

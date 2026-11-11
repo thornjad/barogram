@@ -102,14 +102,3 @@ def test_incremental_vacuum_runs_without_error():
     conn = make_output_db()
     db.incremental_vacuum(conn)
     db.incremental_vacuum(conn, pages=10)
-
-
-def test_prune_leaves_conf_bin_intact():
-    conn = make_output_db()
-    row_id = _insert(conn, _OLD, scored_at=_OLD)
-    conn.execute("update forecasts set conf_bin = 37 where id = ?", (row_id,))
-
-    n = db.prune_old_forecast_details(conn, _NOW - 30 * 86400)
-
-    assert n == 1
-    assert conn.execute("select conf_bin from forecasts where id = ?", (row_id,)).fetchone()["conf_bin"] == 37

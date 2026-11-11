@@ -51,7 +51,6 @@ import models.tempest_forecast as tempest_forecast_model
 import models.trend_climo_blend as trend_climo_blend
 import models.weighted_climatological_mean as weighted_climatological_mean
 import models.wind_veer_detector as wind_veer_detector
-import models._calibration as _calibration
 import models._confidence as _confidence
 import similarity_tune
 
@@ -188,41 +187,19 @@ def cmd_conditions(args, conf):
         print("no NWS observations found")
 
 
-_CALIB_WINDOW_DAYS = 365   # calibration learns from the last year of scored outcomes
-
-
-def _stamp_calibration(rows: list[dict], log: dict, table) -> tuple[int, int]:
-    """Attach each row's evidence-score bin (conf_bin) so scoring can tally its hit or
-    miss, and recalibrate aggregate rows. Returns (leaf rows labeled, aggregate rows).
-
-    A leaf row is stamped only when its confidence still equals what confidence_for_cell
-    logged for it (anything that rewrote it, or never went through
-    confidence_for_cell, stays unlabeled and out of the tally). A member 0 row that is
-    not a matching leaf is an aggregate (a model's blend, including the ensemble's
-    headline): its own group confidence is the score, and the tally says how often the
-    blend's value landed within tolerance at that group confidence."""
-    leaf = agg = 0
+def _member_zero_confidence(rows: list[dict], member_history: dict | None, default_matches) -> None:
+    """Give every member 0 row its own confidence, computed the way any member's is, from
+    member 0's own scored history. A multi-member model's value is a blend of its members, but
+    its confidence is never an average of theirs: members' confidences only weight the
+    combination of values. For a single-member model whose member 0 already computed it this
+    way the result is the same number."""
+    if member_history is None:
+        return
     for row in rows:
-        conf = row.get("confidence")
-        member_id = row.get("member_id", 0)   # single-member models may omit it; insert defaults to 0
-        entry = log.get((row["model_id"], member_id, row["variable"], row["lead_hours"]))
-        if entry is not None and conf is not None and abs(conf - entry[1]) <= 1e-9:
-            if entry[0] is not None:   # no bin means a leaf with no evidence: stays 0.0, untallied
-                row["conf_bin"] = entry[0]
-                leaf += 1
-        elif member_id == 0 and row.get("value") is not None and conf is not None:
-            score_bin = _calibration.score_bin(conf)
-            row["conf_bin"] = _calibration.aggregate_bin(score_bin)
-            try:
-                calibrated = table.lookup(row["variable"], row["lead_hours"], _calibration.AGGREGATE_N_BIN,
-                                          _calibration.AGGREGATE_FORM_BIN, score_bin)
-            except Exception as e:
-                _confidence.report_lookup_error(e)
-                calibrated = None
-            if calibrated is not None:
-                row["confidence"] = calibrated
-            agg += 1
-    return leaf, agg
+        if row.get("member_id", 0) != 0 or row.get("value") is None:
+            continue
+        row["confidence"] = _confidence.confidence_for_cell(
+            member_history.get(0, []), row["variable"], row["lead_hours"], default_matches or [])
 
 
 def cmd_forecast(args, conf):
@@ -269,16 +246,11 @@ def cmd_forecast(args, conf):
         _confidence.set_spread(
             _confidence.matched_day_spreads(conn_in, shared_default_matches or [])
         )
-    calib_table = _calibration.build_table(
-        *db.load_calib_counts(conn_out, issued_at // 86400 - _CALIB_WINDOW_DAYS)
-    )
-    _confidence.set_calibration(calib_table)
 
     sc_blend_models = db.sc_blend_models(conn_out)
     total_rows = 0
     failed = []
     for model in _MODELS:
-        _confidence.pop_issue_log()
         try:
             kwargs = {}
             if getattr(model, "NEEDS_CONF", False):
@@ -297,10 +269,7 @@ def cmd_forecast(args, conf):
                 since = issued_at - _confidence._CONFIDENCE_WINDOW_DAYS * 86400
                 member_ids = db.member_ids_for_model(conn_out, model.MODEL_ID)
                 kwargs["member_history"] = {
-                    mid: _confidence.CellHistory(
-                        db.model_error_history(conn_out, model.MODEL_ID, mid, since),
-                        model_id=model.MODEL_ID, member_id=mid, now=issued_at,
-                    )
+                    mid: _confidence.CellHistory(db.model_error_history(conn_out, model.MODEL_ID, mid, since))
                     for mid in member_ids
                 }
                 kwargs["default_matches"] = shared_default_matches
@@ -317,10 +286,11 @@ def cmd_forecast(args, conf):
                     print(f"  {model.MODEL_NAME}: sc blend ERROR — {e}", file=sys.stderr)
                     traceback.print_exc(file=sys.stderr)
                     failed.append(f"{model.MODEL_NAME} (stage two)")
-            leaf_labeled, agg_labeled = _stamp_calibration(rows, _confidence.pop_issue_log(), calib_table)
+            if not getattr(model, "STATES_OWN_MEMBER_ZERO_CONFIDENCE", False):
+                _member_zero_confidence(rows, kwargs.get("member_history"), shared_default_matches)
             db.insert_forecasts(conn_out, rows)
             total_rows += len(rows)
-            print(f"  {model.MODEL_NAME}: {len(rows)} rows, labeled {leaf_labeled}, aggregate {agg_labeled}")
+            print(f"  {model.MODEL_NAME}: {len(rows)} rows")
         except Exception as e:
             print(f"  {model.MODEL_NAME}: ERROR — {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
@@ -820,46 +790,34 @@ def cmd_tune(args, conf):
     print(f"\nwrote {total} weight rows")
 
 
+_REPORT_HIT_TOLERANCE = {"temperature": 1.11, "dewpoint": 1.11, "pressure": 1.5}   # 2 F, 2 F, 1.5 hPa
+
+
 def cmd_calibration(args, conf):
-    """Honesty report: do stated confidences match how often forecasts landed inside the
-    hit tolerance? Labeled rows (a measured confidence the tally can check) get a hit rate
-    per 10-point confidence band; rows the tally cannot check (BOGO's members, raw_mix,
-    copied ensemble rows, rows from before the calibration migration) are only counted.
-    Band counts double as the spread histogram. Reports facts; targets no shape."""
-    migrations_dir = Path(__file__).parent / "migrations"
+    """Read-only honesty report: per 10-point band of stated confidence, how often forecasts
+    landed inside a fixed band (2 F, 2 F, 1.5 hPa) and how big their errors were. Nothing here
+    feeds back into confidence. Only rows whose confidence is still stored (prune clears it after
+    30 days) appear. The band counts double as the spread histogram of confidence across runs."""
     conn_out = db.open_output_db(conf.output_db)
-    db.run_migrations(conn_out, migrations_dir)
     rows = db.confidence_calibration_rows(conn_out)
     if not rows:
         print("no scored rows with a confidence value yet")
         return
 
-    labeled = defaultdict(list)    # band -> [(stated confidence, hit)]
-    unlabeled = defaultdict(int)   # band -> count
+    bands = defaultdict(list)   # band -> [(stated confidence, hit, mae)]
     for r in rows:
         band = min(int(r["confidence"] * 10), 9)
-        if r["conf_bin"] is None:
-            unlabeled[band] += 1
-        else:
-            labeled[band].append((r["confidence"], _calibration.is_hit(r["variable"], r["lead_hours"], r["mae"])))
+        bands[band].append((r["confidence"], r["mae"] <= _REPORT_HIT_TOLERANCE[r["variable"]], r["mae"]))
 
-    print("confidence honesty -- labeled rows: stated confidence vs how often the forecast landed inside the hit band")
-    print(f"{'stated':>10}  {'rows':>9}  {'mean stated':>12}  {'hit rate':>9}")
+    print("stated confidence vs how often the forecast landed inside 2 F / 2 F / 1.5 hPa")
+    print(f"{'stated':>10}  {'rows':>9}  {'mean stated':>12}  {'hit rate':>9}  {'mean mae':>9}")
     for band in range(10):
-        obs = labeled.get(band)
+        obs = bands.get(band)
         if not obs:
             continue
-        mean_stated = sum(c for c, _ in obs) / len(obs)
-        hit_rate = sum(1 for _, h in obs if h) / len(obs)
         label = f"{band * 10}-{band * 10 + 10}%"
-        print(f"{label:>10}  {len(obs):9d}  {mean_stated:12.3f}  {hit_rate:9.3f}")
-
-    print("\nunlabeled rows (not checkable against the tally): count per stated-confidence band")
-    print(f"{'stated':>10}  {'rows':>9}")
-    for band in range(10):
-        if unlabeled.get(band):
-            label = f"{band * 10}-{band * 10 + 10}%"
-            print(f"{label:>10}  {unlabeled[band]:9d}")
+        print(f"{label:>10}  {len(obs):9d}  {sum(c for c, _, _ in obs) / len(obs):12.3f}  "
+              f"{sum(1 for _, h, _ in obs if h) / len(obs):9.3f}  {sum(m for _, _, m in obs) / len(obs):9.3f}")
 
 
 def cmd_doctor(args, conf):
@@ -896,14 +854,20 @@ def cmd_doctor(args, conf):
 
 def cmd_tune_similarity(args, conf):
     conn_in = db.open_input_db(conf.input_db)
+    labels = [label for label, _, _ in similarity_tune.TARGETS]
     print("similarity-match backtest -- full history, walk-forward, no future leakage")
-    print("scores each weight vector by predicting each test day's actual +3h temp change")
-    print("as the mean +3h change across its matched days; lower mae is a better vector\n")
-    print(f"{'weight vector':<42} {'test days':>10} {'w/ matches':>11} {'mae (C)':>9}")
+    print("scores each weight vector by predicting each test day's actual change in")
+    print("temperature, dewpoint and pressure at +3h and +12h as the mean change across its")
+    print("matched days. Each cell is mae / baseline mae (baseline = mean change over all")
+    print("earlier days): under 1 beats ignoring the fingerprint, lower is better.\n")
+    print(f"{'weight vector':<44} {'w/ matches':>10} " + " ".join(f"{l:>9}" for l in labels) + f" {'score':>7}")
     for name, weights in similarity_tune.CANDIDATE_WEIGHT_VECTORS.items():
         result = similarity_tune.evaluate_weight_vector(conn_in, weights)
-        mae_str = f"{result['mae']:.3f}" if result["mae"] is not None else "n/a"
-        print(f"{name:<42} {result['n_test_days']:>10} {result['n_with_matches']:>11} {mae_str:>9}")
+        cells = " ".join(
+            f"{result['targets'][l]['ratio']:>9.3f}" if l in result["targets"] and result["targets"][l]["ratio"] is not None else f"{'n/a':>9}"
+            for l in labels)
+        score = f"{result['score']:.3f}" if result["score"] is not None else "n/a"
+        print(f"{name:<44} {result['n_with_matches']:>10} {cells} {score:>7}")
 
 
 def main():

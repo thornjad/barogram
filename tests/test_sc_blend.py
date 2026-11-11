@@ -70,13 +70,14 @@ def test_blend_follows_combine_pattern_with_unequal_confidences():
 
     out = _by_member(_apply(rows, _weights()))
 
-    value, conf = _confidence.combine_pattern(
+    value, _ = _confidence.combine_pattern(
         [(db.RAW_MIX_ID, 20.0), (_SC, 18.0)],
         {db.RAW_MIX_ID: 0.8, _SC: 0.2},
         {db.RAW_MIX_ID: 0.9, _SC: 0.1},
     )
     assert out[0]["value"] == pytest.approx(value)
-    assert out[0]["confidence"] == pytest.approx(conf)
+    # confidence only weights the value; member 0's confidence is never an average of its inputs'
+    assert out[0]["confidence"] == 0.9
 
 
 def test_two_sc_members_both_enter():

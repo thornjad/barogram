@@ -36,18 +36,6 @@ def _spread_default():
     _confidence.set_spread({})
 
 
-@pytest.fixture(autouse=True)
-def _calibration_reset():
-    """The calibration table and evidence log are module-level, like the spread
-    registry above: reset both so one test's table or logged evidence can't leak
-    into the next (an empty table means every cell uses the fallback formula)."""
-    _confidence.set_calibration(None)
-    _confidence.pop_issue_log()
-    yield
-    _confidence.set_calibration(None)
-    _confidence.pop_issue_log()
-
-
 def make_input_db() -> sqlite3.Connection:
     """Writable in-memory DB with wxlog schema and one pre-seeded Tempest station.
 

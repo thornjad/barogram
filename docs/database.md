@@ -113,29 +113,10 @@ Existing single-member models always write member_id=0.
 multi-member models. NULL for all other rows.
 
 `confidence REAL` — see [confidence.md](confidence.md) for the full design. Written
-on every row by every model (member rows and the member_id=0 aggregate row alike),
+on every row by every model (member rows and the member_id=0 row alike, each computed from that row's own history, never an average of other rows' confidence),
 `None` when a cell doesn't yet have enough scored history to compute one. Nulled out
 by `prune_old_forecast_details` alongside `value`/`spread`/`observed` once a row is
 past its debugging window; `error`/`mae`/`scored_at` are unaffected.
-
-`conf_bin INTEGER` — the evidence bins (example count, recent form, evidence score) a
-labeled row had when it was issued, packed into one integer by `models/_calibration.py`
-(0 to 89 for a leaf row, 100 to 109 for an aggregate row). When the scorer scores the
-row it adds the hit or miss to `calib_counts` under those bins. NULL for rows the tally
-cannot check (BOGO's members, `raw_mix`, copied ensemble rows, rows from before
-migration 070). Unlike `confidence` it is not nulled by `prune`, which lets the tally be
-rebuilt from rows if the hit tolerance or the bins ever change. A migration that resets
-`scored_at` to null must also clear `conf_bin` on those rows, or rescoring would count
-their outcomes a second time.
-
-## `calib_counts` table
-
-The tally behind confidence calibration (see [confidence.md](confidence.md)). One row per
-`(variable, lead_hours, n_bin, form_bin, score_bin, day)` with `hits` and `total`, where
-`day` is the issue day. `db.update_scored_forecasts` upserts it in the same transaction
-that scores a row, and only when its own update scored the row. `db.load_calib_counts`
-aggregates the last 365 days into the fine and coarse series `models/_calibration.py`
-builds its lookup from.
 
 `huber_delta_per_variable` (used by `tune`) filters to `m.type = 'base' and
 f.member_id > 0`, excluding every model's own aggregate row and `barogram_ensemble`

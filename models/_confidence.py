@@ -2,38 +2,45 @@
 
 import datetime
 import math
-import sys
 from collections import defaultdict
 
 import numpy as np
 
 import db
-import models._calibration as _calibration
 import models._similarity as _similarity
 
 _CONFIDENCE_WINDOW_DAYS = 400    # independent of tune's own lookback window
-_CONFIDENCE_PSEUDOCOUNT = 8      # k in the n/(n+k) trust multiplier of the cold-start
-                                 # fallback (blended_confidence), used only until the
-                                 # calibration table has data for a (variable, lead)
 _MIN_HISTORY_DAYS = 5            # a cell's history must span MORE than this many distinct days
-_MATCH_DISTANCE_THRESHOLD = 8.0  # analog candidates farther than this (in sigma-normalized
-                                 # distance units, see _similarity.distance) aren't a real
-                                 # match at all -- conditions genuinely unlike anything
-                                 # recorded should be able to return zero matches
-_MATCH_MAX_CANDIDATES = 50       # of the candidates within threshold, keep only the closest
-                                 # this many -- bounds compute/noise as more days accumulate
-                                 # without acting as a similarity requirement itself
+
+# --- matching and evidence: every value in this block is experimental and expected to change ---
+_MATCH_POOL = 200                # the closest this many past moments are kept as candidate matches,
+                                 # with no similarity gate at this stage. A compute bound, not a
+                                 # quality filter: quality is each match's similarity, below.
+_SIM_SCALE = 0.6                 # default similarity is exp(-(distance / _SIM_SCALE)^2) ...
+_SIM_MAX_DISTANCE = 1.1          # ... and exactly 0 beyond this distance. Distance is the root mean
+                                 # weighted squared z of the fingerprint (divided by the root of the
+                                 # total weight), so editing a feature weight never silently moves
+                                 # these two. 0.6 and 1.1 equal the old 2.5 and 4.5 at the old weights.
+_CRITICAL_LIMITS = {             # ... and exactly 0 when any of these differs from now by more
+    "air_temp": 5.0,             # (absolute, in the column's own unit), however close the rest
+    "dew_point": 6.0,            # of the fingerprint is: a match this far off on a variable that
+    "station_pressure": 8.0,     # defines the airmass says nothing about today
+}
+_EVIDENCE_FULL_AT = 150          # evidence curve e(n) = n^p / (n^p + K), reaching 99% at this n
+_EVIDENCE_POWER = 3
+_EVIDENCE_BASE = 0.02            # a small separate term so one match is worth about 1%, not 0.003%:
+                                 # base(n) = _EVIDENCE_BASE * n / (n + 1), zero at n = 0
+_EVIDENCE_TOP = 0.99
+_base_at_full = _EVIDENCE_BASE * _EVIDENCE_FULL_AT / (_EVIDENCE_FULL_AT + 1)
+_cubic_at_full = 1 - (1 - _EVIDENCE_TOP) / (1 - _base_at_full)
+_EVIDENCE_K = _EVIDENCE_FULL_AT ** _EVIDENCE_POWER * (1 - _cubic_at_full) / _cubic_at_full
+# K is solved so the combined curve still hits exactly _EVIDENCE_TOP at _EVIDENCE_FULL_AT
 _CONFIDENCE_FLOOR = 0.001        # 0.1%, not 10% -- a member reporting genuine 0%
                                  # confidence still keeps a sliver of ensemble influence
                                  # so it's never fully excluded, but a member that says
                                  # "I don't know what I'm doing" should count for almost
                                  # nothing, not a full tenth of a confident member's weight
 _TREND_WINDOW_SEC = 3 * 3600     # how far back each trend delta looks
-_FORM_WINDOW_SEC = 48 * 3600     # recent form looks at outcomes that landed in this window
-_FORM_BLOCK_SEC = 6 * 3600       # ... averaged per block so back-to-back runs count once
-_FORM_MIN_BLOCKS = 3             # fewer distinct blocks than this and form reads as even
-_FORM_HOT_RATIO = 0.8
-_FORM_COLD_RATIO = 1.25
 _MATCH_HOUR_TOLERANCE_SEC = 90 * 60  # a matched day's own nearest-clock-time snapshot
                                  # only pulls in this model's scored runs within this
                                  # window of it, not every run from that whole calendar
@@ -45,12 +52,13 @@ _DEFAULT_FEATURES = [
     "air_temp", "dew_point", "station_pressure", "wind_avg",
     "wind_direction", "wind_gust", "solar_radiation", "uv_index",
     "precip_accum_day", "lightning_count", "precip", "wind_lull",
-    "relative_humidity", "battery", "lightning_avg_distance",
+    "battery", "lightning_avg_distance",
     "lightning_strike_last_distance", "nc_rain",
 ]  # every raw column find_default_matches fetches for a snapshot match.
    # battery/lightning_avg_distance/lightning_strike_last_distance/nc_rain
    # were added 2026-09-18 (wxlog migration 004) -- excluded from this list:
-   # heat_index, wind_chill, delta_t (formulas over columns already here,
+   # relative_humidity (a function of air_temp and dew_point, so it double
+   # counted them; dropped from the fingerprint 2026-11-11), heat_index, wind_chill, delta_t (formulas over columns already here,
    # same double-counting reasoning that already excluded feels_like/
    # wet_bulb/air_density) and precip_type (categorical, not a continuous
    # quantity norm_sigmas/distance can z-score). All four are brand new
@@ -68,21 +76,20 @@ _TREND_FEATURES = [f"{col}_trend" for col in _DEFAULT_FEATURES]
 FEATURE_WEIGHTS = {
     "air_temp": 1.5,
     "dew_point": 1.5,
-    "station_pressure": 1.2,
-    "wind_avg": 0.6,
+    "station_pressure": 1.0,
+    "wind_avg": 0.5,
     "wind_direction": 0.6,
-    "wind_gust": 0.4,
+    "wind_gust": 0.2,
     "solar_radiation": 0.5,
-    "uv_index": 0.3,
+    "uv_index": 0.1,
     "precip_accum_day": 0.5,
-    "lightning_count": 0.3,
+    "lightning_count": 0.1,
     "precip": 0.4,
-    "wind_lull": 0.3,
-    "relative_humidity": 0.8,
-    "battery": 0.05,
-    "lightning_avg_distance": 0.3,
-    "lightning_strike_last_distance": 0.3,
-    "nc_rain": 0.4,
+    "wind_lull": 0.1,
+    "battery": 0.02,
+    "lightning_avg_distance": 0.1,
+    "lightning_strike_last_distance": 0.1,
+    "nc_rain": 0.2,
 }
 # first-guess per-feature weight for find_default_matches' distance calc, one
 # entry per _DEFAULT_FEATURES column. Temp/dewpoint/pressure dominate because
@@ -97,10 +104,15 @@ FEATURE_WEIGHTS = {
 _TREND_WEIGHT_SCALE = 0.7  # trend deltas matter (see the 2026-09-23 confidence
                            # message-board discussion on lightning trends), but
                            # a snapshot match is the primary signal -- trends
-                           # get a flat discount off their snapshot
-                           # counterpart's weight rather than their own
-                           # separately hand-picked number
-TREND_FEATURE_WEIGHTS = {f"{col}_trend": w * _TREND_WEIGHT_SCALE for col, w in FEATURE_WEIGHTS.items()}
+                           # get a discount off their snapshot counterpart's
+                           # weight rather than their own hand-picked number
+_TREND_SCALE_OVERRIDES = {  # meteorological tiers (2026-11-11): the 3h pressure change is the
+    "station_pressure": 1.0,  # synoptic signal, so it counts as much as the level; temperature
+    "air_temp": 0.8,          # trend is advection and cloud once time of day is matched; dewpoint
+    "dew_point": 0.6,         # trend has a tight sigma, so it already pulls hard per unit weight
+}
+TREND_FEATURE_WEIGHTS = {f"{col}_trend": w * _TREND_SCALE_OVERRIDES.get(col, _TREND_WEIGHT_SCALE)
+                         for col, w in FEATURE_WEIGHTS.items()}
 ALL_FEATURE_WEIGHTS = {**FEATURE_WEIGHTS, **TREND_FEATURE_WEIGHTS}
 
 _VARIABLE_COLUMN = {
@@ -113,40 +125,12 @@ _spread: dict[tuple[str, int], float] = {}
 # populated once per forecast run by set_spread (cmd_forecast, right after
 # computing shared_default_matches) from matched_day_spreads -- the natural
 # day-to-day variability of what reality actually did, lead_hours later, on
-# days that looked like today. blended_confidence compares matched-day error
+# days that looked like today. confidence_for_cell compares matched-day error
 # against this instead of a fixed reference-model baseline (the earlier
 # 2026-09-23 design): anchoring to physical reality's own variability, not a
 # specific reference model's error, means a lucky or unlucky stretch for
 # that reference model can't distort the reading (see the confidence
 # message-board thread for the full reasoning).
-
-
-_calibration_table = None
-# set once per forecast run by set_calibration (cmd_forecast) from the calib_counts
-# tally; None until then (tests, a fresh database), which means every cell uses the
-# cold-start fallback formula.
-
-_issue_log: dict[tuple, tuple[int, float]] = {}
-# (model_id, member_id, variable, lead_hours) -> (conf_bin or None, confidence), written by
-# confidence_for_cell for histories that know their ids and read back by cmd_forecast,
-# which stamps conf_bin on the stored rows so scoring can tally each row's hit or miss
-# against the evidence score it had at issue time.
-
-_lookup_error_reported = False
-
-
-def set_calibration(table) -> None:
-    """Call once per forecast run before computing any confidence."""
-    global _calibration_table, _lookup_error_reported
-    _calibration_table = table
-    _lookup_error_reported = False
-
-
-def pop_issue_log() -> dict:
-    """Return and clear everything confidence_for_cell logged since the last pop."""
-    global _issue_log
-    log, _issue_log = _issue_log, {}
-    return log
 
 
 def set_spread(spread: dict[tuple[str, int], float]) -> None:
@@ -159,7 +143,7 @@ def set_spread(spread: dict[tuple[str, int], float]) -> None:
     _spread = spread
 
 
-def matched_day_spreads(conn_in, matched_ts: list[int]) -> dict[tuple[str, int], float]:
+def matched_day_spreads(conn_in, matched_ts: list) -> dict[tuple[str, int], float]:
     """Population stdev of what the actual value looked like, lead_hours
     out, on each matched day -- one number per (variable, lead_hours),
     shared by every model that uses the same matched_ts (the shared
@@ -187,7 +171,7 @@ def matched_day_spreads(conn_in, matched_ts: list[int]) -> dict[tuple[str, int],
     speak of.
     """
     values: dict[tuple[str, int], list[float]] = defaultdict(list)
-    for ts in matched_ts:
+    for ts, _ in as_pairs(matched_ts):
         for lead_hours in range(1, 25):
             after = db.nearest_tempest_obs(conn_in, ts + lead_hours * 3600, window_sec=1800)
             if after is None:
@@ -214,13 +198,7 @@ class CellHistory:
     Build one per member per run and pass it wherever a history list goes; a
     plain list is wrapped on the fly with the same result, only slower."""
 
-    def __init__(self, rows, model_id: int | None = None, member_id: int | None = None,
-                 now: int | None = None):
-        # model_id/member_id let confidence_for_cell log its evidence score for this member
-        # (see _issue_log); now (the run's issued_at) anchors the recent-form window.
-        self.model_id = model_id
-        self.member_id = member_id
-        self.now = now
+    def __init__(self, rows):
         groups: dict[tuple[str, int], tuple[list, list]] = {}
         for r in rows:
             g = groups.get((r["variable"], r["lead_hours"]))
@@ -230,7 +208,6 @@ class CellHistory:
             g[1].append(r["mae"])
         self._groups = groups
         self._arrays: dict[tuple[str, int], tuple] = {}
-        self._recent: dict[tuple[str, int], float | None] = {}
 
     def cell(self, variable: str, lead_hours: int):
         """(issued_at array, mae array, distinct calendar days) for the cell, rows
@@ -246,85 +223,52 @@ class CellHistory:
                                           np.unique(issued // 86400).size)
         return arrays
 
-    def recent_mean(self, variable: str, lead_hours: int) -> float | None:
-        """Mean error of the cell's outcomes that landed in the last _FORM_WINDOW_SEC,
-        averaging within _FORM_BLOCK_SEC valid-time blocks first so a burst of
-        back-to-back runs is one data point. None when no anchor time was given or
-        fewer than _FORM_MIN_BLOCKS blocks have outcomes."""
-        key = (variable, lead_hours)
-        if key in self._recent:
-            return self._recent[key]
-        result = None
-        cell = self.cell(variable, lead_hours)
-        if cell is not None and self.now is not None:
-            issued, mae, _ = cell
-            valid = issued + lead_hours * 3600
-            mask = (valid >= self.now - _FORM_WINDOW_SEC) & (valid <= self.now)
-            if mask.any():
-                blocks, inverse = np.unique(valid[mask] // _FORM_BLOCK_SEC, return_inverse=True)
-                if blocks.size >= _FORM_MIN_BLOCKS:
-                    block_means = np.bincount(inverse, weights=mae[mask]) / np.bincount(inverse)
-                    result = float(block_means.mean())
-        self._recent[key] = result
-        return result
 
-    def form_bin(self, variable: str, lead_hours: int) -> int:
-        """0 cold, 1 even, 2 hot: recent error against this cell's long-run error."""
-        recent = self.recent_mean(variable, lead_hours)
-        cell = self.cell(variable, lead_hours)
-        if recent is None or cell is None:
-            return 1
-        overall = float(cell[1].mean())
-        if overall <= 0:
-            return 1
-        ratio = recent / overall
-        if ratio < _FORM_HOT_RATIO:
-            return 2
-        if ratio > _FORM_COLD_RATIO:
-            return 0
-        return 1
+def as_pairs(matches) -> list[tuple[int, float]]:
+    """Matches as (timestamp, similarity) pairs. A bare timestamp, which is what analog and
+    full_state_analog hand in for the days their own forecasts selected, counts as similarity 1."""
+    return [(m, 1.0) if isinstance(m, (int, np.integer)) else (m[0], m[1]) for m in (matches or [])]
+
+
+def evidence(n_eff: float) -> float:
+    """How much a similarity-weighted match count is worth: 0 at nothing, tiny at one match,
+    99% at _EVIDENCE_FULL_AT matches, never 1.0."""
+    if n_eff <= 0:
+        return 0.0
+    p = n_eff ** _EVIDENCE_POWER
+    cubic = p / (p + _EVIDENCE_K)
+    base = _EVIDENCE_BASE * n_eff / (n_eff + 1.0)
+    return 1.0 - (1.0 - cubic) * (1.0 - base)
 
 
 def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead_hours: int,
-                         matched_ts: list[int]) -> float:
+                         matches: list) -> float:
     """
     history is every scored row for one (model_id, member_id) pair (dicts
     with variable/lead_hours/issued_at/mae; see db.model_error_history).
+    matches is a list of past moments the member treats as similar to now: a bare
+    timestamp (similarity 1) or a (timestamp, similarity) pair with similarity in
+    [0, 1]. The shared default list comes from find_default_matches; a model with its
+    own way of choosing and weighing matches passes its own list (bogo picks at random).
 
-    Filters history to this (variable, lead_hours) cell. Returns 0.0 if the
-    cell has no scored history at all, or if its history spans
-    _MIN_HISTORY_DAYS distinct calendar days OR FEWER -- no baseline yet
-    means no basis to claim anything but zero confidence. Every forecast
-    row gets a real confidence number; this function never returns None.
+    Confidence is the member's claim that it has plenty of close matches to today
+    and did well on them:
 
-    Otherwise, the yardstick is the natural day-to-day spread of what
-    reality actually did, lead_hours out, on days that looked like today
-    (see set_spread) -- never this member's own historical average, which
-    would make "confident" mean "better than my usual mess" instead of
-    "actually good," and never a specific reference model's error either,
-    which would tie confidence to that model's own lucky or unlucky
-    stretches. A cell with no known spread yet gets the same 0.0 treatment
-    as too-thin history. Each timestamp in matched_ts
-    is a matched day's own nearest-clock-time analog snapshot (see
-    find_default_matches); only
-    this model's scored runs within _MATCH_HOUR_TOLERANCE_SEC of that
-    specific timestamp count as that match's evidence -- not every run
-    from that whole calendar day, which would dilute the pool with runs
-    from unrelated hours. Each matched calendar day is counted at most
-    once even if matched_ts repeats a day.
+        confidence = q * e(n_eff)
 
-    matched_ts may be empty (no analog day was close enough to count as a
-    real match) or nonempty but yield zero usable evidence (matched days
-    exist but this model has no scored run near their clock time) -- both
-    cases mean the same thing: no evidence to judge confidence from, so 0.0.
+    For each match that has any scored run of this member near it (within
+    _MATCH_HOUR_TOLERANCE_SEC, averaged into one piece of evidence so back-to-back runs
+    never count twice) the performance is exp(-2 z^2), z being its error over the
+    spread, the natural variability of the value itself on the matched days (see
+    set_spread), never the member's own average. n_eff is the sum of the similarities of
+    those matches and q their similarity-weighted average performance, so q says how
+    good the member was and e(n_eff) how much evidence stands behind it. q does not grow
+    with more data, e does, so volume alone never makes a mediocre member confident.
 
-    Runs within the tolerance window of one matched moment are averaged into
-    a single piece of evidence (n_ev counts moments, not runs), so back-to-back
-    runs never inflate it. The member's evidence score is exp(-2 z^2) of its
-    typical error on those moments against the spread; the confidence returned is
-    what the calibration table says such a score (given n_ev and recent form) was
-    worth in measured hit rate, or the cold-start fallback formula while the
-    table has no data for this (variable, lead_hours). See docs/confidence.md.
+    Returns 0.0 for a cell with no scored history, a history spanning
+    _MIN_HISTORY_DAYS distinct days or fewer, a cell with no known spread, or no match
+    with a scored run near it. Every forecast row gets a real confidence number; this
+    function never returns None, and never 1.0.
 
     IMPORTANT for every caller: this function's result is specific to one
     (variable, lead_hours) cell. Any caller storing results across
@@ -333,118 +277,47 @@ def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead
     """
     hist = history if isinstance(history, CellHistory) else CellHistory(history)
     cell = hist.cell(variable, lead_hours)
-    if cell is None:
-        return _no_evidence(hist, variable, lead_hours)
-    issued, mae, distinct_days = cell
-    if distinct_days <= _MIN_HISTORY_DAYS:
-        return _no_evidence(hist, variable, lead_hours)
+    if cell is None or cell[2] <= _MIN_HISTORY_DAYS:
+        return 0.0
     spread = _spread.get((variable, lead_hours))
     if spread is None or spread <= 0:
-        return _no_evidence(hist, variable, lead_hours)
+        return 0.0
+    sims, errors = _moments(cell, as_pairs(matches))
+    if errors.size == 0:
+        return 0.0
+    total_sim = float(sims.sum())
+    if total_sim <= 0:
+        return 0.0
+    z = errors / spread
+    performance = np.exp(-2.0 * z * z)
+    q = float((sims * performance).sum() / total_sim)
+    return q * evidence(total_sim)
+
+
+def _moments(cell, pairs: list[tuple[int, float]]):
+    """(similarities, mean errors) of the matched moments with any scored run near them. Runs
+    within the tolerance window of one moment are averaged, never counted twice, and a calendar
+    day matched more than once counts once (its first match). Zero-similarity matches drop out."""
+    issued, mae, _ = cell
     seen_days: set[int] = set()
-    match_ts = []
-    for ts in matched_ts:
+    match_ts, match_sim = [], []
+    for ts, sim in pairs:
         day = ts // 86400
-        if day in seen_days:
+        if day in seen_days or sim <= 0:
             continue
         seen_days.add(day)
         match_ts.append(ts)
+        match_sim.append(sim)
+    empty = (np.array([]), np.array([]))
     if not match_ts:
-        return _no_evidence(hist, variable, lead_hours)
-    # one piece of evidence per matched moment that has any scored run near it: runs
-    # within the tolerance window of the same moment are averaged, never counted twice
+        return empty
     near = np.abs(issued[None, :] - np.array(match_ts)[:, None]) <= _MATCH_HOUR_TOLERANCE_SEC
     runs = near.sum(axis=1)
     has_runs = runs > 0
     if not has_runs.any():
-        return _no_evidence(hist, variable, lead_hours)
-    moment_errors = ((near * mae[None, :]).sum(axis=1)[has_runs] / runs[has_runs]).tolist()
-    n_ev = len(moment_errors)
-    z = (sum(moment_errors) / n_ev) / spread
-    score = math.exp(-2.0 * z * z)
-    conf_bin = _calibration.pack(_calibration.n_bin(n_ev), hist.form_bin(variable, lead_hours),
-                                 _calibration.score_bin(score))
-    result = None
-    if _calibration_table is not None:
-        try:
-            result = _calibration_table.lookup(variable, lead_hours, *_calibration.unpack(conf_bin))
-        except Exception as e:  # a lookup bug must not take every model down
-            report_lookup_error(e)
-    if result is None:
-        result = blended_confidence(moment_errors, spread, _CONFIDENCE_PSEUDOCOUNT)
-    if hist.model_id is not None and hist.member_id is not None:
-        _issue_log[(hist.model_id, hist.member_id, variable, lead_hours)] = (conf_bin, result)
-    return result
-
-
-def _no_evidence(hist: "CellHistory", variable: str, lead_hours: int) -> float:
-    """The 0.0 of a cell with nothing to judge. Logged with no bin when the history knows
-    its ids, so cmd_forecast can tell a leaf row that has no evidence from an aggregate
-    (rows absent from the log): a leaf's 0.0 must stay 0.0, never be recalibrated."""
-    if hist.model_id is not None and hist.member_id is not None:
-        _issue_log[(hist.model_id, hist.member_id, variable, lead_hours)] = (None, 0.0)
-    return 0.0
-
-
-def report_lookup_error(e: Exception) -> None:
-    global _lookup_error_reported
-    if not _lookup_error_reported:
-        _lookup_error_reported = True
-        print(f"confidence calibration lookup failed, keeping the uncalibrated value: {e!r}", file=sys.stderr)
-
-
-def blended_confidence(matched_errors: list[float], spread: float | None,
-                        k: int) -> float:
-    """
-    Returns 0.0 when spread is None or <= 0 -- no natural-variability
-    yardstick to measure against at all (too few matched days had an
-    observation near the target time to compute one; see
-    matched_day_spreads). No basis to claim anything but zero confidence;
-    this function never returns None. Otherwise:
-
-        matched_avg = sum(matched_errors) / len(matched_errors)
-        z = matched_avg / spread
-        raw = exp(-2 * z * z)
-        trust = len(matched_errors) / (len(matched_errors) + k)
-        return trust * raw
-
-    z compares this member's typical error on days like today against how
-    much reality itself naturally varies on those same days: z near 0 means
-    the error is small next to normal day-to-day wobble, z past ~1-2 means
-    the error is large compared to what genuinely different weather looks
-    like. `raw`'s curve -- steep, squared-exponential decay -- was chosen
-    over gentler alternatives (a two-sided normal survival function, a
-    logistic) by backtesting real ensemble output on real scored history,
-    not picked a priori: see the 2026-09-23 confidence message-board
-    thread. Steep won decisively at the real-ensemble level (37.8% MAE
-    reduction over the prior reference-scale/1-over-(1+x) design) with
-    overwhelming statistical significance (p well under 1e-30 on two
-    independently tested models), and its advantage over the gentler
-    curves grew with model/member count rather than shrinking. `trust` is
-    a multiplier on that claim, not a blend toward it -- it scales
-    confidence DOWN toward zero as evidence thins, rather than blending it
-    toward a neutral 0.5 guess. Zero matched evidence (trust=0,
-    matched_errors empty) returns exactly 0.0: no analog day was ever a
-    close enough match, or matched days exist but this member has no
-    scored run near their clock time -- either way, there is no basis to
-    claim any confidence at all, not a coin-flip default. As n grows,
-    trust climbs toward 1.0 (no hard ceiling) and the result converges on
-    `raw`. A cell with fewer samples than k reports LESS than half of what
-    raw alone would justify, regardless of which direction raw points --
-    thin evidence deserves a muted claim in either direction, not a
-    neutral one. Result is always in [0, 1): 0.0 when there's no yardstick
-    or no matched evidence, otherwise strictly positive and never reaching
-    1.0 for finite n.
-    """
-    if spread is None or spread <= 0:
-        return 0.0
-    if not matched_errors:
-        return 0.0
-    matched_avg = sum(matched_errors) / len(matched_errors)
-    z = matched_avg / spread
-    raw = math.exp(-2.0 * z * z)
-    trust = len(matched_errors) / (len(matched_errors) + k)
-    return trust * raw
+        return empty
+    errors = (near * mae[None, :]).sum(axis=1)[has_runs] / runs[has_runs]
+    return np.array(match_sim)[has_runs], errors
 
 
 def compute_trends(now: dict, prior: dict | None,
@@ -480,15 +353,18 @@ def compute_trends(now: dict, prior: dict | None,
     return trends
 
 
-def find_default_matches(conn_in, current_ts: int) -> list[int]:
-    """The shared fingerprint search used by every model. Computed once
-    per forecast run by cmd_forecast. Returns [] on a fresh database, or
-    when nothing recorded so far is even within _MATCH_DISTANCE_THRESHOLD
-    of current conditions -- a real possibility, not just an edge case:
-    the first genuinely unprecedented cold snap or storm this station has
-    seen should return no matches at all, not the 20 nearest regardless of
-    how dissimilar they actually are. Of whatever clears the threshold,
-    keeps only the closest _MATCH_MAX_CANDIDATES."""
+def find_default_matches(conn_in, current_ts: int) -> list[tuple[int, float]]:
+    """The shared fingerprint search used by every model. Computed once per forecast
+    run by cmd_forecast. Returns (timestamp, similarity) pairs for the closest
+    _MATCH_POOL past moments (one snapshot per past day, nearest to now's clock time),
+    dropping any whose similarity is 0. [] on a fresh database or when nothing
+    recorded is similar to current conditions, which is a real possibility: the first
+    unprecedented storm should return no matches at all.
+
+    Similarity is 1 at distance 0, falls as exp(-(d / _SIM_SCALE)^2), and is exactly 0
+    beyond _SIM_MAX_DISTANCE or when temperature, dewpoint or pressure differ from now
+    by more than _CRITICAL_LIMITS. A member with its own idea of similarity can ignore
+    these similarities and pass its own to confidence_for_cell."""
     current = db.nearest_tempest_obs(conn_in, current_ts, window_sec=1800)
     # no lookback cap -- a fixed window permanently defeats analog matching's
     # purpose once history exceeds it: a once-a-year event's prior occurrence
@@ -507,18 +383,40 @@ def find_default_matches(conn_in, current_ts: int) -> list[int]:
     features = _DEFAULT_FEATURES + _TREND_FEATURES
     weights = [ALL_FEATURE_WEIGHTS[col] for col in features]
     sigmas = _similarity.norm_sigmas(candidates, features)
-    cands_with_dist = [(_similarity.distance(current, c, features, sigmas, weights), c)
-                        for c in candidates]
-    within_threshold = [(d, c) for d, c in cands_with_dist
-                         if d is not None and d <= _MATCH_DISTANCE_THRESHOLD]
-    nearest = _similarity.select_k_nearest(within_threshold, _MATCH_MAX_CANDIDATES)
-    return [c["timestamp"] for _, c in nearest]
+    norm = distance_norm(features, weights, sigmas)
+    cands_with_dist = [(None if d is None else d / norm, c)
+                        for d, c in ((_similarity.distance(current, c, features, sigmas, weights), c)
+                                     for c in candidates)]
+    nearest = _similarity.select_k_nearest(cands_with_dist, _MATCH_POOL)
+    matches = []
+    for d, c in nearest:
+        sim = default_similarity(d, current, c)
+        if sim > 0:
+            matches.append((c["timestamp"], sim))
+    return matches
+
+
+def distance_norm(features: list[str], weights: list[float], sigmas: dict) -> float:
+    """Root of the total weight of the features that have a usable sigma. Dividing
+    _similarity.distance by it makes distance a root mean weighted squared z."""
+    total = sum(w for f, w in zip(features, weights) if sigmas.get(f) is not None)
+    return math.sqrt(total) if total > 0 else 1.0
+
+
+def default_similarity(distance: float, current: dict, candidate: dict) -> float:
+    if distance > _SIM_MAX_DISTANCE:
+        return 0.0
+    for col, limit in _CRITICAL_LIMITS.items():
+        a, b = current.get(col), candidate.get(col)
+        if a is not None and b is not None and abs(a - b) > limit:
+            return 0.0
+    return math.exp(-((distance / _SIM_SCALE) ** 2))
 
 
 def member_confidences(member_history: dict[int, list[dict]] | None,
-                        default_matches: list[int] | None,
+                        default_matches: list | None,
                         member_ids: list[int], variable: str, lead_hours: int,
-                        matched_ts_by_mid: dict[int, list[int]] | None = None) -> dict[int, float]:
+                        matched_ts_by_mid: dict[int, list] | None = None) -> dict[int, float]:
     """
     Shared per-member confidence computation, called once per (variable,
     lead_hours) cell. member_history/default_matches being None degrades
@@ -561,8 +459,8 @@ def _inject(pairs: list[tuple[int, float]], member_weights: dict[int, float],
         return None, None
     known = [c for mid, _ in pairs if (c := confidences.get(mid)) is not None]
     # no member in the group reports any confidence at all -- total absence
-    # of evidence, same "nothing to base trust on" case blended_confidence's
-    # own empty-matches branch returns 0.0 for, not a neutral 0.5 guess
+    # of evidence, same "nothing to base trust on" case confidence_for_cell's
+    # own no-evidence branch returns 0.0 for, not a neutral 0.5 guess
     group_avg = sum(known) / len(known) if known else 0.0
     infl = []
     for mid, v in pairs:

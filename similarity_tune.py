@@ -12,12 +12,14 @@
 # for analog matches using ONLY strictly earlier days -- never a day at or
 # after the one being tested, so a weight vector can't get credit from
 # information the live system could never have had at the time. Score match
-# quality by predicting the test day's own actual +3h temperature change as
-# the mean +3h temperature change across its matched days, then compare to
-# what actually happened. Lower error means the vector is picking days whose
-# near-term behavior actually resembles the test day's -- a held-out check,
-# since no weight vector is scored against the same features it was used to
-# match on.
+# quality by predicting the test day's own actual change in temperature,
+# dewpoint and pressure, at +3h and +12h, as the mean change across its matched
+# days, then compare to what actually happened. Each target is scored as its
+# MAE divided by the MAE of the no-matching baseline (the mean change over all
+# earlier days), so the targets' different units average fairly and a ratio
+# under 1 means matching beats ignoring the fingerprint. Lower is better, and a
+# held-out check, since no weight vector is scored against the same features
+# it was used to match on.
 
 import time
 
@@ -28,10 +30,37 @@ import models._similarity as _similarity
 _MIN_PRIOR_CANDIDATES = 20  # skip test days too early in history to have a
                             # meaningful candidate pool behind them yet
 
+_GUESS_1 = {
+    **{c: w for c, w in {
+        "air_temp": 1.5, "dew_point": 1.5, "station_pressure": 1.2, "wind_avg": 0.6,
+        "wind_direction": 0.6, "wind_gust": 0.4, "solar_radiation": 0.5, "uv_index": 0.3,
+        "precip_accum_day": 0.5, "lightning_count": 0.3, "precip": 0.4, "wind_lull": 0.3,
+        "battery": 0.05, "lightning_avg_distance": 0.3, "lightning_strike_last_distance": 0.3,
+        "nc_rain": 0.4}.items()},
+}
+_GUESS_1.update({f"{c}_trend": w * 0.7 for c, w in list(_GUESS_1.items())})
+
+_GUESS_2 = {
+    **{c: w for c, w in _GUESS_1.items() if not c.endswith("_trend")},
+    "wind_avg": 0.5, "wind_direction": 0.4, "wind_gust": 0.2, "uv_index": 0.1,
+    "lightning_count": 0.1, "wind_lull": 0.1, "battery": 0.02, "lightning_avg_distance": 0.1,
+    "lightning_strike_last_distance": 0.1, "nc_rain": 0.2,
+}
+_GUESS_2.update({f"{c}_trend": w * 0.7 for c, w in list(_GUESS_2.items())})
+
 CANDIDATE_WEIGHT_VECTORS: dict[str, dict[str, float] | None] = {
     "flat (pre-2026-09-23 baseline)": None,
-    "guess-1 (temp/dewpoint/pressure weighted)": _confidence.ALL_FEATURE_WEIGHTS,
+    "guess-1 (pre-2026-11-11 weights)": _GUESS_1,
+    "guess-2 (noisy lowered, humidity dropped)": _GUESS_2,
+    "guess-3 (meteorological tiers, live since 2026-11-11)": _confidence.ALL_FEATURE_WEIGHTS,
 }
+
+# (label, column, horizon in seconds): what each test day is asked to predict
+TARGETS = [
+    (f"{label}{hours}h", col, hours * 3600)
+    for hours in (3, 12)
+    for label, col in (("temp +", "air_temp"), ("dew +", "dew_point"), ("pres +", "station_pressure"))
+]
 
 
 def _day_anchor_ts() -> int:
@@ -47,25 +76,25 @@ def _day_anchor_ts() -> int:
 
 def _augment_day(conn_in, row: dict) -> dict:
     """Adds this day's own trend deltas (same computation the live system
-    uses) and its actual +3h temperature change, the held-out target this
-    backtest scores against."""
+    uses) and its actual change in each TARGETS column, the held-out targets
+    this backtest scores against."""
     row = dict(row)
     prior = db.nearest_tempest_obs(conn_in, row["timestamp"] - _confidence._TREND_WINDOW_SEC, window_sec=1800)
     row.update(_confidence.compute_trends(row, prior))
-    future = db.nearest_tempest_obs(conn_in, row["timestamp"] + _confidence._TREND_WINDOW_SEC, window_sec=1800)
-    if future is not None and future["air_temp"] is not None and row.get("air_temp") is not None:
-        row["_actual_future_temp_delta"] = future["air_temp"] - row["air_temp"]
-    else:
-        row["_actual_future_temp_delta"] = None
+    row["_actual"] = {}
+    for label, col, horizon in TARGETS:
+        future = db.nearest_tempest_obs(conn_in, row["timestamp"] + horizon, window_sec=1800)
+        if future is not None and future[col] is not None and row.get(col) is not None:
+            row["_actual"][label] = future[col] - row[col]
     return row
 
 
 def evaluate_weight_vector(conn_in, weight_map: dict[str, float] | None) -> dict:
-    """Returns {'n_test_days': int, 'n_with_matches': int, 'mae': float | None}.
-    mae is the mean absolute error between each test day's predicted and
-    actual +3h temperature change, averaged over every test day that got at
-    least one match under this weight vector. None means no test day ever
-    matched. Lower mae means this vector picks better analog days."""
+    """Returns {'n_test_days', 'n_with_matches', 'targets': {label: {'mae', 'baseline_mae',
+    'ratio'}}, 'score'}. A test day counts for a target only when it has a matched day
+    with that target known. 'ratio' is mae / baseline_mae per target and 'score' their
+    mean, so lower is better and under 1 means the fingerprint beats the no-matching
+    baseline. n_with_matches counts test days with any match at all."""
     anchor = _day_anchor_ts()
     raw_days = db.full_analog_candidates(conn_in, anchor, lookback_sec=None)
     days = sorted((_augment_day(conn_in, dict(r)) for r in raw_days), key=lambda r: r["timestamp"])
@@ -73,28 +102,43 @@ def evaluate_weight_vector(conn_in, weight_map: dict[str, float] | None) -> dict
     features = _confidence._DEFAULT_FEATURES + _confidence._TREND_FEATURES
     weights = [weight_map[col] for col in features] if weight_map is not None else None
 
-    errors = []
+    errors = {label: [] for label, _, _ in TARGETS}
+    base_errors = {label: [] for label, _, _ in TARGETS}
     n_with_matches = 0
     for i, test_day in enumerate(days):
-        if i < _MIN_PRIOR_CANDIDATES or test_day["_actual_future_temp_delta"] is None:
+        if i < _MIN_PRIOR_CANDIDATES:
             continue
         prior_days = days[:i]  # strictly earlier days only -- no future leakage
         sigmas = _similarity.norm_sigmas(prior_days, features)
         dists = [(_similarity.distance(test_day, c, features, sigmas, weights), c)
                  for c in prior_days]
-        within = [(d, c) for d, c in dists
-                  if d is not None and d <= _confidence._MATCH_DISTANCE_THRESHOLD]
-        nearest = _similarity.select_k_nearest(within, _confidence._MATCH_MAX_CANDIDATES)
-        matched_deltas = [c["_actual_future_temp_delta"] for _, c in nearest
-                           if c["_actual_future_temp_delta"] is not None]
-        if not matched_deltas:
+        norm = _confidence.distance_norm(features, weights, sigmas) if weights is not None else len(features) ** 0.5
+        within = [(d / norm, c) for d, c in dists
+                  if d is not None and d / norm <= _confidence._SIM_MAX_DISTANCE]
+        nearest = _similarity.select_k_nearest(within, _confidence._MATCH_POOL)
+        if not nearest:
             continue
-        predicted = sum(matched_deltas) / len(matched_deltas)
-        errors.append(abs(predicted - test_day["_actual_future_temp_delta"]))
         n_with_matches += 1
+        for label, _, _ in TARGETS:
+            actual = test_day["_actual"].get(label)
+            matched = [c["_actual"][label] for _, c in nearest if label in c["_actual"]]
+            everyone = [c["_actual"][label] for c in prior_days if label in c["_actual"]]
+            if actual is None or not matched or not everyone:
+                continue
+            errors[label].append(abs(sum(matched) / len(matched) - actual))
+            base_errors[label].append(abs(sum(everyone) / len(everyone) - actual))
 
+    targets = {}
+    for label, _, _ in TARGETS:
+        if not errors[label]:
+            continue
+        mae = sum(errors[label]) / len(errors[label])
+        base = sum(base_errors[label]) / len(base_errors[label])
+        targets[label] = {"mae": mae, "baseline_mae": base, "ratio": mae / base if base else None}
+    ratios = [t["ratio"] for t in targets.values() if t["ratio"] is not None]
     return {
         "n_test_days": len(days),
         "n_with_matches": n_with_matches,
-        "mae": (sum(errors) / len(errors)) if errors else None,
+        "targets": targets,
+        "score": sum(ratios) / len(ratios) if ratios else None,
     }

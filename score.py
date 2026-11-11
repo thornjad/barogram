@@ -3,7 +3,6 @@ import sqlite3
 import time
 
 import db
-import models._calibration as _calibration
 
 # barogram variable name -> tempest_obs column name
 # mirrors models/persistence.py VARIABLES; kept separate so scoring
@@ -79,7 +78,7 @@ def run(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
     now = int(time.time())
     unscored = conn_out.execute(
         """
-        select id, variable, value, valid_at, lead_hours, issued_at, conf_bin
+        select id, variable, value, valid_at
         from forecasts
         where valid_at < ? and scored_at is null
         """,
@@ -114,25 +113,13 @@ def run(conn_in: sqlite3.Connection, conn_out: sqlite3.Connection) -> dict:
 
         error = row["value"] - observed
         mae_val = abs(error)
-        scored = {
+        scored_rows.append({
             "id": row["id"],
             "observed": observed,
             "error": error,
             "mae": mae_val,
             "scored_at": now,
-        }
-        if row["conf_bin"] is not None:
-            n_bin, form_bin, score_bin = _calibration.unpack(row["conf_bin"])
-            scored["calib"] = {
-                "variable": row["variable"],
-                "lead_hours": row["lead_hours"],
-                "n_bin": n_bin,
-                "form_bin": form_bin,
-                "score_bin": score_bin,
-                "day": row["issued_at"] // 86400,
-                "hit": int(_calibration.is_hit(row["variable"], row["lead_hours"], mae_val)),
-            }
-        scored_rows.append(scored)
+        })
 
     if scored_rows:
         db.update_scored_forecasts(conn_out, scored_rows)

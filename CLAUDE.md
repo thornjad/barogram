@@ -17,7 +17,7 @@ Always use `uv run barogram <command>`. Never invoke Python directly.
 | `conditions` | Print latest Tempest and NWS observations            |
 | `query`      | Run a SQL query against barogram.db or wxlog         |
 | `insights`   | Emit forecast + accuracy summary as JSON (or `--format table`) |
-| `calibration` | Calibration report: stated confidence per 10-point band against the observed hit rate, plus counts of rows the tally cannot check |
+| `calibration` | Read-only report: per 10-point band of stated confidence, row count, hit rate inside 2 °F / 2 °F / 1.5 hPa, and mean error |
 | `tune-similarity` | Backtest candidate analog-matching feature-weight vectors against held-out skill |
 | `doctor` | Check for orphaned members and report next free migration/member_id |
 
@@ -108,7 +108,7 @@ Every dict returned by `run()` must have these keys:
     "confidence": float | None,  # default None; per-cell confidence from
                                   # models/_confidence.py's confidence_for_cell,
                                   # written on every row (member rows and the
-                                  # member_id=0 aggregate alike) — see docs/confidence.md
+                                  # member_id=0 row alike, each its own, never an average) — see docs/confidence.md
 }
 ```
 
@@ -208,8 +208,7 @@ grep of `insert or ignore` lines across migrations, which misses later `delete`s
 | `variable` | text | `temperature`, `dewpoint`, `pressure` |
 | `value` | real | forecast value (NULL = model abstained) |
 | `spread` | real | std dev across members; non-NULL only on member_id=0 for multi-member models |
-| `confidence` | real | per-cell confidence from `models/_confidence.py`; NULL until enough scored history exists. See [docs/confidence.md](docs/confidence.md) |
-| `conf_bin` | integer | the evidence bins (n, form, score) a labeled row had at issue time, packed into one integer by `models/_calibration.py`; 100 and up marks an aggregate row. Scoring tallies the row's hit or miss under it. Kept by `prune`; NULL on rows the tally cannot check |
+| `confidence` | real | confidence from `models/_confidence.py` (0 to 1, never 1): quality of the member's record on its matched past moments times how much evidence there is. 0 with no evidence. Nulled by `prune` past the debugging window. See [docs/confidence.md](docs/confidence.md) |
 | `observed` | real | filled by scorer; actual observed value |
 | `error` | real | filled by scorer; signed error (forecast − observed) |
 | `mae` | real | filled by scorer; absolute error |
@@ -232,16 +231,6 @@ grep of `insert or ignore` lines across migrations, which misses later `delete`s
 | `sector` | integer | 0=night(00-05), 1=morning(06-11), 2=afternoon(12-17), 3=evening(18-23) |
 | `weight` | real | normalized so members in a group sum to 1 |
 | `updated_at` | integer | Unix epoch of last `tune` run |
-
-**`calib_counts`** — the confidence calibration tally, updated by `score`
-| Column | Type | Notes |
-|--------|------|-------|
-| `variable`, `lead_hours` | text, integer | |
-| `n_bin`, `form_bin`, `score_bin` | integer | evidence bins from `conf_bin`; `n_bin` 3 is reserved for aggregate rows |
-| `day` | integer | issue day (`issued_at // 86400`) |
-| `hits`, `total` | integer | forecasts inside the hit tolerance, and forecasts, for that key and day |
-
-Primary key is all six key columns. Never deleted; lookups read the last 365 days. See [docs/confidence.md](docs/confidence.md).
 
 **`metadata`** — key/value store
 | Key | Value |
@@ -320,7 +309,7 @@ node screenshots/capture.js
 - `sync.py` — Syncthing API integration; polls for idle state before each run
 - `similarity_tune.py` — backtests candidate analog-matching feature-weight vectors, adjacent to but separate from `tune`'s ensemble skill-score weighting
 - `migrations/` — numbered SQL files, run automatically at startup
-- `models/` — one file per model, plus shared helpers `_confidence.py` (per-cell evidence score and confidence), `_calibration.py` (turns an evidence score into a measured hit rate from the `calib_counts` tally), `_similarity.py` (analog-day matching), `_climo_weights.py`, `_utils.py`, `_self_correction.py` (standard self-correction member template), `_pressure_sanity.py` (clamps predicted pressure to physical range), `_pressure_tide.py` (learns/removes the station's solar pressure tide)
+- `models/` — one file per model, plus shared helpers `_confidence.py` (shared matching and per-cell confidence), `_similarity.py` (analog-day matching), `_climo_weights.py`, `_utils.py`, `_self_correction.py` (standard self-correction member template), `_pressure_sanity.py` (clamps predicted pressure to physical range), `_pressure_tide.py` (learns/removes the station's solar pressure tide)
 - `docs/` — one Markdown doc per model plus `README.md` index, `database.md` (schema evolution rules), `confidence.md`, `tune.md`, `self_correction.md`; `docs/plans/` holds past implementation-plan writeups, reference only
 - `tests/` — pytest suite; run with `make test` or `uv run pytest tests/`
 

@@ -10,7 +10,6 @@ import datetime
 import math
 import random
 import statistics
-import zlib
 
 import db
 import models._confidence as _confidence
@@ -21,8 +20,9 @@ MODEL_NAME = "bogo"
 NEEDS_CONN_IN = True
 NEEDS_CONN_OUT = True
 NEEDS_WEIGHTS = True
-NEEDS_MATCH_HISTORY = True   # still required by the sc_blend contract; bogo does not use the
-                             # history for confidence (see _random_confidence)
+NEEDS_MATCH_HISTORY = True   # member_history and default_matches feed _own_confidence
+STATES_OWN_MEMBER_ZERO_CONFIDENCE = True   # member 0's confidence is computed here, from its own random
+                                           # match selection, not by cmd_forecast's shared step
 
 from models._climo_weights import LEAD_HOURS
 from models._utils import _sector
@@ -1074,12 +1074,22 @@ def _sine_integrator(members: dict) -> dict:
     return _clamp(result)
 
 
-def _random_confidence(issued_at: int, member_id: int, variable: str, lead_hours: int) -> float:
-    """A member's confidence: a random value from 0 to 1 inclusive, seeded from the run
-    so it is stable across processes and reproducible on a rerun. Unlike other models,
-    bogo's confidence does not come from how its errors looked on similar days."""
-    seed = zlib.crc32(f"{issued_at}:{member_id}:{variable}:{lead_hours}".encode())
-    return random.Random(seed).randint(0, 1000) / 1000
+def _random_matches(default_matches) -> list[tuple[int, float]]:
+    """Bogo's algorithm for choosing evidence: pick a random subset of the shared candidate
+    matches, of random size, and treat each as a perfect match. No signature analysis. Not
+    seeded, so every call differs; a test that needs repeatability seeds `random` itself."""
+    pairs = _confidence.as_pairs(default_matches)
+    return [(ts, 1.0) for ts, _ in random.sample(pairs, random.randint(0, len(pairs)))]
+
+
+def _own_confidence(member_history, default_matches, member_id: int, variable: str,
+                    lead_hours: int) -> float:
+    """Confidence from how well this member did on its own randomly chosen matches, through the
+    same calculation every model uses (quality of performance times amount of evidence)."""
+    hist = (member_history or {}).get(member_id)
+    if hist is None:
+        hist = _confidence.CellHistory([])
+    return _confidence.confidence_for_cell(hist, variable, lead_hours, _random_matches(default_matches))
 
 
 def _ensemble_mean(members: dict, member_confidence: dict, weights, current_ts: int) -> tuple[dict, dict]:
@@ -1204,11 +1214,12 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_his
     mr[68] = _sine_reviewer(mr)
     mr[69] = _sine_integrator(mr)
 
-    # random is bogo's algorithm for confidence: each member states its own seeded random
-    # value, the way every other model's members state one from their evidence
+    # random is bogo's algorithm for choosing evidence: each member picks its own random matches
+    # and states the confidence that follows from how it did on them, the way every other
+    # model's members do from the shared matches
     member_confidence = {
         mid: {
-            (lead, var): _random_confidence(issued_at, mid, var, lead)
+            (lead, var): _own_confidence(member_history, default_matches, mid, var, lead)
             for lead in LEAD_HOURS for var in ["temperature", "dewpoint", "pressure"]
         }
         for mid in mr
@@ -1217,7 +1228,7 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_his
     mean_data, mean_confidence = _ensemble_mean(mr, member_confidence, weights, obs["timestamp"])
 
     self_correction_confidence = {
-        (lead, var): _random_confidence(issued_at, _SELF_CORRECTION_MEMBER, var, lead)
+        (lead, var): _own_confidence(member_history, default_matches, _SELF_CORRECTION_MEMBER, var, lead)
         for lead in LEAD_HOURS for var in ["temperature", "dewpoint", "pressure"]
     }
 
@@ -1243,6 +1254,9 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_his
         valid_at = obs["timestamp"] + lead * 3600
         for var in ["temperature", "dewpoint", "pressure"]:
             mean, spread = mean_data.get((lead, var), (None, None))
+            # bogo's member 0 has its own random baseline like its members do; it is not
+            # an average of theirs
+            own_confidence = _own_confidence(member_history, default_matches, 0, var, lead)
             rows.append({
                 "model_id":  MODEL_ID,
                 "model":     MODEL_NAME,
@@ -1253,7 +1267,7 @@ def run(obs, issued_at: int, *, conn_in, conn_out=None, weights=None, member_his
                 "variable":  var,
                 "value":     mean,
                 "spread":    spread,
-                "confidence": mean_confidence.get((lead, var)),
+                "confidence": own_confidence,
             })
 
             corrected = _self_correction.corrected_value(conn_out, MODEL_ID, var, lead, mean, issued_at)
