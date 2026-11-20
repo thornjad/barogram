@@ -20,7 +20,7 @@ class _FakeConf:
 def _args():
     return argparse.Namespace(
         min_runs=3, min_total_runs=30, floor=0.08, pool_alpha=0.10,
-        subfloor_fraction=0.35, huber_percentile=80.0, dry_run=False,
+        subfloor_fraction=0.35, huber_percentile=80.0, dry_run=False, if_due=False,
     )
 
 
