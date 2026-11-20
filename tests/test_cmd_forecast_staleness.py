@@ -95,3 +95,5 @@ def test_cmd_forecast_runs_on_fresh_obs(tmp_path, monkeypatch):
 
     check = sqlite3.connect(str(output_path))
     assert check.execute("select count(*) from forecasts").fetchone()[0] > 0
+    # cmd_forecast swallows a per-model exception, so a broken meta_forecast would otherwise pass
+    assert check.execute("select count(*) from forecasts where model_id = 300").fetchone()[0] > 0

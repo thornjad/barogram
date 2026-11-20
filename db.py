@@ -1039,6 +1039,62 @@ def base_model_forecasts(
     ).fetchall()]
 
 
+def meta_inputs(
+    conn: sqlite3.Connection,
+    issued_from: int,
+    issued_to: int,
+    model_ids: tuple = (),
+    model_types: tuple = (),
+) -> list:
+    """member_id=0 rows issued in [issued_from, issued_to] from the given models,
+    plus every model of the given types, with confidence and spread.
+
+    Feeds meta_forecast: the current run (issued_from == issued_to) and the few
+    earlier runs it looks back over. Either selector may be empty; with both
+    empty nothing matches. The where clause is built from the non-empty arms so
+    a model_ids-only call keeps the (model_id, member_id, issued_at) index.
+    """
+    arms = []
+    params: list = [issued_from, issued_to]
+    if model_ids:
+        arms.append(f"f.model_id in ({','.join('?' * len(model_ids))})")
+        params.extend(model_ids)
+    if model_types:
+        arms.append(f"m.type in ({','.join('?' * len(model_types))})")
+        params.extend(model_types)
+    if not arms:
+        return []
+    return conn.execute(
+        f"""
+        select f.model_id, m.name as model, f.variable, f.lead_hours, f.issued_at,
+               f.value, f.valid_at, f.confidence, f.spread
+        from forecasts f
+        join models m on m.id = f.model_id
+        where f.member_id = 0 and f.issued_at between ? and ?
+          and ({' or '.join(arms)})
+        """,
+        params,
+    ).fetchall()
+
+
+def member_zero_history(conn: sqlite3.Connection, model_id: int, variable: str, since: int) -> list:
+    """Scored member_id=0 rows of one model and variable whose valid_at is at or
+    after `since`: issued_at, valid_at, lead_hours, error, spread.
+
+    Error is never pruned, so this reaches back past the debugging window that
+    nulls value and observed; spread is only present inside that window.
+    """
+    return conn.execute(
+        """
+        select issued_at, valid_at, lead_hours, error, spread
+        from forecasts
+        where model_id = ? and member_id = 0 and variable = ? and valid_at >= ?
+          and error is not null and scored_at is not null
+        """,
+        (model_id, variable, since),
+    ).fetchall()
+
+
 def all_members_for_ensemble_models(conn: sqlite3.Connection) -> list:
     """Return all non-zero members for models that appear in the members table."""
     return conn.execute(

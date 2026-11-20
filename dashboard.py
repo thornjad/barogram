@@ -28,6 +28,7 @@ _MODEL_TOOLTIPS: dict[str, str] = {
     "nws": "NWS hourly forecast from api.weather.gov, snapped to the standard 6/12/18/24h lead times. Not included in the barogram ensemble.",
     "tempest_forecast": "Tempest station's built-in forecast from the Tempest API, snapped to the standard lead times. Not included in the barogram ensemble.",
     "external_corrected": "NWS and Tempest forecasts with bias corrections learned from historical scoring, conditioned on time of day, season, and airmass state. Not included in the barogram ensemble.",
+    "meta_forecast": "The best forecast for this yard from everything barogram knows: the ensemble, the NWS and Tempest forecasts and their corrections, current conditions, and each source's recent accuracy, combined with the same skill weighting as every model. Not included in the barogram ensemble.",
     "wind_veer_detector": "Classifies wind-direction change over a trailing 3h window with no (or a much lower) minimum wind-speed floor than surface_signs uses, to test whether light-wind veers are still informative.",
     "frontal_trigger": "Joint pressure-tendency + wind-veer trigger, combined with strict/loose/weighted variants, kept separate from synoptic_state_machine since wind rotation hurts that model as a joint dimension.",
     "dewpoint_tendency": "Extrapolates dewpoint's own recent linear trend forward with OU mean reversion, mirroring pressure_tendency's regression members but for moisture instead of pressure.",
@@ -314,11 +315,12 @@ h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .external-header th { background: #fff3e0; font-size: 11px; color: #b34400; padding: 4px 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .ensemble-row th, .ensemble-row td { background: #f8faff; }
 .external-row th, .external-row td { background: #fffbf6; }
-.base-badge, .ensemble-badge, .baseline-badge, .external-badge, .fun-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.base-badge, .ensemble-badge, .baseline-badge, .external-badge, .meta-badge, .fun-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
 .base-badge { background: #e8f4e8; color: #2d6a2d; }
 .ensemble-badge { background: #eff4ff; color: #3b5bdb; }
 .baseline-badge { background: #ece9e0; color: #aaa; }
 .external-badge { background: #fff3e0; color: #b34400; }
+.meta-badge { background: #f3ecff; color: #6a3fb0; }
 .fun-badge { background: #d4f0d4; color: #1e6b1e; }
 .mae-summary-table .baseline-row th { color: #bbb; }
 .baseline-row td { color: #bbb; }
@@ -1917,6 +1919,9 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
         elif meta["type"] == "external":
             badge = '<span class="external-badge">external</span>'
             row_cls = ""
+        elif meta["type"] == "meta":
+            badge = '<span class="meta-badge">meta</span>'
+            row_cls = ""
         elif name == "bogo":
             badge = '<span class="fun-badge">fun</span>'
             row_cls = ""
@@ -2007,6 +2012,9 @@ def _confidence_lead_table_html(rows: list, lead_times: list) -> str:
             row_cls = ""
         elif meta["type"] == "external":
             badge = '<span class="external-badge">external</span>'
+            row_cls = ""
+        elif meta["type"] == "meta":
+            badge = '<span class="meta-badge">meta</span>'
             row_cls = ""
         elif name == "bogo":
             badge = '<span class="fun-badge">fun</span>'
@@ -2100,6 +2108,9 @@ def _overall_accuracy_html(rows: list) -> str:
             row_cls = ""
         elif meta["type"] == "external":
             badge = '<span class="external-badge">external</span>'
+            row_cls = ""
+        elif meta["type"] == "meta":
+            badge = '<span class="meta-badge">meta</span>'
             row_cls = ""
         elif name == "bogo":
             badge = '<span class="fun-badge">fun</span>'

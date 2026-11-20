@@ -182,6 +182,7 @@ lowercase as well.
 | 200 | nws                          | external | done   |
 | 201 | tempest_forecast             | external | done   |
 | 202 | external_corrected           | external | done   |
+| 300 | meta_forecast                | meta     | done   |
 
 ID 11 (`airmass_precip`) was a precip-probability model, fully removed along with the
 `precip_prob` variable in `migrations/037_remove_precip.sql` — its ID is retired, not
@@ -198,7 +199,7 @@ grep of `insert or ignore` lines across migrations, which misses later `delete`s
 |--------|------|-------|
 | `id` | integer PK | model ID |
 | `name` | text | unique model name |
-| `type` | text | `'base'`, `'ensemble'`, or `'external'` |
+| `type` | text | `'base'`, `'ensemble'`, `'external'`, or `'meta'` |
 
 **`forecasts`** — one row per (model, member, variable, lead, run)
 | Column | Type | Notes |

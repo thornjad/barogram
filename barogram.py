@@ -631,6 +631,10 @@ def cmd_tune(args, conf):
     conn_out = db.open_output_db(conf.output_db)
     db.run_migrations(conn_out, migrations_dir)
 
+    if args.if_due and not _weekly_job_due(db.get_metadata(conn_out, "last_tune"), time.time()):
+        print("tune is current for this week, skipping")
+        return
+
     if args.min_runs < 1:
         print("error: --min-runs must be >= 1")
         return
@@ -951,6 +955,11 @@ def main():
         "--dry-run", action="store_true",
         help="print how many rows would be pruned without writing",
     )
+    p.add_argument(
+        "--if-due", action="store_true",
+        help="run only if not yet run since the most recent Monday 09:00 local; "
+             "otherwise exit 0 without doing anything",
+    )
     p = subparsers.add_parser(
         "query", help="run a SQL query against the output or input database"
     )
@@ -972,6 +981,11 @@ def main():
     )
     p = subparsers.add_parser(
         "tune", help="compute skill-score member weights from scoring history"
+    )
+    p.add_argument(
+        "--if-due", action="store_true",
+        help="run only if not yet run since the most recent Monday 09:00 local; "
+             "otherwise exit 0 without doing anything",
     )
     p.add_argument(
         "--min-runs", type=int, default=3, metavar="N",
