@@ -21,6 +21,7 @@
 # held-out check, since no weight vector is scored against the same features
 # it was used to match on.
 
+import math
 import time
 
 import db
@@ -89,12 +90,14 @@ def _augment_day(conn_in, row: dict) -> dict:
     return row
 
 
-def evaluate_weight_vector(conn_in, weight_map: dict[str, float] | None) -> dict:
+def evaluate_weight_vector(conn_in, weight_map: dict[str, float] | None, sim_scale: float | None = -1.0) -> dict:
     """Returns {'n_test_days', 'n_with_matches', 'targets': {label: {'mae', 'baseline_mae',
     'ratio'}}, 'score'}. A test day counts for a target only when it has a matched day
     with that target known. 'ratio' is mae / baseline_mae per target and 'score' their
     mean, so lower is better and under 1 means the fingerprint beats the no-matching
     baseline. n_with_matches counts test days with any match at all."""
+    if sim_scale == -1.0:
+        sim_scale = _confidence._SIM_SCALE  # weight matches the way live similarity does
     anchor = _day_anchor_ts()
     raw_days = db.full_analog_candidates(conn_in, anchor, lookback_sec=None)
     days = sorted((_augment_day(conn_in, dict(r)) for r in raw_days), key=lambda r: r["timestamp"])
@@ -115,17 +118,23 @@ def evaluate_weight_vector(conn_in, weight_map: dict[str, float] | None) -> dict
         norm = _confidence.distance_norm(features, weights, sigmas) if weights is not None else len(features) ** 0.5
         within = [(d / norm, c) for d, c in dists
                   if d is not None and d / norm <= _confidence._SIM_MAX_DISTANCE]
-        nearest = _similarity.select_k_nearest(within, _confidence._MATCH_POOL)
+        nearest = _similarity.select_k_nearest(within, _confidence.match_pool(len(prior_days)))
         if not nearest:
             continue
         n_with_matches += 1
         for label, _, _ in TARGETS:
             actual = test_day["_actual"].get(label)
-            matched = [c["_actual"][label] for _, c in nearest if label in c["_actual"]]
+            pairs = [(d, c["_actual"][label]) for d, c in nearest if label in c["_actual"]]
+            matched = [v for _, v in pairs]
+            wts = [math.exp(-(d / sim_scale) ** 2) for d, _ in pairs] if sim_scale else None
             everyone = [c["_actual"][label] for c in prior_days if label in c["_actual"]]
             if actual is None or not matched or not everyone:
                 continue
-            errors[label].append(abs(sum(matched) / len(matched) - actual))
+            if wts is not None and sum(wts) > 0:
+                guess = sum(w * v for w, v in zip(wts, matched)) / sum(wts)
+            else:
+                guess = sum(matched) / len(matched)
+            errors[label].append(abs(guess - actual))
             base_errors[label].append(abs(sum(everyone) / len(everyone) - actual))
 
     targets = {}

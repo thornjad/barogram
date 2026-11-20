@@ -17,6 +17,7 @@ import score as scorer
 import sc_blend
 import db
 import fmt
+import history_fill
 import sync as _sync
 import models.analog as analog
 import models.dewpoint_tendency as dewpoint_tendency
@@ -247,6 +248,13 @@ def cmd_forecast(args, conf):
             _confidence.matched_day_spreads(conn_in, shared_default_matches or [])
         )
 
+    history_since = issued_at - _confidence._CONFIDENCE_WINDOW_DAYS * 86400
+    fill_obs = (
+        history_fill.ObsIndex.load(conn_in, history_since - 3600)
+        if any(getattr(m, "NEEDS_MATCH_HISTORY", False) for m in _MODELS)
+        else None
+    )
+
     sc_blend_models = db.sc_blend_models(conn_out)
     total_rows = 0
     failed = []
@@ -266,10 +274,9 @@ def cmd_forecast(args, conf):
             if getattr(model, "NEEDS_LOCATION", False):
                 kwargs["location"] = shared_location
             if getattr(model, "NEEDS_MATCH_HISTORY", False):
-                since = issued_at - _confidence._CONFIDENCE_WINDOW_DAYS * 86400
                 member_ids = db.member_ids_for_model(conn_out, model.MODEL_ID)
                 kwargs["member_history"] = {
-                    mid: _confidence.CellHistory(db.model_error_history(conn_out, model.MODEL_ID, mid, since))
+                    mid: history_fill.filled_history(conn_out, model.MODEL_ID, mid, history_since, fill_obs)
                     for mid in member_ids
                 }
                 kwargs["default_matches"] = shared_default_matches

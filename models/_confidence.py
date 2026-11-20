@@ -9,32 +9,35 @@ import numpy as np
 import db
 import models._similarity as _similarity
 
-_CONFIDENCE_WINDOW_DAYS = 400    # independent of tune's own lookback window
+_CONFIDENCE_WINDOW_DAYS = 1277   # 3 years and 6 months: the extra half year keeps the same calendar
+                                 # days from 3 years ago in range. Independent of tune's own lookback window
 _MIN_HISTORY_DAYS = 5            # a cell's history must span MORE than this many distinct days
 
 # --- matching and evidence: every value in this block is experimental and expected to change ---
 _MATCH_POOL = 200                # the closest this many past moments are kept as candidate matches,
-                                 # with no similarity gate at this stage. A compute bound, not a
-                                 # quality filter: quality is each match's similarity, below.
-_SIM_SCALE = 0.6                 # default similarity is exp(-(distance / _SIM_SCALE)^2) ...
-_SIM_MAX_DISTANCE = 1.1          # ... and exactly 0 beyond this distance. Distance is the root mean
+_MATCH_POOL_FRACTION = 0.25      # or this fraction of all candidate days when that is larger, so a
+                                 # multi-year history keeps its good matches. No similarity gate at
+                                 # this stage. A compute bound, not a quality filter: quality is
+                                 # each match's similarity, below.
+_SIM_SCALE = 0.8                 # default similarity is exp(-(distance / _SIM_SCALE)^2) ...
+_SIM_MAX_DISTANCE = 2.0          # ... and exactly 0 beyond this distance. Distance is the root mean
                                  # weighted squared z of the fingerprint (divided by the root of the
                                  # total weight), so editing a feature weight never silently moves
-                                 # these two. 0.6 and 1.1 equal the old 2.5 and 4.5 at the old weights.
+                                 # these two. Widened from 0.6 and 1.1 on 2026-11-12: the backtest scored 0.8 and 2.0 best
+                                 # and live n_eff was too small for any member to reach mid-range.
 _CRITICAL_LIMITS = {             # ... and exactly 0 when any of these differs from now by more
     "air_temp": 5.0,             # (absolute, in the column's own unit), however close the rest
     "dew_point": 6.0,            # of the fingerprint is: a match this far off on a variable that
     "station_pressure": 8.0,     # defines the airmass says nothing about today
 }
-_EVIDENCE_FULL_AT = 150          # evidence curve e(n) = n^p / (n^p + K), reaching 99% at this n
-_EVIDENCE_POWER = 3
-_EVIDENCE_BASE = 0.02            # a small separate term so one match is worth about 1%, not 0.003%:
-                                 # base(n) = _EVIDENCE_BASE * n / (n + 1), zero at n = 0
-_EVIDENCE_TOP = 0.99
-_base_at_full = _EVIDENCE_BASE * _EVIDENCE_FULL_AT / (_EVIDENCE_FULL_AT + 1)
-_cubic_at_full = 1 - (1 - _EVIDENCE_TOP) / (1 - _base_at_full)
-_EVIDENCE_K = _EVIDENCE_FULL_AT ** _EVIDENCE_POWER * (1 - _cubic_at_full) / _cubic_at_full
-# K is solved so the combined curve still hits exactly _EVIDENCE_TOP at _EVIDENCE_FULL_AT
+_EVIDENCE_POWER = 1.5            # evidence curve e(n) = n^p / (n^p + k^p): gentle, so a typical well-
+_EVIDENCE_K0 = 3.0               # matched member lands mid-range instead of bunched near 0. k0 is the
+                                 # n at which e = 50% when the station has _EVIDENCE_REF_DAYS of history
+_EVIDENCE_REF_DAYS = 245         # history size k0 was set against (2026-11-12 measurement: median member
+                                 # n_eff about 3.75, p90 about 6, with 245 candidate days)
+# k grows as sqrt(candidate days / ref days): n_eff itself grows about linearly with history, so
+# the bar rises more slowly than the evidence and confidence still creeps up as data accumulates
+_candidate_days = _EVIDENCE_REF_DAYS  # set once per run by find_default_matches
 _CONFIDENCE_FLOOR = 0.001        # 0.1%, not 10% -- a member reporting genuine 0%
                                  # confidence still keeps a sliver of ensemble influence
                                  # so it's never fully excluded, but a member that says
@@ -209,6 +212,13 @@ class CellHistory:
         self._groups = groups
         self._arrays: dict[tuple[str, int], tuple] = {}
 
+    def add_filled(self, variable: str, lead_hours: int, issued, mae) -> None:
+        """Append synthetic rows (history_fill.py) to a cell, before the cell is first read."""
+        g = self._groups.setdefault((variable, lead_hours), ([], []))
+        g[0].extend(issued.tolist())
+        g[1].extend(mae.tolist())
+        self._arrays.pop((variable, lead_hours), None)
+
     def cell(self, variable: str, lead_hours: int):
         """(issued_at array, mae array, distinct calendar days) for the cell, rows
         in original history order, or None when the cell has no rows."""
@@ -231,14 +241,13 @@ def as_pairs(matches) -> list[tuple[int, float]]:
 
 
 def evidence(n_eff: float) -> float:
-    """How much a similarity-weighted match count is worth: 0 at nothing, tiny at one match,
-    99% at _EVIDENCE_FULL_AT matches, never 1.0."""
+    """How much a similarity-weighted match count is worth: 0 at nothing, 50% at k matches,
+    never 1.0. k grows with the square root of the history size (see _EVIDENCE_K0)."""
     if n_eff <= 0:
         return 0.0
+    k = _EVIDENCE_K0 * (max(_candidate_days, 1) / _EVIDENCE_REF_DAYS) ** 0.5
     p = n_eff ** _EVIDENCE_POWER
-    cubic = p / (p + _EVIDENCE_K)
-    base = _EVIDENCE_BASE * n_eff / (n_eff + 1.0)
-    return 1.0 - (1.0 - cubic) * (1.0 - base)
+    return p / (p + k ** _EVIDENCE_POWER)
 
 
 def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead_hours: int,
@@ -373,6 +382,8 @@ def find_default_matches(conn_in, current_ts: int) -> list[tuple[int, float]]:
     candidates = db.full_analog_candidates(conn_in, current_ts, lookback_sec=None)
     if current is None or not candidates:
         return []
+    global _candidate_days
+    _candidate_days = len(candidates)
     current = {**dict(current), "timestamp": current_ts}
     prior_current = db.nearest_tempest_obs(conn_in, current_ts - _TREND_WINDOW_SEC, window_sec=1800)
     current.update(compute_trends(current, prior_current))
@@ -387,13 +398,19 @@ def find_default_matches(conn_in, current_ts: int) -> list[tuple[int, float]]:
     cands_with_dist = [(None if d is None else d / norm, c)
                         for d, c in ((_similarity.distance(current, c, features, sigmas, weights), c)
                                      for c in candidates)]
-    nearest = _similarity.select_k_nearest(cands_with_dist, _MATCH_POOL)
+    nearest = _similarity.select_k_nearest(cands_with_dist, match_pool(len(candidates)))
     matches = []
     for d, c in nearest:
         sim = default_similarity(d, current, c)
         if sim > 0:
             matches.append((c["timestamp"], sim))
     return matches
+
+
+def match_pool(n_candidates: int) -> int:
+    """How many of the closest candidate days are kept: _MATCH_POOL, or _MATCH_POOL_FRACTION of
+    all candidate days when that is larger."""
+    return max(_MATCH_POOL, int(n_candidates * _MATCH_POOL_FRACTION))
 
 
 def distance_norm(features: list[str], weights: list[float], sigmas: dict) -> float:

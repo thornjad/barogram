@@ -391,6 +391,36 @@ def model_error_history(conn: sqlite3.Connection, model_id: int, member_id: int,
     ).fetchall()
 
 
+def model_history_rows(conn: sqlite3.Connection, model_id: int, member_id: int,
+                       since: int) -> list:
+    """model_error_history plus the signed error and the forecast value (null once `prune`
+    has cleared it), which history_fill.py needs to interpolate between lead hours."""
+    return conn.execute(
+        """
+        select variable, lead_hours, issued_at, mae, value, error
+        from forecasts
+        where model_id = ? and member_id = ? and issued_at >= ?
+          and mae is not null and scored_at is not null
+        """,
+        (model_id, member_id, since),
+    ).fetchall()
+
+
+def tempest_obs_since(conn: sqlite3.Connection, since: int) -> list:
+    """(timestamp, air_temp, dew_point, station_pressure) of every Tempest observation at or
+    after `since`, in time order."""
+    return conn.execute(
+        """
+        select t.timestamp, t.air_temp, t.dew_point, t.station_pressure
+        from tempest_obs t
+        join stations s on s.station_id = t.station_id
+        where s.source = 'tempest' and t.timestamp >= ?
+        order by t.timestamp asc
+        """,
+        (since,),
+    ).fetchall()
+
+
 def model_signed_error_history(conn: sqlite3.Connection, model_id: int, member_id: int,
                                 variable: str, lead_hours: int, since: int) -> list:
     """Every scored (value, observed, error) row for one (model_id, member_id,

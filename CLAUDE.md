@@ -303,6 +303,7 @@ node screenshots/capture.js
 - `db.py` — all database access; input DB is read-only, output DB is read-write
 - `config.py` — loads `barogram.toml`
 - `sc_blend.py` — blends a model's self-correction members into its member 0 (see docs/self_correction.md)
+- `history_fill.py` — builds each member's confidence history, interpolating scored forecasts at the lead hours between 0/6/12/18/24 so hourly cells get the evidence the 6-hour leads have (see docs/confidence.md "Filled history")
 - `score.py` — matches forecasts to observations within ±30 min
 - `dashboard.py` — generates `dashboard.html`
 - `fmt.py` — shared formatting helpers

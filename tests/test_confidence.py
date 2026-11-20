@@ -98,23 +98,33 @@ def test_runs_outside_hour_tolerance_do_not_count():
 
 def test_evidence_curve_shape():
     assert confidence.evidence(0) == 0.0
-    assert 0.005 < confidence.evidence(1) < 0.015   # one match: low, but well above the 0.001 floor
-    assert confidence.evidence(1) > 5 * confidence._CONFIDENCE_FLOOR
-    assert confidence.evidence(10) < 0.07
-    assert abs(confidence.evidence(confidence._EVIDENCE_FULL_AT) - 0.99) < 1e-9
+    assert 0.1 < confidence.evidence(1) < 0.25      # one match: low, far above the 0.001 floor
+    assert confidence.evidence(1) > 50 * confidence._CONFIDENCE_FLOOR
+    assert abs(confidence.evidence(confidence._EVIDENCE_K0) - 0.5) < 1e-9   # k matches is 50%
+    assert 0.65 < confidence.evidence(6) < 0.8
+    assert confidence.evidence(150) > 0.99
     assert confidence.evidence(100000) < 1.0
     values = [confidence.evidence(n) for n in range(0, 400, 7)]
     assert values == sorted(values)
 
 
+def test_evidence_bar_rises_with_history_but_slower_than_the_data(monkeypatch):
+    """k scales with the square root of the candidate-day count, so more history needs more
+    evidence for the same number, but doubling history costs less than doubling the bar."""
+    at_ref = confidence.evidence(3.0)
+    monkeypatch.setattr(confidence, "_candidate_days", confidence._EVIDENCE_REF_DAYS * 4)
+    assert confidence.evidence(3.0) < at_ref
+    assert abs(confidence.evidence(2 * confidence._EVIDENCE_K0) - 0.5) < 1e-9   # k doubled for 4x days
+
+
 def test_one_perfect_match_is_low_but_above_the_floor():
     history, matched = _history(1, 0.0)
     value = confidence.confidence_for_cell(history, "temperature", 24, matched)
-    assert confidence._CONFIDENCE_FLOOR * 5 < value < 0.02
+    assert confidence._CONFIDENCE_FLOOR * 50 < value < 0.25
 
 
 def test_many_perfect_matches_reach_high_confidence():
-    history, matched = _history(confidence._EVIDENCE_FULL_AT, 0.0, extra_days=0)
+    history, matched = _history(150, 0.0, extra_days=0)
     assert confidence.confidence_for_cell(history, "temperature", 24, matched) >= 0.99
 
 
@@ -129,7 +139,7 @@ def test_mediocre_member_does_not_gain_confidence_from_volume():
 
 
 def test_poor_performance_gives_low_confidence_even_with_lots_of_evidence():
-    history, matched = _history(confidence._EVIDENCE_FULL_AT, 20.0, extra_days=0)
+    history, matched = _history(150, 20.0, extra_days=0)
     confidence.set_spread({("temperature", 24): 5.0})
     assert confidence.confidence_for_cell(history, "temperature", 24, matched) < 0.001
 
@@ -501,3 +511,9 @@ def test_cell_history_matches_naive_filter_across_cells(monkeypatch):
 def test_distance_norm_is_root_of_total_weight_of_usable_features():
     norm = confidence.distance_norm(["a", "b", "c"], [1.0, 3.0, 5.0], {"a": 1.0, "b": 2.0, "c": None})
     assert norm == 2.0   # sqrt(1 + 3), the feature with no sigma does not count
+
+
+def test_match_pool_grows_with_history_but_never_shrinks_below_the_floor():
+    assert confidence.match_pool(10) == confidence._MATCH_POOL
+    assert confidence.match_pool(confidence._MATCH_POOL * 4) == confidence._MATCH_POOL
+    assert confidence.match_pool(4000) == int(4000 * confidence._MATCH_POOL_FRACTION)

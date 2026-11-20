@@ -32,8 +32,10 @@ def _spread_default():
         for variable in ("temperature", "dewpoint", "pressure")
         for lead_hours in range(1, 25)
     })
+    _confidence._candidate_days = _confidence._EVIDENCE_REF_DAYS
     yield
     _confidence.set_spread({})
+    _confidence._candidate_days = _confidence._EVIDENCE_REF_DAYS
 
 
 def make_input_db() -> sqlite3.Connection:
