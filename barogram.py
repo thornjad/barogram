@@ -3,6 +3,7 @@
 # requires Python 3.11+; no Windows support
 
 import argparse
+import datetime
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,7 @@ import models.diurnal_rate_anomaly as diurnal_rate_anomaly
 import models.ensemble as barogram_ensemble
 import models.external_corrected as external_corrected
 import models.inverse_pressure_transfer as inverse_pressure_transfer
+import models.meta_forecast as meta_forecast
 import models.moisture_trajectory as moisture_trajectory
 import models.nws as nws_model
 import models.persistence as persistence
@@ -109,7 +111,8 @@ _MODELS = [
     nws_model,
     tempest_forecast_model,
     external_corrected,
-    barogram_ensemble,  # must be last: reads base model rows from current run
+    barogram_ensemble,  # must be last of the models that feed the ensemble: reads base model rows from current run
+    meta_forecast,  # after the ensemble: reads its rows and the externals' rows, feeds nothing
 ]
 
 _LOCAL_ENV = Path(__file__).parent / "barogram.local.toml"
@@ -357,10 +360,39 @@ def cmd_score(args, conf):
     print(f"scored {result['scored']}, skipped {result['skipped']}")
 
 
+_WEEKLY_ANCHOR_WEEKDAY = 0  # monday
+_WEEKLY_ANCHOR_HOUR = 9
+
+
+def _weekly_anchor(now: float) -> int:
+    """Unix epoch of the most recent Monday 09:00 local at or before now."""
+    dt = datetime.datetime.fromtimestamp(now)
+    anchor = dt.replace(hour=_WEEKLY_ANCHOR_HOUR, minute=0, second=0, microsecond=0)
+    anchor -= datetime.timedelta(days=(dt.weekday() - _WEEKLY_ANCHOR_WEEKDAY) % 7)
+    if anchor > dt:
+        anchor -= datetime.timedelta(days=7)
+    return int(anchor.timestamp())
+
+
+def _weekly_job_due(last_run: str | None, now: float) -> bool:
+    """True when the job has not run since the most recent Monday 09:00.
+
+    Anchoring to the calendar slot, not to the last run's time, keeps a late
+    catch-up run from shifting later weeks off Monday 09:00.
+    """
+    if last_run is None:
+        return True
+    return int(last_run) < _weekly_anchor(now)
+
+
 def cmd_prune(args, conf):
     migrations_dir = Path(__file__).parent / "migrations"
     conn_out = db.open_output_db(conf.output_db)
     db.run_migrations(conn_out, migrations_dir)
+
+    if args.if_due and not _weekly_job_due(db.get_metadata(conn_out, "last_prune"), time.time()):
+        print("prune is current for this week, skipping")
+        return
 
     cutoff = int(time.time()) - args.days * 86400
 

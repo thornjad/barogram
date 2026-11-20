@@ -27,10 +27,15 @@ exits non-zero, so a stale or empty forecast never reaches the dashboard or publ
 `forecast` exits 1 if the input DB is missing/invalid, if the latest Tempest observation
 is over an hour old (`_STALE_OBS_THRESHOLD_SEC`), or if zero forecast rows were written
 overall — a single model raising an exception is caught, logged, and skipped, it does not
-abort the run by itself. `make tune` runs `score`, then the
+abort the run by itself. The scheduled run (`~/.local/bin/barogram-run`, fired every 3 hours
+by launchd) runs `score`, `tune --if-due`, `forecast`, `dashboard`, then `prune --if-due`.
+`--if-due` is a freshness guard: the step runs only if it has not run since the most recent
+Monday 09:00 local, so the 09:00 run does the weekly work and a later run catches up if 09:00
+was missed. The guard anchors to that calendar slot, not to the last run's time, so a late
+catch-up never shifts later weeks off Monday 09:00. A `tune` or `prune` failure does not block
+the forecast. `make tune` runs `score`, then the
 skill-weight tuning step (`make tune-weights`, i.e. `barogram tune`), then `barogram
-calibration` — this is the target the weekly launchd job already calls, so calibration's
-report lands in that job's existing log without needing a scheduler change. `make full` runs
+calibration` — the manual equivalent, which also prints calibration. `make full` runs
 `tune` then the full `run` cycle — use it when weights are stale and a forecast is due.
 `make tune-similarity` is separate and not part of `tune`'s weekly cycle — it backtests
 analog-matching weight vectors (see `similarity_tune.py`) and is run manually while that
