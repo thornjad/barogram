@@ -1896,6 +1896,8 @@ def _accuracy_lead_table_html(rows: list, lead_times: list, member_models: set |
         mid = model_meta[k]["model_id"]
         if t == "ensemble":
             return (0, mid)
+        if t == "meta":
+            return (0.5, mid)
         if t == "external":
             return (1, -mid)   # 201 before 200
         return (2, mid)
@@ -1990,6 +1992,8 @@ def _confidence_lead_table_html(rows: list, lead_times: list) -> str:
         mid = model_meta[k]["model_id"]
         if t == "ensemble":
             return (0, mid)
+        if t == "meta":
+            return (0.5, mid)
         if t == "external":
             return (1, -mid)   # 201 before 200
         return (2, mid)
@@ -2088,6 +2092,8 @@ def _overall_accuracy_html(rows: list) -> str:
         mid = model_meta[k]["model_id"]
         if t == "ensemble":
             return (0, mid)
+        if t == "meta":
+            return (0.5, mid)
         if t == "external":
             return (1, -mid)
         return (2, mid)
