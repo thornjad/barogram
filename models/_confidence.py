@@ -250,8 +250,18 @@ def evidence(n_eff: float) -> float:
     return p / (p + k ** _EVIDENCE_POWER)
 
 
+def own_spread(conn_in, matches: list):
+    """A spread override for confidence_for_cell built from a model's own matches: the same
+    population stdev of the actual value lead_hours out (matched_day_spreads, so the same units,
+    the 2-sample minimum and, in confidence_for_cell, the zero-spread guard) but over `matches`
+    instead of the shared set. Returns a callable (variable, lead_hours) -> float | None.
+    Computed once per match list; reuse the result across cells."""
+    table = matched_day_spreads(conn_in, matches)
+    return lambda variable, lead_hours: table.get((variable, lead_hours))
+
+
 def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead_hours: int,
-                         matches: list) -> float:
+                         matches: list, spread=None) -> float:
     """
     history is every scored row for one (model_id, member_id) pair (dicts
     with variable/lead_hours/issued_at/mae; see db.model_error_history).
@@ -274,6 +284,10 @@ def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead
     good the member was and e(n_eff) how much evidence stands behind it. q does not grow
     with more data, e does, so volume alone never makes a mediocre member confident.
 
+    spread, when given, replaces the shared yardstick for this call: a float, or a callable
+    (variable, lead_hours) -> float | None (see own_spread). None (the default) reads the
+    shared one. A missing or non-positive override gives 0.0, like the shared one.
+
     Returns 0.0 for a cell with no scored history, a history spanning
     _MIN_HISTORY_DAYS distinct days or fewer, a cell with no known spread, or no match
     with a scored run near it. Every forecast row gets a real confidence number; this
@@ -288,7 +302,10 @@ def confidence_for_cell(history: "list[dict] | CellHistory", variable: str, lead
     cell = hist.cell(variable, lead_hours)
     if cell is None or cell[2] <= _MIN_HISTORY_DAYS:
         return 0.0
-    spread = _spread.get((variable, lead_hours))
+    if spread is None:
+        spread = _spread.get((variable, lead_hours))
+    elif callable(spread):
+        spread = spread(variable, lead_hours)
     if spread is None or spread <= 0:
         return 0.0
     sims, errors = _moments(cell, as_pairs(matches))
@@ -433,7 +450,8 @@ def default_similarity(distance: float, current: dict, candidate: dict) -> float
 def member_confidences(member_history: dict[int, list[dict]] | None,
                         default_matches: list | None,
                         member_ids: list[int], variable: str, lead_hours: int,
-                        matched_ts_by_mid: dict[int, list] | None = None) -> dict[int, float]:
+                        matched_ts_by_mid: dict[int, list] | None = None,
+                        spread=None) -> dict[int, float]:
     """
     Shared per-member confidence computation, called once per (variable,
     lead_hours) cell. member_history/default_matches being None degrades
@@ -445,12 +463,15 @@ def member_confidences(member_history: dict[int, list[dict]] | None,
     every other model's members all search the identical shared default
     fingerprint and would otherwise repeat the same override entry for
     every one of their members.
+
+    spread, when given, is passed to every member's confidence_for_cell (a float or a
+    callable, see own_spread); None keeps the shared yardstick.
     """
     result = {}
     for mid in member_ids:
         history = (member_history or {}).get(mid, [])
         matched_ts = (matched_ts_by_mid or {}).get(mid, default_matches or [])
-        result[mid] = confidence_for_cell(history, variable, lead_hours, matched_ts)
+        result[mid] = confidence_for_cell(history, variable, lead_hours, matched_ts, spread)
     return result
 
 
